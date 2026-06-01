@@ -80,6 +80,8 @@ function toCandidate(source: TransferTrack, candidate: ProviderTrack): MatchCand
     artists: candidate.artists,
     album: candidate.album,
     durationSeconds: candidate.durationSeconds,
+    availability: candidate.availability,
+    raw: candidate.raw,
     confidenceScore: scored.score,
     reasons: scored.reasons
   };

@@ -30,6 +30,11 @@ export type ProviderTrack = {
   artists: string[];
   album?: string;
   durationSeconds?: number;
+  availability?: {
+    status: "available" | "copyright_unavailable" | "vip_only" | "trial_only";
+    reason?: string;
+  };
+  raw?: unknown;
 };
 
 export type MatchCandidate = {
@@ -39,6 +44,8 @@ export type MatchCandidate = {
   artists: string[];
   album?: string;
   durationSeconds?: number;
+  availability?: ProviderTrack["availability"];
+  raw?: unknown;
   confidenceScore: number;
   reasons: string[];
 };
