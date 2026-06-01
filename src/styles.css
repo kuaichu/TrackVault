@@ -4579,6 +4579,144 @@ input[type="range"] {
   color: #f5f7fb;
 }
 
+.transfer-workspace {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+}
+
+.transfer-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.transfer-inline-button {
+  align-self: end;
+  justify-self: start;
+}
+
+.transfer-check-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.transfer-check-row span {
+  margin: 0;
+}
+
+.transfer-report-card {
+  gap: 16px;
+}
+
+.transfer-report-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+}
+
+.transfer-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(70px, 1fr));
+  gap: 8px;
+  min-width: 420px;
+}
+
+.transfer-summary-grid strong {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  text-align: center;
+}
+
+.transfer-summary-grid small {
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.transfer-table {
+  display: grid;
+  gap: 8px;
+  max-height: 520px;
+  overflow: auto;
+}
+
+.transfer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) 104px;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(10, 15, 24, 0.52);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.transfer-row div {
+  min-width: 0;
+}
+
+.transfer-row strong,
+.transfer-row span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transfer-row span {
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.transfer-status {
+  justify-self: end;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.transfer-status-matched {
+  color: #9be7b0;
+}
+
+.transfer-status-manual_review,
+.transfer-status-metadata_conflict {
+  color: #ffd38a;
+}
+
+.transfer-status-not_found,
+.transfer-status-copyright_unavailable,
+.transfer-status-vip_only,
+.transfer-status-trial_only {
+  color: #ff9d9d;
+}
+
+.transfer-export-actions select {
+  min-width: 160px;
+}
+
+.transfer-export-output {
+  width: 100%;
+  min-height: 260px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 14px;
+  background: var(--panel-bg-solid);
+  color: var(--text-primary);
+  padding: 13px 14px;
+  resize: vertical;
+}
+
 .artist-link-group {
   display: flex;
   flex-wrap: wrap;
