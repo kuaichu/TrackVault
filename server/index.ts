@@ -21,11 +21,13 @@ import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, reso
 import { checkNeteaseQrLogin, loginWithNeteaseCellphone, sendNeteaseCaptcha, startNeteaseQrLogin } from "./netease-auth.js";
 import { formatTransferExport } from "./playlist-transfer/export-formatters.js";
 import { buildNeteaseImportedPlaylistAudit } from "./playlist-transfer/netease-import-audit.js";
+import { comparePlaylists, formatPlaylistCompareExport } from "./playlist-transfer/playlist-compare.js";
 import { checkNeteaseProviderTrackAvailability, createNeteasePlaylistFromTrackIds, loadNeteasePlaylistAuditEntries, loadNeteasePlaylistTransferTracks, searchNeteaseProviderTracks, searchNeteaseProviderTracksByTitle } from "./playlist-transfer/netease-provider.js";
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
 import { createPlaylistTransferJob, getNeteaseImportTrackIds } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
 import type { AdminConfigUpdate, AppSettings, DownloadQualityLevel, DownloadRequest } from "./types.js";
+import type { PlaylistCompareResult, PlaylistCompareStatus } from "./playlist-transfer/playlist-compare.js";
 import type { MatchCandidate, TransferImportRequest, TransferTargetProvider, TransferTrack } from "./playlist-transfer/types.js";
 
 const app = express();
@@ -411,6 +413,27 @@ async function loadTransferSourceTracks(input: TransferImportRequest) {
   return [];
 }
 
+async function loadCompareSideTracks(provider: string, playlistId: string) {
+  if (provider === "netease") {
+    return loadNeteasePlaylistTransferTracks(playlistId);
+  }
+
+  if (provider === "qq") {
+    return loadQqPlaylistTransferTracks(playlistId);
+  }
+
+  throw new Error("歌单对比暂只支持网易云歌单和 QQ 音乐公开歌单。");
+}
+
+function normalizeCompareStatuses(input: unknown): PlaylistCompareStatus[] {
+  const allowed: PlaylistCompareStatus[] = ["exact", "same_title_different_artist", "similar_title", "left_only", "right_only"];
+  if (!Array.isArray(input)) {
+    return allowed;
+  }
+
+  return input.filter((item): item is PlaylistCompareStatus => allowed.includes(item as PlaylistCompareStatus));
+}
+
 async function checkTransferTargetAvailability(candidate: MatchCandidate) {
   if (candidate.provider === "netease") {
     return checkNeteaseProviderTrackAvailability(candidate);
@@ -533,6 +556,62 @@ app.post("/api/playlist-transfer/netease-import-audit", async (request, response
       message: error instanceof Error ? error.message : "网易云导入歌单清理失败"
     });
   }
+});
+
+app.post("/api/playlist-transfer/compare", async (request, response) => {
+  const leftProvider = typeof request.body?.leftProvider === "string" ? request.body.leftProvider.trim() : "";
+  const rightProvider = typeof request.body?.rightProvider === "string" ? request.body.rightProvider.trim() : "";
+  const leftPlaylistId = typeof request.body?.leftPlaylistId === "string" ? request.body.leftPlaylistId.trim() : "";
+  const rightPlaylistId = typeof request.body?.rightPlaylistId === "string" ? request.body.rightPlaylistId.trim() : "";
+  const leftPlaylistName = typeof request.body?.leftPlaylistName === "string" && request.body.leftPlaylistName.trim()
+    ? request.body.leftPlaylistName.trim()
+    : `左侧歌单 ${leftPlaylistId}`;
+  const rightPlaylistName = typeof request.body?.rightPlaylistName === "string" && request.body.rightPlaylistName.trim()
+    ? request.body.rightPlaylistName.trim()
+    : `右侧歌单 ${rightPlaylistId}`;
+
+  if (!leftPlaylistId || !rightPlaylistId) {
+    response.status(400).json({ message: "请填写左右两个歌单 ID。" });
+    return;
+  }
+
+  try {
+    const [leftTracks, rightTracks] = await Promise.all([
+      loadCompareSideTracks(leftProvider, leftPlaylistId),
+      loadCompareSideTracks(rightProvider, rightPlaylistId)
+    ]);
+    response.json(comparePlaylists({
+      left: {
+        provider: leftProvider as "netease" | "qq",
+        playlistId: leftPlaylistId,
+        playlistName: leftPlaylistName,
+        tracks: leftTracks
+      },
+      right: {
+        provider: rightProvider as "netease" | "qq",
+        playlistId: rightPlaylistId,
+        playlistName: rightPlaylistName,
+        tracks: rightTracks
+      }
+    }));
+  } catch (error) {
+    response.status(400).json({
+      message: error instanceof Error ? error.message : "歌单对比失败"
+    });
+  }
+});
+
+app.post("/api/playlist-transfer/compare/export", async (request, response) => {
+  const result = request.body?.result as PlaylistCompareResult | undefined;
+  const format = typeof request.body?.format === "string" ? request.body.format : "markdown";
+  const statuses = normalizeCompareStatuses(request.body?.statuses);
+
+  if (!result?.left || !result?.right || !Array.isArray(result.items)) {
+    response.status(400).json({ message: "缺少有效的歌单对比结果。" });
+    return;
+  }
+
+  response.json(formatPlaylistCompareExport(result, format as "markdown" | "text" | "csv" | "json", statuses));
 });
 
 app.get("*", (_request, response) => {
