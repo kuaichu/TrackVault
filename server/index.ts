@@ -20,7 +20,8 @@ import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
 import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, resolveSongStream } from "./task-store.js";
 import { checkNeteaseQrLogin, loginWithNeteaseCellphone, sendNeteaseCaptcha, startNeteaseQrLogin } from "./netease-auth.js";
 import { formatTransferExport } from "./playlist-transfer/export-formatters.js";
-import { checkNeteaseProviderTrackAvailability, createNeteasePlaylistFromTrackIds, loadNeteasePlaylistTransferTracks, searchNeteaseProviderTracks } from "./playlist-transfer/netease-provider.js";
+import { buildNeteaseImportedPlaylistAudit } from "./playlist-transfer/netease-import-audit.js";
+import { checkNeteaseProviderTrackAvailability, createNeteasePlaylistFromTrackIds, loadNeteasePlaylistAuditEntries, loadNeteasePlaylistTransferTracks, searchNeteaseProviderTracks, searchNeteaseProviderTracksByTitle } from "./playlist-transfer/netease-provider.js";
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
 import { createPlaylistTransferJob, getNeteaseImportTrackIds } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
@@ -497,6 +498,39 @@ app.post("/api/playlist-transfer/jobs/:id/import/netease", async (request, respo
   } catch (error) {
     response.status(400).json({
       message: error instanceof Error ? error.message : "导入网易云歌单失败"
+    });
+  }
+});
+
+app.post("/api/playlist-transfer/netease-import-audit", async (request, response) => {
+  const playlistId = typeof request.body?.playlistId === "string" ? request.body.playlistId.trim() : "";
+  const playlistName = typeof request.body?.playlistName === "string" && request.body.playlistName.trim()
+    ? request.body.playlistName.trim()
+    : "网易云歌单";
+  const maxTracks = Number(request.body?.maxTracks ?? 300);
+  const candidateLimit = Number(request.body?.candidateLimit ?? 5);
+  const checkAvailability = request.body?.checkAvailability !== false;
+
+  if (!playlistId) {
+    response.status(400).json({ message: "缺少网易云歌单 ID。" });
+    return;
+  }
+
+  try {
+    const tracks = await loadNeteasePlaylistAuditEntries(playlistId, maxTracks);
+    const audit = await buildNeteaseImportedPlaylistAudit({
+      playlistId,
+      playlistName,
+      tracks,
+      candidateLimit,
+      searchCandidates: searchNeteaseProviderTracksByTitle,
+      checkCandidateAvailability: checkAvailability ? checkNeteaseProviderTrackAvailability : undefined
+    });
+
+    response.json(audit);
+  } catch (error) {
+    response.status(502).json({
+      message: error instanceof Error ? error.message : "网易云导入歌单清理失败"
     });
   }
 });

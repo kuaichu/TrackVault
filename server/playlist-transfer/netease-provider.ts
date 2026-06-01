@@ -4,10 +4,11 @@ import { searchProvider } from "../provider.js";
 import { getSettings } from "../settings-store.js";
 import { assertDownloadAccess } from "../task-store.js";
 import type { Song } from "../types.js";
+import type { NeteaseAuditSourceEntry, NeteaseRawPlaylistTrack, NeteaseRawPrivilege } from "./netease-import-audit.js";
 import type { ProviderTrack, TransferTrack } from "./types.js";
 
 const require = createRequire(import.meta.url);
-const { playlist_create, playlist_track_add } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
+const { playlist_create, playlist_track_add, playlist_track_all } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
 
 function parseDurationSeconds(duration: string | undefined) {
   const [minutesText, secondsText] = (duration ?? "").split(":");
@@ -63,6 +64,11 @@ export async function loadNeteasePlaylistTransferTracks(playlistId: string) {
 export async function searchNeteaseProviderTracks(track: TransferTrack) {
   const query = [track.title, track.artists[0]].filter(Boolean).join(" ");
   const songs = await searchProvider(query);
+  return songs.map(songToProviderTrack);
+}
+
+export async function searchNeteaseProviderTracksByTitle(track: TransferTrack) {
+  const songs = await searchProvider(track.title);
   return songs.map(songToProviderTrack);
 }
 
@@ -123,4 +129,47 @@ export async function createNeteasePlaylistFromTrackIds(name: string, trackIds: 
     playlistId,
     addedCount: trackIds.length
   };
+}
+
+export async function loadNeteasePlaylistAuditEntries(playlistId: string, maxTracks = 300): Promise<NeteaseAuditSourceEntry[]> {
+  const settings = await getSettings();
+  const cookie = settings.neteaseCookie.trim();
+  if (!cookie) {
+    throw new Error("扫描网易云导入歌单需要有效 Cookie。");
+  }
+
+  const safeMaxTracks = Math.min(1000, Math.max(1, Math.trunc(maxTracks) || 300));
+  const entries: NeteaseAuditSourceEntry[] = [];
+  const batchSize = Math.min(300, safeMaxTracks);
+  let offset = 0;
+
+  while (entries.length < safeMaxTracks) {
+    const response = await playlist_track_all({
+      id: playlistId,
+      limit: Math.min(batchSize, safeMaxTracks - entries.length),
+      offset,
+      cookie
+    });
+    const body = response.body as {
+      songs?: NeteaseRawPlaylistTrack[];
+      privileges?: NeteaseRawPrivilege[];
+    };
+    const songs = body.songs ?? [];
+    const privileges = new Map((body.privileges ?? []).map((privilege) => [String(privilege.id), privilege]));
+
+    for (const track of songs) {
+      entries.push({
+        track,
+        privilege: privileges.get(String(track.id))
+      });
+    }
+
+    if (songs.length === 0 || songs.length < batchSize) {
+      break;
+    }
+
+    offset += songs.length;
+  }
+
+  return entries;
 }
