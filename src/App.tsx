@@ -4,6 +4,7 @@ import {
   getAdminConfig as getAdminConfigRemote,
   sendNeteaseCaptcha,
   createDownload,
+  createNeteaseImportAudit,
   getAlbumProfile,
   getArtistProfile,
   createPlaylistTransferJob,
@@ -38,7 +39,7 @@ import {
   startNeteaseQrLogin,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseTransferImportResult, PersistedPlayerState, PlaylistTransferJob, Song, SongArtist, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, UserPlaylist } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistTransferJob, Song, SongArtist, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, UserPlaylist } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
@@ -462,6 +463,12 @@ export default function App() {
   const [transferLoading, setTransferLoading] = useState(false);
   const [transferExporting, setTransferExporting] = useState(false);
   const [transferImporting, setTransferImporting] = useState(false);
+  const [neteaseAuditPlaylistId, setNeteaseAuditPlaylistId] = useState("");
+  const [neteaseAuditMaxTracks, setNeteaseAuditMaxTracks] = useState(300);
+  const [neteaseAuditCandidateLimit, setNeteaseAuditCandidateLimit] = useState(5);
+  const [neteaseAuditCheckAvailability, setNeteaseAuditCheckAvailability] = useState(true);
+  const [neteaseImportAudit, setNeteaseImportAudit] = useState<NeteaseImportAudit | null>(null);
+  const [neteaseAuditLoading, setNeteaseAuditLoading] = useState(false);
   const [adminConfigTokenInput, setAdminConfigTokenInput] = useState("");
   const [session, setSession] = useState<AuthSession>({ loggedIn: false, profile: null });
   const [searching, setSearching] = useState(false);
@@ -928,6 +935,39 @@ export default function App() {
       setMessage(error instanceof Error ? error.message : "导入网易云歌单失败");
     } finally {
       setTransferImporting(false);
+    }
+  }
+
+  async function handleCreateNeteaseImportAudit() {
+    const cookieOk = await ensureNeteaseCookieHealthy();
+    if (!cookieOk) {
+      return;
+    }
+
+    const selectedPlaylist = playlists.find((playlist) => playlist.id === neteaseAuditPlaylistId);
+    if (!selectedPlaylist) {
+      setMessage("请先选择要清理的网易云歌单。");
+      return;
+    }
+
+    setNeteaseAuditLoading(true);
+    setNeteaseImportAudit(null);
+    setMessage(`正在扫描：${selectedPlaylist.name}`);
+
+    try {
+      const audit = await createNeteaseImportAudit({
+        playlistId: selectedPlaylist.id,
+        playlistName: selectedPlaylist.name,
+        maxTracks: neteaseAuditMaxTracks,
+        candidateLimit: neteaseAuditCandidateLimit,
+        checkAvailability: neteaseAuditCheckAvailability
+      });
+      setNeteaseImportAudit(audit);
+      setMessage(`清理完成：识别 ${audit.summary.suspect} 首不可用，可整理 ${audit.summary.replaceable} 首，暂无替代 ${audit.summary.unusable} 首。`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "网易云导入歌单清理失败");
+    } finally {
+      setNeteaseAuditLoading(false);
     }
   }
 
@@ -2429,6 +2469,17 @@ export default function App() {
     }
   };
 
+  const getNeteaseAuditStatusLabel = (status: NeteaseImportAuditStatus) => {
+    switch (status) {
+      case "replaceable":
+        return "可替代";
+      case "needs_review":
+        return "待确认";
+      case "unusable":
+        return "暂无替代";
+    }
+  };
+
   return (
     <div className="app-shell">
       <audio ref={audioRef} preload="none" />
@@ -2633,6 +2684,110 @@ export default function App() {
                     </button>
                   </div>
                 </section>
+
+                <section className="settings-card transfer-report-card">
+                  <span>网易云导入歌单清理</span>
+                  <p>扫描网易云歌单里“其它版本可播”或无播放音源的导入条目，按歌名搜索可用替代，并整理成可再次导入的文字歌单。</p>
+                  <div className="transfer-grid">
+                    <label>
+                      <span>要清理的网易云歌单</span>
+                      <select value={neteaseAuditPlaylistId} onChange={(event) => setNeteaseAuditPlaylistId(event.target.value)}>
+                        <option value="">选择歌单</option>
+                        {playlists.map((playlist) => (
+                          <option key={playlist.id} value={playlist.id}>
+                            {playlist.name} · {playlist.trackCount} 首
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button type="button" className="secondary-button transfer-inline-button" disabled={loadingPlaylists} onClick={() => void loadUserPlaylists()}>
+                      {loadingPlaylists ? "读取中" : "刷新网易云歌单"}
+                    </button>
+                  </div>
+                  <div className="transfer-grid">
+                    <label>
+                      <span>最多扫描</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="1000"
+                        value={neteaseAuditMaxTracks}
+                        onChange={(event) => setNeteaseAuditMaxTracks(Math.min(1000, Math.max(1, Number(event.target.value) || 300)))}
+                      />
+                    </label>
+                    <label>
+                      <span>每首候选数</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="10"
+                        value={neteaseAuditCandidateLimit}
+                        onChange={(event) => setNeteaseAuditCandidateLimit(Math.min(10, Math.max(1, Number(event.target.value) || 5)))}
+                      />
+                    </label>
+                  </div>
+                  <label className="transfer-check-row">
+                    <input
+                      type="checkbox"
+                      checked={neteaseAuditCheckAvailability}
+                      onChange={(event) => setNeteaseAuditCheckAvailability(event.target.checked)}
+                    />
+                    <span>检查候选歌曲是否能获取完整音源</span>
+                  </label>
+                  <div className="form-actions">
+                    <button type="button" className="primary-button wide" disabled={neteaseAuditLoading} onClick={() => void handleCreateNeteaseImportAudit()}>
+                      {neteaseAuditLoading ? "扫描中" : "扫描并整理文字歌单"}
+                    </button>
+                  </div>
+                </section>
+
+                {neteaseImportAudit ? (
+                  <section className="settings-card transfer-report-card">
+                    <div className="transfer-report-head">
+                      <div>
+                        <span>{neteaseImportAudit.playlistName}</span>
+                        <p>扫描 {neteaseImportAudit.scannedCount} 首 · 识别 {neteaseImportAudit.summary.suspect} 首不可用</p>
+                      </div>
+                      <div className="transfer-summary-grid netease-audit-summary-grid">
+                        <strong>{neteaseImportAudit.summary.replaceable}<small>可替代</small></strong>
+                        <strong>{neteaseImportAudit.summary.needsReview}<small>待确认</small></strong>
+                        <strong>{neteaseImportAudit.summary.unusable}<small>暂无替代</small></strong>
+                        <strong>{neteaseImportAudit.summary.suspect}<small>不可用</small></strong>
+                      </div>
+                    </div>
+
+                    <div className="transfer-table">
+                      {neteaseImportAudit.items.slice(0, 80).map((item, index) => (
+                        <article key={`${item.originalTrackId}-${index}`} className="transfer-row">
+                          <div>
+                            <strong>{item.sourceTrack.title}</strong>
+                            <span>{item.sourceTrack.artists.join(" / ") || "未知歌手"} · {item.unusableReason}</span>
+                          </div>
+                          <div>
+                            <strong>{item.selectedCandidate ? item.selectedCandidate.title : getNeteaseAuditStatusLabel(item.status)}</strong>
+                            <span>
+                              {item.selectedCandidate
+                                ? `${item.selectedCandidate.artists.join(" / ") || "未知歌手"} · ${item.selectedCandidate.confidenceScore} 分`
+                                : item.reason ?? "未找到可用候选"}
+                            </span>
+                          </div>
+                          <span className={`transfer-status transfer-status-${item.status}`}>{getNeteaseAuditStatusLabel(item.status)}</span>
+                        </article>
+                      ))}
+                    </div>
+
+                    <div className="netease-audit-output-grid">
+                      <label>
+                        <span>可重新导入的文字歌单</span>
+                        <textarea className="transfer-export-output" value={neteaseImportAudit.textPlaylist || "没有可自动替代的歌曲。"} readOnly />
+                      </label>
+                      <label>
+                        <span>完全不可用或暂无替代</span>
+                        <textarea className="transfer-export-output" value={neteaseImportAudit.unusableText || "当前扫描范围内没有暂无替代的歌曲。"} readOnly />
+                      </label>
+                    </div>
+                  </section>
+                ) : null}
 
                 {transferJob ? (
                   <section className="settings-card transfer-report-card">

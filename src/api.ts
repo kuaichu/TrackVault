@@ -9,6 +9,8 @@ import type {
   NeteaseCellphoneLoginResult,
   DownloadQualityLevel,
   DownloadTask,
+  NeteaseImportAudit,
+  NeteaseImportAuditRequest,
   NeteaseCookieCheckResult,
   NeteaseQrCheckResult,
   NeteaseQrStartResult,
@@ -540,4 +542,21 @@ export async function importPlaylistTransferToNetease(jobId: string, name: strin
   }
 
   return (await response.json()) as NeteaseTransferImportResult;
+}
+
+export async function createNeteaseImportAudit(payload: NeteaseImportAuditRequest): Promise<NeteaseImportAudit> {
+  const response = await apiFetch("/api/playlist-transfer/netease-import-audit", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "网易云导入歌单清理失败");
+  }
+
+  return (await response.json()) as NeteaseImportAudit;
 }

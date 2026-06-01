@@ -4690,20 +4690,36 @@ input[type="range"] {
   color: #9be7b0;
 }
 
+.transfer-status-replaceable {
+  color: #9be7b0;
+}
+
 .transfer-status-manual_review,
-.transfer-status-metadata_conflict {
+.transfer-status-metadata_conflict,
+.transfer-status-needs_review {
   color: #ffd38a;
 }
 
 .transfer-status-not_found,
 .transfer-status-copyright_unavailable,
 .transfer-status-vip_only,
-.transfer-status-trial_only {
+.transfer-status-trial_only,
+.transfer-status-unusable {
   color: #ff9d9d;
 }
 
 .transfer-export-actions select {
   min-width: 160px;
+}
+
+.netease-audit-summary-grid {
+  grid-template-columns: repeat(4, minmax(72px, 1fr));
+}
+
+.netease-audit-output-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .transfer-import-panel {
@@ -4732,6 +4748,31 @@ input[type="range"] {
   color: var(--text-primary);
   padding: 13px 14px;
   resize: vertical;
+}
+
+@media (max-width: 760px) {
+  .transfer-grid,
+  .transfer-report-head,
+  .netease-audit-output-grid,
+  .transfer-import-panel {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .transfer-summary-grid,
+  .netease-audit-summary-grid {
+    min-width: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .transfer-row {
+    grid-template-columns: 1fr;
+  }
+
+  .transfer-status {
+    justify-self: start;
+  }
 }
 
 .artist-link-group {

@@ -295,3 +295,40 @@ export type NeteaseTransferImportResult = {
   addedCount: number;
   skippedCount: number;
 };
+
+export type NeteaseImportAuditStatus = "replaceable" | "needs_review" | "unusable";
+
+export type NeteaseImportAuditItem = {
+  originalTrackId: string;
+  sourceTrack: TransferTrack;
+  unusableReason: string;
+  status: NeteaseImportAuditStatus;
+  candidates: MatchCandidate[];
+  selectedCandidate?: MatchCandidate;
+  reason?: string;
+};
+
+export type NeteaseImportAudit = {
+  playlistId: string;
+  playlistName: string;
+  scannedCount: number;
+  summary: {
+    total: number;
+    suspect: number;
+    replaceable: number;
+    needsReview: number;
+    unusable: number;
+  };
+  items: NeteaseImportAuditItem[];
+  textPlaylist: string;
+  unusableText: string;
+  markdownReport: string;
+};
+
+export type NeteaseImportAuditRequest = {
+  playlistId: string;
+  playlistName?: string;
+  maxTracks?: number;
+  candidateLimit?: number;
+  checkAvailability?: boolean;
+};
