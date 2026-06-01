@@ -4690,13 +4690,19 @@ input[type="range"] {
   color: #9be7b0;
 }
 
+.transfer-status-exact {
+  color: #9be7b0;
+}
+
 .transfer-status-replaceable {
   color: #9be7b0;
 }
 
 .transfer-status-manual_review,
 .transfer-status-metadata_conflict,
-.transfer-status-needs_review {
+.transfer-status-needs_review,
+.transfer-status-same_title_different_artist,
+.transfer-status-similar_title {
   color: #ffd38a;
 }
 
@@ -4704,7 +4710,9 @@ input[type="range"] {
 .transfer-status-copyright_unavailable,
 .transfer-status-vip_only,
 .transfer-status-trial_only,
-.transfer-status-unusable {
+.transfer-status-unusable,
+.transfer-status-left_only,
+.transfer-status-right_only {
   color: #ff9d9d;
 }
 
@@ -4720,6 +4728,12 @@ input[type="range"] {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.compare-export-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
 }
 
 .transfer-import-panel {

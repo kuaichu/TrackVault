@@ -16,6 +16,9 @@ import type {
   NeteaseQrStartResult,
   NeteaseTransferImportResult,
   PersistedPlayerState,
+  PlaylistCompareExportRequest,
+  PlaylistCompareRequest,
+  PlaylistCompareResult,
   PlaylistSongsPage,
   PlaylistTransferJob,
   Song,
@@ -559,4 +562,38 @@ export async function createNeteaseImportAudit(payload: NeteaseImportAuditReques
   }
 
   return (await response.json()) as NeteaseImportAudit;
+}
+
+export async function createPlaylistCompare(payload: PlaylistCompareRequest): Promise<PlaylistCompareResult> {
+  const response = await apiFetch("/api/playlist-transfer/compare", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "歌单对比失败");
+  }
+
+  return (await response.json()) as PlaylistCompareResult;
+}
+
+export async function exportPlaylistCompare(payload: PlaylistCompareExportRequest): Promise<TransferExportResult> {
+  const response = await apiFetch("/api/playlist-transfer/compare/export", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "导出歌单对比结果失败");
+  }
+
+  return (await response.json()) as TransferExportResult;
 }

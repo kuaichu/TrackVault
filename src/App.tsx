@@ -5,6 +5,8 @@ import {
   sendNeteaseCaptcha,
   createDownload,
   createNeteaseImportAudit,
+  createPlaylistCompare,
+  exportPlaylistCompare,
   getAlbumProfile,
   getArtistProfile,
   createPlaylistTransferJob,
@@ -39,7 +41,7 @@ import {
   startNeteaseQrLogin,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistTransferJob, Song, SongArtist, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, UserPlaylist } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, Song, SongArtist, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, UserPlaylist } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
@@ -469,6 +471,16 @@ export default function App() {
   const [neteaseAuditCheckAvailability, setNeteaseAuditCheckAvailability] = useState(true);
   const [neteaseImportAudit, setNeteaseImportAudit] = useState<NeteaseImportAudit | null>(null);
   const [neteaseAuditLoading, setNeteaseAuditLoading] = useState(false);
+  const [compareLeftProvider, setCompareLeftProvider] = useState<"netease" | "qq">("netease");
+  const [compareRightProvider, setCompareRightProvider] = useState<"netease" | "qq">("netease");
+  const [compareLeftPlaylistId, setCompareLeftPlaylistId] = useState("");
+  const [compareRightPlaylistId, setCompareRightPlaylistId] = useState("");
+  const [playlistCompareResult, setPlaylistCompareResult] = useState<PlaylistCompareResult | null>(null);
+  const [playlistCompareLoading, setPlaylistCompareLoading] = useState(false);
+  const [playlistCompareExporting, setPlaylistCompareExporting] = useState(false);
+  const [playlistCompareExportFormat, setPlaylistCompareExportFormat] = useState<TransferExportFormat>("text");
+  const [playlistCompareExportStatuses, setPlaylistCompareExportStatuses] = useState<PlaylistCompareStatus[]>(["same_title_different_artist", "similar_title", "left_only", "right_only"]);
+  const [playlistCompareExportContent, setPlaylistCompareExportContent] = useState("");
   const [adminConfigTokenInput, setAdminConfigTokenInput] = useState("");
   const [session, setSession] = useState<AuthSession>({ loggedIn: false, profile: null });
   const [searching, setSearching] = useState(false);
@@ -968,6 +980,89 @@ export default function App() {
       setMessage(error instanceof Error ? error.message : "网易云导入歌单清理失败");
     } finally {
       setNeteaseAuditLoading(false);
+    }
+  }
+
+  function togglePlaylistCompareExportStatus(status: PlaylistCompareStatus) {
+    setPlaylistCompareExportStatuses((current) => {
+      if (current.includes(status)) {
+        return current.filter((item) => item !== status);
+      }
+
+      return [...current, status];
+    });
+  }
+
+  async function handleCreatePlaylistCompare() {
+    if (compareLeftProvider === "netease" || compareRightProvider === "netease") {
+      const cookieOk = await ensureNeteaseCookieHealthy();
+      if (!cookieOk) {
+        return;
+      }
+    }
+
+    const leftPlaylist = playlists.find((playlist) => playlist.id === compareLeftPlaylistId);
+    const rightPlaylist = playlists.find((playlist) => playlist.id === compareRightPlaylistId);
+    const leftPlaylistId = compareLeftProvider === "netease" ? leftPlaylist?.id ?? "" : compareLeftPlaylistId.trim();
+    const rightPlaylistId = compareRightProvider === "netease" ? rightPlaylist?.id ?? "" : compareRightPlaylistId.trim();
+    const leftPlaylistName = compareLeftProvider === "netease" ? leftPlaylist?.name : `QQ 歌单 ${leftPlaylistId}`;
+    const rightPlaylistName = compareRightProvider === "netease" ? rightPlaylist?.name : `QQ 歌单 ${rightPlaylistId}`;
+
+    if (!leftPlaylistId || !rightPlaylistId) {
+      setMessage("请先填写或选择左右两个歌单。");
+      return;
+    }
+
+    setPlaylistCompareLoading(true);
+    setPlaylistCompareResult(null);
+    setPlaylistCompareExportContent("");
+    setMessage("正在对比两个歌单");
+
+    try {
+      const result = await createPlaylistCompare({
+        leftProvider: compareLeftProvider,
+        leftPlaylistId,
+        leftPlaylistName,
+        rightProvider: compareRightProvider,
+        rightPlaylistId,
+        rightPlaylistName
+      });
+      setPlaylistCompareResult(result);
+      setMessage(
+        `对比完成：完全一样 ${result.summary.exact} 首，歌名同但歌手不同 ${result.summary.sameTitleDifferentArtist} 首，歌名相似 ${result.summary.similarTitle} 首。`
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "歌单对比失败");
+    } finally {
+      setPlaylistCompareLoading(false);
+    }
+  }
+
+  async function handleExportPlaylistCompare() {
+    if (!playlistCompareResult) {
+      return;
+    }
+
+    if (playlistCompareExportStatuses.length === 0) {
+      setMessage("请至少选择一个要导出的分类。");
+      return;
+    }
+
+    setPlaylistCompareExporting(true);
+    setMessage("正在导出歌单对比结果");
+
+    try {
+      const exported = await exportPlaylistCompare({
+        result: playlistCompareResult,
+        format: playlistCompareExportFormat,
+        statuses: playlistCompareExportStatuses
+      });
+      setPlaylistCompareExportContent(exported.content);
+      setMessage(`已生成导出内容：${exported.filename}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "导出歌单对比结果失败");
+    } finally {
+      setPlaylistCompareExporting(false);
     }
   }
 
@@ -2480,6 +2575,21 @@ export default function App() {
     }
   };
 
+  const getPlaylistCompareStatusLabel = (status: PlaylistCompareStatus) => {
+    switch (status) {
+      case "exact":
+        return "完全一样";
+      case "same_title_different_artist":
+        return "歌名同歌手不同";
+      case "similar_title":
+        return "歌名相似";
+      case "left_only":
+        return "仅左侧";
+      case "right_only":
+        return "仅右侧";
+    }
+  };
+
   return (
     <div className="app-shell">
       <audio ref={audioRef} preload="none" />
@@ -2786,6 +2896,132 @@ export default function App() {
                         <textarea className="transfer-export-output" value={neteaseImportAudit.unusableText || "当前扫描范围内没有暂无替代的歌曲。"} readOnly />
                       </label>
                     </div>
+                  </section>
+                ) : null}
+
+                <section className="settings-card transfer-report-card">
+                  <span>两个歌单对比</span>
+                  <p>对比网易云歌单或 QQ 音乐公开歌单，区分完全一样、歌名相同但歌手不同、歌名相似，以及只存在于其中一边的歌曲。</p>
+                  <div className="transfer-grid">
+                    <label>
+                      <span>左侧来源</span>
+                      <select value={compareLeftProvider} onChange={(event) => setCompareLeftProvider(event.target.value as "netease" | "qq")}>
+                        <option value="netease">网易云歌单</option>
+                        <option value="qq">QQ 音乐公开歌单</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>右侧来源</span>
+                      <select value={compareRightProvider} onChange={(event) => setCompareRightProvider(event.target.value as "netease" | "qq")}>
+                        <option value="netease">网易云歌单</option>
+                        <option value="qq">QQ 音乐公开歌单</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div className="transfer-grid">
+                    <label>
+                      <span>左侧歌单</span>
+                      {compareLeftProvider === "netease" ? (
+                        <select value={compareLeftPlaylistId} onChange={(event) => setCompareLeftPlaylistId(event.target.value)}>
+                          <option value="">选择歌单</option>
+                          {playlists.map((playlist) => (
+                            <option key={playlist.id} value={playlist.id}>
+                              {playlist.name} · {playlist.trackCount} 首
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input value={compareLeftPlaylistId} onChange={(event) => setCompareLeftPlaylistId(event.target.value)} placeholder="QQ 音乐公开歌单 ID" />
+                      )}
+                    </label>
+                    <label>
+                      <span>右侧歌单</span>
+                      {compareRightProvider === "netease" ? (
+                        <select value={compareRightPlaylistId} onChange={(event) => setCompareRightPlaylistId(event.target.value)}>
+                          <option value="">选择歌单</option>
+                          {playlists.map((playlist) => (
+                            <option key={playlist.id} value={playlist.id}>
+                              {playlist.name} · {playlist.trackCount} 首
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input value={compareRightPlaylistId} onChange={(event) => setCompareRightPlaylistId(event.target.value)} placeholder="QQ 音乐公开歌单 ID" />
+                      )}
+                    </label>
+                  </div>
+                  <div className="form-actions">
+                    {(compareLeftProvider === "netease" || compareRightProvider === "netease") ? (
+                      <button type="button" className="secondary-button" disabled={loadingPlaylists} onClick={() => void loadUserPlaylists()}>
+                        {loadingPlaylists ? "读取中" : "刷新网易云歌单"}
+                      </button>
+                    ) : null}
+                    <button type="button" className="primary-button" disabled={playlistCompareLoading} onClick={() => void handleCreatePlaylistCompare()}>
+                      {playlistCompareLoading ? "对比中" : "开始对比"}
+                    </button>
+                  </div>
+                </section>
+
+                {playlistCompareResult ? (
+                  <section className="settings-card transfer-report-card">
+                    <div className="transfer-report-head">
+                      <div>
+                        <span>{playlistCompareResult.left.playlistName} / {playlistCompareResult.right.playlistName}</span>
+                        <p>左侧 {playlistCompareResult.left.total} 首 · 右侧 {playlistCompareResult.right.total} 首</p>
+                      </div>
+                      <div className="transfer-summary-grid">
+                        <strong>{playlistCompareResult.summary.exact}<small>完全一样</small></strong>
+                        <strong>{playlistCompareResult.summary.sameTitleDifferentArtist}<small>同名异歌手</small></strong>
+                        <strong>{playlistCompareResult.summary.similarTitle}<small>歌名相似</small></strong>
+                        <strong>{playlistCompareResult.summary.leftOnly}<small>仅左侧</small></strong>
+                        <strong>{playlistCompareResult.summary.rightOnly}<small>仅右侧</small></strong>
+                      </div>
+                    </div>
+
+                    <div className="transfer-table">
+                      {playlistCompareResult.items.slice(0, 100).map((item, index) => (
+                        <article key={`${item.status}-${index}-${item.leftTrack?.sourceTrackId ?? item.rightTrack?.sourceTrackId ?? index}`} className="transfer-row">
+                          <div>
+                            <strong>{item.leftTrack?.title ?? getPlaylistCompareStatusLabel(item.status)}</strong>
+                            <span>{item.leftTrack?.artists.join(" / ") || "左侧无对应歌曲"}</span>
+                          </div>
+                          <div>
+                            <strong>{item.rightTrack?.title ?? getPlaylistCompareStatusLabel(item.status)}</strong>
+                            <span>{item.rightTrack?.artists.join(" / ") || "右侧无对应歌曲"}{item.score > 0 ? ` · ${item.score} 分` : ""}</span>
+                          </div>
+                          <span className={`transfer-status transfer-status-${item.status}`}>{getPlaylistCompareStatusLabel(item.status)}</span>
+                        </article>
+                      ))}
+                    </div>
+
+                    <div className="compare-export-statuses">
+                      {(["exact", "same_title_different_artist", "similar_title", "left_only", "right_only"] as PlaylistCompareStatus[]).map((status) => (
+                        <label key={status} className="transfer-check-row">
+                          <input
+                            type="checkbox"
+                            checked={playlistCompareExportStatuses.includes(status)}
+                            onChange={() => togglePlaylistCompareExportStatus(status)}
+                          />
+                          <span>{getPlaylistCompareStatusLabel(status)}</span>
+                        </label>
+                      ))}
+                    </div>
+
+                    <div className="form-actions transfer-export-actions">
+                      <select value={playlistCompareExportFormat} onChange={(event) => setPlaylistCompareExportFormat(event.target.value as TransferExportFormat)}>
+                        <option value="text">纯文本歌单</option>
+                        <option value="markdown">Markdown 报告</option>
+                        <option value="csv">CSV</option>
+                        <option value="json">JSON</option>
+                      </select>
+                      <button type="button" className="secondary-button" disabled={playlistCompareExporting} onClick={() => void handleExportPlaylistCompare()}>
+                        {playlistCompareExporting ? "导出中" : "导出所选分类"}
+                      </button>
+                    </div>
+
+                    {playlistCompareExportContent ? (
+                      <textarea className="transfer-export-output" value={playlistCompareExportContent} readOnly />
+                    ) : null}
                   </section>
                 ) : null}
 

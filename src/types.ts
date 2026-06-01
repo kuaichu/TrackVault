@@ -332,3 +332,59 @@ export type NeteaseImportAuditRequest = {
   candidateLimit?: number;
   checkAvailability?: boolean;
 };
+
+export type PlaylistCompareStatus =
+  | "exact"
+  | "same_title_different_artist"
+  | "similar_title"
+  | "left_only"
+  | "right_only";
+
+export type PlaylistCompareItem = {
+  status: PlaylistCompareStatus;
+  leftTrack?: TransferTrack;
+  rightTrack?: TransferTrack;
+  score: number;
+  reasons: string[];
+};
+
+export type PlaylistCompareResult = {
+  left: {
+    provider: TransferSourceProvider;
+    playlistId?: string;
+    playlistName: string;
+    total: number;
+  };
+  right: {
+    provider: TransferSourceProvider;
+    playlistId?: string;
+    playlistName: string;
+    total: number;
+  };
+  items: PlaylistCompareItem[];
+  summary: {
+    totalLeft: number;
+    totalRight: number;
+    exact: number;
+    sameTitleDifferentArtist: number;
+    similarTitle: number;
+    leftOnly: number;
+    rightOnly: number;
+  };
+  createdAt: string;
+};
+
+export type PlaylistCompareRequest = {
+  leftProvider: "netease" | "qq";
+  leftPlaylistId: string;
+  leftPlaylistName?: string;
+  rightProvider: "netease" | "qq";
+  rightPlaylistId: string;
+  rightPlaylistName?: string;
+};
+
+export type PlaylistCompareExportRequest = {
+  result: PlaylistCompareResult;
+  format: TransferExportFormat;
+  statuses: PlaylistCompareStatus[];
+};
