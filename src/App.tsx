@@ -8,6 +8,7 @@ import {
   getArtistProfile,
   createPlaylistTransferJob,
   exportPlaylistTransferJob,
+  importPlaylistTransferToNetease,
   getSongLiked,
   getSession,
   getPlayHistory,
@@ -37,7 +38,7 @@ import {
   startNeteaseQrLogin,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, PersistedPlayerState, PlaylistTransferJob, Song, SongArtist, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, UserPlaylist } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseTransferImportResult, PersistedPlayerState, PlaylistTransferJob, Song, SongArtist, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, UserPlaylist } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
@@ -456,8 +457,11 @@ export default function App() {
   const [transferJob, setTransferJob] = useState<PlaylistTransferJob | null>(null);
   const [transferExportFormat, setTransferExportFormat] = useState<TransferExportFormat>("markdown");
   const [transferExportContent, setTransferExportContent] = useState("");
+  const [transferImportName, setTransferImportName] = useState("转换后的歌单");
+  const [transferImportResult, setTransferImportResult] = useState<NeteaseTransferImportResult | null>(null);
   const [transferLoading, setTransferLoading] = useState(false);
   const [transferExporting, setTransferExporting] = useState(false);
+  const [transferImporting, setTransferImporting] = useState(false);
   const [adminConfigTokenInput, setAdminConfigTokenInput] = useState("");
   const [session, setSession] = useState<AuthSession>({ loggedIn: false, profile: null });
   const [searching, setSearching] = useState(false);
@@ -878,6 +882,8 @@ export default function App() {
         checkAvailability: transferCheckAvailability
       });
       setTransferJob(job);
+      setTransferImportName(`${job.playlistName} 转换结果`);
+      setTransferImportResult(null);
       setMessage(`歌单互转完成：${job.summary.matched} 首匹配，${job.summary.manualReview} 首待确认，${job.summary.notFound} 首未找到。`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "创建歌单互转任务失败");
@@ -902,6 +908,26 @@ export default function App() {
       setMessage(error instanceof Error ? error.message : "导出歌单互转报告失败");
     } finally {
       setTransferExporting(false);
+    }
+  }
+
+  async function handleImportTransferToNetease() {
+    if (!transferJob) {
+      return;
+    }
+
+    setTransferImporting(true);
+    setMessage("正在创建网易云目标歌单");
+
+    try {
+      const result = await importPlaylistTransferToNetease(transferJob.id, transferImportName.trim() || `${transferJob.playlistName} 转换结果`);
+      setTransferImportResult(result);
+      setMessage(`已创建网易云歌单，导入 ${result.addedCount} 首，跳过 ${result.skippedCount} 首。`);
+      void loadUserPlaylists();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "导入网易云歌单失败");
+    } finally {
+      setTransferImporting(false);
     }
   }
 
@@ -2657,6 +2683,21 @@ export default function App() {
                         {transferExporting ? "导出中" : "生成导出内容"}
                       </button>
                     </div>
+
+                    {transferJob.targetProvider === "netease" && transferJob.summary.matched > 0 ? (
+                      <div className="transfer-import-panel">
+                        <label>
+                          <span>网易云目标歌单名</span>
+                          <input value={transferImportName} onChange={(event) => setTransferImportName(event.target.value)} />
+                        </label>
+                        <button type="button" className="primary-button" disabled={transferImporting} onClick={() => void handleImportTransferToNetease()}>
+                          {transferImporting ? "导入中" : "创建网易云歌单"}
+                        </button>
+                        {transferImportResult ? (
+                          <p>已导入 {transferImportResult.addedCount} 首，跳过 {transferImportResult.skippedCount} 首。歌单 ID：{transferImportResult.playlistId}</p>
+                        ) : null}
+                      </div>
+                    ) : null}
 
                     {transferExportContent ? (
                       <textarea className="transfer-export-output" value={transferExportContent} readOnly />

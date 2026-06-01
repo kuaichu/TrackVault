@@ -1,8 +1,13 @@
+import { createRequire } from "node:module";
 import { getPlaylistSongs } from "../playlist-provider.js";
 import { searchProvider } from "../provider.js";
+import { getSettings } from "../settings-store.js";
 import { assertDownloadAccess } from "../task-store.js";
 import type { Song } from "../types.js";
 import type { ProviderTrack, TransferTrack } from "./types.js";
+
+const require = createRequire(import.meta.url);
+const { playlist_create, playlist_track_add } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
 
 function parseDurationSeconds(duration: string | undefined) {
   const [minutesText, secondsText] = (duration ?? "").split(":");
@@ -80,4 +85,42 @@ export async function checkNeteaseProviderTrackAvailability(candidate: { raw?: u
     }
     return { status: "copyright_unavailable" as const, reason: message };
   }
+}
+
+export async function createNeteasePlaylistFromTrackIds(name: string, trackIds: string[]) {
+  const settings = await getSettings();
+  const cookie = settings.neteaseCookie.trim();
+  if (!cookie) {
+    throw new Error("创建网易云歌单需要有效 Cookie。");
+  }
+
+  if (trackIds.length === 0) {
+    throw new Error("没有可导入网易云的已匹配歌曲。");
+  }
+
+  const createResponse = await playlist_create({
+    name,
+    privacy: 0,
+    cookie
+  });
+  const body = createResponse.body as { id?: number | string; playlist?: { id?: number | string } };
+  const playlistId = String(body.id ?? body.playlist?.id ?? "");
+  if (!playlistId) {
+    throw new Error("网易云歌单创建成功但未返回歌单 ID。");
+  }
+
+  const batchSize = 500;
+  for (let index = 0; index < trackIds.length; index += batchSize) {
+    const batch = trackIds.slice(index, index + batchSize);
+    await playlist_track_add({
+      pid: playlistId,
+      ids: batch.join(","),
+      cookie
+    });
+  }
+
+  return {
+    playlistId,
+    addedCount: trackIds.length
+  };
 }

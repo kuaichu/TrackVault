@@ -20,9 +20,9 @@ import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
 import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, resolveSongStream } from "./task-store.js";
 import { checkNeteaseQrLogin, loginWithNeteaseCellphone, sendNeteaseCaptcha, startNeteaseQrLogin } from "./netease-auth.js";
 import { formatTransferExport } from "./playlist-transfer/export-formatters.js";
-import { checkNeteaseProviderTrackAvailability, loadNeteasePlaylistTransferTracks, searchNeteaseProviderTracks } from "./playlist-transfer/netease-provider.js";
+import { checkNeteaseProviderTrackAvailability, createNeteasePlaylistFromTrackIds, loadNeteasePlaylistTransferTracks, searchNeteaseProviderTracks } from "./playlist-transfer/netease-provider.js";
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
-import { createPlaylistTransferJob } from "./playlist-transfer/service.js";
+import { createPlaylistTransferJob, getNeteaseImportTrackIds } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
 import type { AdminConfigUpdate, AppSettings, DownloadQualityLevel, DownloadRequest } from "./types.js";
 import type { MatchCandidate, TransferImportRequest, TransferTargetProvider, TransferTrack } from "./playlist-transfer/types.js";
@@ -469,6 +469,36 @@ app.post("/api/playlist-transfer/jobs/:id/export", async (request, response) => 
 
   const format = typeof request.body?.format === "string" ? request.body.format : "markdown";
   response.json(formatTransferExport(job, format));
+});
+
+app.post("/api/playlist-transfer/jobs/:id/import/netease", async (request, response) => {
+  const ownerKey = await getCurrentUserKey();
+  const job = await getPlaylistTransferJob(ownerKey, request.params.id);
+  if (!job) {
+    response.status(404).json({ message: "歌单互转任务不存在" });
+    return;
+  }
+
+  if (job.targetProvider !== "netease") {
+    response.status(400).json({ message: "只有目标为网易云的互转任务才能直接导入网易云歌单。" });
+    return;
+  }
+
+  try {
+    const name = typeof request.body?.name === "string" && request.body.name.trim()
+      ? request.body.name.trim()
+      : `${job.playlistName} 转换结果`;
+    const trackIds = getNeteaseImportTrackIds(job);
+    const result = await createNeteasePlaylistFromTrackIds(name, trackIds);
+    response.json({
+      ...result,
+      skippedCount: job.summary.total - result.addedCount
+    });
+  } catch (error) {
+    response.status(400).json({
+      message: error instanceof Error ? error.message : "导入网易云歌单失败"
+    });
+  }
 });
 
 app.get("*", (_request, response) => {

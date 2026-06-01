@@ -12,6 +12,7 @@ import type {
   NeteaseCookieCheckResult,
   NeteaseQrCheckResult,
   NeteaseQrStartResult,
+  NeteaseTransferImportResult,
   PersistedPlayerState,
   PlaylistSongsPage,
   PlaylistTransferJob,
@@ -522,4 +523,21 @@ export async function exportPlaylistTransferJob(jobId: string, format: TransferE
   }
 
   return (await response.json()) as TransferExportResult;
+}
+
+export async function importPlaylistTransferToNetease(jobId: string, name: string): Promise<NeteaseTransferImportResult> {
+  const response = await apiFetch(`/api/playlist-transfer/jobs/${encodeURIComponent(jobId)}/import/netease`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ name })
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "导入网易云歌单失败");
+  }
+
+  return (await response.json()) as NeteaseTransferImportResult;
 }

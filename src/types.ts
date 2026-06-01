@@ -289,3 +289,9 @@ export type TransferExportResult = {
   contentType: string;
   content: string;
 };
+
+export type NeteaseTransferImportResult = {
+  playlistId: string;
+  addedCount: number;
+  skippedCount: number;
+};

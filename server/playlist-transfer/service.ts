@@ -135,3 +135,24 @@ export async function createPlaylistTransferJob(input: CreatePlaylistTransferInp
 
   return deps.saveJob(job);
 }
+
+export function getNeteaseImportTrackIds(job: PlaylistTransferJob) {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+
+  for (const result of job.tracks) {
+    const candidate = result.selectedCandidate;
+    if (result.status !== "matched" || candidate?.provider !== "netease" || !candidate.targetTrackId) {
+      continue;
+    }
+
+    if (seen.has(candidate.targetTrackId)) {
+      continue;
+    }
+
+    seen.add(candidate.targetTrackId);
+    ids.push(candidate.targetTrackId);
+  }
+
+  return ids;
+}

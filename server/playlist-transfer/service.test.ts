@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPlaylistTransferJob } from "./service.js";
+import { createPlaylistTransferJob, getNeteaseImportTrackIds } from "./service.js";
 import type { ProviderTrack } from "./types.js";
 
 test("createPlaylistTransferJob parses text input and summarizes matched songs", async () => {
@@ -60,4 +60,60 @@ test("createPlaylistTransferJob marks duplicate imported songs", async () => {
   assert.equal(job.summary.matched, 1);
   assert.equal(job.summary.duplicate, 1);
   assert.equal(job.tracks[1].status, "duplicate");
+});
+
+test("getNeteaseImportTrackIds returns unique matched netease candidate ids", () => {
+  const ids = getNeteaseImportTrackIds({
+    id: "job-1",
+    ownerKey: "session:test",
+    sourceProvider: "text",
+    targetProvider: "netease",
+    playlistName: "导入测试",
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+    summary: {
+      total: 3,
+      matched: 2,
+      manualReview: 0,
+      notFound: 1,
+      unavailable: 0,
+      duplicate: 0,
+      skipped: 0
+    },
+    tracks: [
+      {
+        sourceTrack: { source: "text", title: "非我", artists: ["方山厨子Rex"] },
+        status: "matched",
+        candidates: [],
+        selectedCandidate: {
+          provider: "netease",
+          targetTrackId: "1",
+          title: "非我",
+          artists: ["方山厨子Rex"],
+          confidenceScore: 100,
+          reasons: []
+        }
+      },
+      {
+        sourceTrack: { source: "text", title: "非我", artists: ["方山厨子Rex"] },
+        status: "matched",
+        candidates: [],
+        selectedCandidate: {
+          provider: "netease",
+          targetTrackId: "1",
+          title: "非我",
+          artists: ["方山厨子Rex"],
+          confidenceScore: 100,
+          reasons: []
+        }
+      },
+      {
+        sourceTrack: { source: "text", title: "缺失歌", artists: ["未知歌手"] },
+        status: "not_found",
+        candidates: []
+      }
+    ]
+  });
+
+  assert.deepEqual(ids, ["1"]);
 });
