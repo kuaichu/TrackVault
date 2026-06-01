@@ -1,0 +1,3480 @@
+import { type CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  checkNeteaseCookie,
+  getAdminConfig as getAdminConfigRemote,
+  sendNeteaseCaptcha,
+  createDownload,
+  getAlbumProfile,
+  getArtistProfile,
+  getSongLiked,
+  getSession,
+  getPlayHistory,
+  getPlayerState as getPlayerStateRemote,
+  getCloudSongs,
+  getDailyRecommendSongs,
+  getDiscoverSongs,
+  getPlaylistSongs,
+  getPlaylists,
+  getSearchHistory,
+  getLyrics,
+  getSettings,
+  getStreamUrl,
+  getTasks,
+  checkNeteaseQrLogin,
+  removeSearchHistory as removeSearchHistoryRemote,
+  resolveArtistByName,
+  loginAccount,
+  loginWithNeteaseCellphone,
+  logoutAccount,
+  savePlayHistory,
+  savePlayerState as savePlayerStateRemote,
+  saveSearchHistory,
+  saveAdminConfig as saveAdminConfigRemote,
+  setSongLiked,
+  saveSettings,
+  startNeteaseQrLogin,
+  searchSongs
+} from "./api";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, PersistedPlayerState, Song, SongArtist, UserPlaylist } from "./types";
+
+const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
+const PLAYLIST_SONGS_PAGE_SIZE = 100;
+const defaultSettings: AppSettings = {
+  accountName: "本地账号",
+  vipEnabled: false,
+  providerMode: "netease",
+  downloadDirectory: "downloads",
+  neteaseCookie: "",
+  notes: "",
+  defaultPlaybackQuality: "standard",
+  defaultDownloadQuality: "hires",
+  maxConcurrentDownloads: 3
+};
+
+const defaultAdminConfig: AdminConfigView = {
+  trustedUserWhitelistText: "",
+  hasSystemDefaultToken: false,
+  systemFallbackEnabled: false
+};
+
+type MainTab = "search" | "account" | "settings";
+type NavKey = "discover" | "search" | "daily" | "playlists" | "cloud" | "downloads" | "history" | "artist" | "album";
+type RightPanelTab = "queue" | "lyrics";
+type ResultSource = "search" | "playlist" | "cloud" | "daily" | "discover" | "artist" | "album";
+type NeteaseLoginMode = "qr" | "cellphone";
+type ViewSnapshot = {
+  results: Song[];
+  playQueue: Song[];
+  resultSource: ResultSource;
+  activePlaylist: UserPlaylist | null;
+  activeArtist: ArtistProfile | null;
+  activeAlbum: AlbumProfile | null;
+  selectedPlaylistId: string | null;
+  playlistSongsPage: number;
+  playlistSongsLimit: number;
+  playlistSongsHasMore: boolean;
+  playlistSongsTotal: number;
+  playlistSearchInput: string;
+  playlistSearchKeyword: string;
+  cloudMeta: { count: number; size: number; maxSize: number };
+  qualitySelections: Record<string, DownloadQualityLevel>;
+  qualitySelectionTouched: Record<string, true>;
+};
+
+type ViewState = { mainTab: MainTab; navKey: NavKey; snapshot: ViewSnapshot };
+
+const navText: Record<NavKey, { title: string; subtitle: string }> = {
+  discover: { title: "发现音乐", subtitle: "推荐新歌与近期值得听的音乐" },
+  search: { title: "搜索", subtitle: "按歌曲、歌手或专辑检索并试听下载" },
+  daily: { title: "每日推荐", subtitle: "读取网易云今日为你推荐的歌曲" },
+  playlists: { title: "我的歌单", subtitle: "读取网易云账号歌单并载入歌曲" },
+  cloud: { title: "云盘音乐", subtitle: "读取网易云音乐云盘并载入歌曲" },
+  downloads: { title: "下载管理", subtitle: "集中查看本地下载任务、进度和输出文件" },
+  history: { title: "播放历史", subtitle: "回看最近播放并快速继续收听" }
+  ,
+  artist: { title: "歌手", subtitle: "查看歌手热门歌曲与简介" },
+  album: { title: "专辑", subtitle: "查看专辑详情与曲目列表" }
+};
+
+const SEARCH_HISTORY_STORAGE_KEY = "net-music-down:search-history";
+const DISCOVER_CACHE_STORAGE_KEY = "net-music-down:discover-cache";
+const PLAY_HISTORY_STORAGE_KEY = "net-music-down:play-history";
+const PLAYER_STATE_STORAGE_KEY = "net-music-down:player-state";
+const DISCOVER_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
+  currentTrack: null,
+  playQueue: [],
+  playbackSeconds: 0,
+  volume: 72,
+  playbackMode: "sequential"
+};
+const QR_LOGIN_DEFAULT_MESSAGE = "打开网易云音乐 App 扫码登录。";
+const CELLPHONE_LOGIN_DEFAULT_MESSAGE = "请输入手机号并发送验证码登录。";
+
+type SongCachePayload = {
+  savedAt: number;
+  songs: Song[];
+};
+
+function loadSearchHistory() {
+  try {
+    const rawHistory = window.localStorage.getItem(SEARCH_HISTORY_STORAGE_KEY);
+    if (!rawHistory) {
+      return [];
+    }
+
+    const parsedHistory = JSON.parse(rawHistory);
+    if (!Array.isArray(parsedHistory)) {
+      return [];
+    }
+
+    return parsedHistory.filter((item): item is string => typeof item === "string").slice(0, 10);
+  } catch {
+    return [];
+  }
+}
+
+function loadCachedDiscoverSongs() {
+  try {
+    const rawCache = window.localStorage.getItem(DISCOVER_CACHE_STORAGE_KEY);
+    if (!rawCache) {
+      return [];
+    }
+
+    const parsedCache = JSON.parse(rawCache) as Partial<SongCachePayload>;
+    if (!Array.isArray(parsedCache.songs) || !parsedCache.savedAt) {
+      return [];
+    }
+
+    if (Date.now() - parsedCache.savedAt > DISCOVER_CACHE_TTL_MS) {
+      return [];
+    }
+
+    return parsedCache.songs.filter((song): song is Song => Boolean(song?.id && song.title));
+  } catch {
+    return [];
+  }
+}
+
+function saveCachedDiscoverSongs(songs: Song[]) {
+  try {
+    window.localStorage.setItem(
+      DISCOVER_CACHE_STORAGE_KEY,
+      JSON.stringify({
+        savedAt: Date.now(),
+        songs
+      } satisfies SongCachePayload)
+    );
+  } catch {
+    // Cache writes are best-effort; the API result itself is still authoritative.
+  }
+}
+
+function loadPlayHistory() {
+  try {
+    const rawHistory = window.localStorage.getItem(PLAY_HISTORY_STORAGE_KEY);
+    if (!rawHistory) {
+      return [];
+    }
+
+    const parsedHistory = JSON.parse(rawHistory);
+    if (!Array.isArray(parsedHistory)) {
+      return [];
+    }
+
+    return parsedHistory
+      .filter((item): item is Song => Boolean(item?.id && item?.title && item?.artist))
+      .slice(0, 30);
+  } catch {
+    return [];
+  }
+}
+
+function loadPlayerState(): PersistedPlayerState {
+  try {
+    const rawState = window.localStorage.getItem(PLAYER_STATE_STORAGE_KEY);
+    if (!rawState) {
+      return DEFAULT_PLAYER_STATE;
+    }
+
+    const parsedState = JSON.parse(rawState) as Partial<PersistedPlayerState>;
+    const queue = Array.isArray(parsedState.playQueue)
+      ? parsedState.playQueue.filter((item): item is Song => Boolean(item?.id && item?.title && item?.artist)).slice(0, 100)
+      : [];
+    const currentTrack =
+      parsedState.currentTrack && parsedState.currentTrack.id && parsedState.currentTrack.title && parsedState.currentTrack.artist
+        ? parsedState.currentTrack
+        : null;
+    const playbackSeconds = Number.isFinite(parsedState.playbackSeconds) ? Math.max(0, Number(parsedState.playbackSeconds)) : 0;
+    const volume = Number.isFinite(parsedState.volume) ? Math.min(100, Math.max(0, Math.round(Number(parsedState.volume)))) : 72;
+
+    return {
+      currentTrack,
+      playQueue: queue,
+      playbackSeconds,
+      volume,
+      playbackMode: parsedState.playbackMode === "shuffle" ? "shuffle" : "sequential"
+    };
+  } catch {
+    return DEFAULT_PLAYER_STATE;
+  }
+}
+
+function savePlayerStateLocal(state: PersistedPlayerState) {
+  try {
+    window.localStorage.setItem(PLAYER_STATE_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Best-effort only.
+  }
+}
+
+function hasPersistedPlayerState(state: PersistedPlayerState) {
+  return Boolean(
+    state.currentTrack ||
+      state.playQueue.length > 0 ||
+      state.playbackSeconds > 0 ||
+      state.volume !== DEFAULT_PLAYER_STATE.volume ||
+      state.playbackMode === "shuffle"
+  );
+}
+
+function statusLabel(status: DownloadTask["status"]) {
+  switch (status) {
+    case "queued":
+      return "排队中";
+    case "preparing":
+      return "准备中";
+    case "downloading":
+      return "下载中";
+    case "done":
+      return "已完成";
+    case "failed":
+      return "失败";
+    default:
+      return status;
+  }
+}
+
+function parseDurationSeconds(duration: string) {
+  const [minutesText, secondsText] = duration.split(":");
+  const minutes = Number(minutesText);
+  const seconds = Number(secondsText);
+
+  if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) {
+    return 0;
+  }
+
+  return minutes * 60 + seconds;
+}
+
+function formatPlaybackTime(seconds: number) {
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainSeconds = safeSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(remainSeconds).padStart(2, "0")}`;
+}
+
+function formatFileSize(size?: number) {
+  if (!size || size <= 0) {
+    return "--";
+  }
+
+  return `${(size / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function getDailyRecommendDateLabel(now = new Date()) {
+  const date = new Date(now);
+
+  if (date.getHours() < 6) {
+    date.setDate(date.getDate() - 1);
+  }
+
+  return `${String(date.getMonth() + 1).padStart(2, "0")}月${String(date.getDate()).padStart(2, "0")}日`;
+}
+
+function MusicGlyph() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="music-glyph">
+      <path d="M9 18.25c0 1.24-1.18 2.25-2.63 2.25S3.75 19.49 3.75 18.25 4.93 16 6.37 16c.56 0 1.08.15 1.5.4V5.2c0-.56.37-1.05.9-1.2l9-2.5c.76-.21 1.48.36 1.48 1.15v12.1c0 1.24-1.18 2.25-2.63 2.25S14 15.99 14 14.75s1.18-2.25 2.62-2.25c.56 0 1.08.15 1.5.4V5.18L9 7.72v10.53Z" />
+    </svg>
+  );
+}
+
+function PreviewIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="action-svg">
+      <path d="M8 5.75v12.5L18 12 8 5.75Z" />
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="action-svg">
+      <path d="M12 4.5v10" />
+      <path d="m7.75 10.75 4.25 4.25 4.25-4.25" />
+      <path d="M5.5 19.5h13" />
+    </svg>
+  );
+}
+
+function LockIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="lock-svg">
+      <path d="M7.5 10.5V8.75a4.5 4.5 0 1 1 9 0v1.75" />
+      <rect x="5.5" y="10.5" width="13" height="9" rx="2.75" ry="2.75" />
+      <path d="M12 14.25v2.5" />
+    </svg>
+  );
+}
+
+function ChevronIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="quality-chevron">
+      <path d="m8 10 4 4 4-4" />
+    </svg>
+  );
+}
+
+type PlayerIconName = "heart" | "more" | "next" | "pause" | "play" | "previous" | "queue" | "shuffle" | "volume";
+
+function PlayerIcon({ name }: { name: PlayerIconName }) {
+  const paths: Record<PlayerIconName, JSX.Element> = {
+    heart: <path d="M12 20.2 5.4 13.9C2.1 10.8 4 5.4 8.4 5.4c1.5 0 2.8.7 3.6 1.8.8-1.1 2.1-1.8 3.6-1.8 4.4 0 6.3 5.4 3 8.5L12 20.2Z" />,
+    more: (
+      <>
+        <path d="M6.5 12h.01" />
+        <path d="M12 12h.01" />
+        <path d="M17.5 12h.01" />
+      </>
+    ),
+    next: (
+      <>
+        <path d="m7 6 8 6-8 6V6Z" />
+        <path d="M17 6v12" />
+      </>
+    ),
+    pause: (
+      <>
+        <path d="M8.5 6.5v11" />
+        <path d="M15.5 6.5v11" />
+      </>
+    ),
+    play: <path d="m8.5 6.5 9 5.5-9 5.5v-11Z" />,
+    previous: (
+      <>
+        <path d="M7 6v12" />
+        <path d="m17 6-8 6 8 6V6Z" />
+      </>
+    ),
+    queue: (
+      <>
+        <path d="M5 7h10" />
+        <path d="M5 12h14" />
+        <path d="M5 17h8" />
+      </>
+    ),
+    shuffle: (
+      <>
+        <path d="M16.5 6.5H19v2.5" />
+        <path d="m5 18 5.2-5.2" />
+        <path d="m13.8 8.2 2.7-1.7H19" />
+        <path d="m5 6 14 12" />
+      </>
+    ),
+    volume: (
+      <>
+        <path d="M5 10v4h3l4 3.2V6.8L8 10H5Z" />
+        <path d="M16 9.2a4.2 4.2 0 0 1 0 5.6" />
+        <path d="M18.4 7a7.5 7.5 0 0 1 0 10" />
+      </>
+    )
+  };
+
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="player-svg">
+      {paths[name]}
+    </svg>
+  );
+}
+
+function CoverArt({ song, className }: { song: Song | null; className: string }) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const coverUrl = song?.coverUrl && song.coverUrl !== failedUrl ? song.coverUrl : null;
+
+  return (
+    <div className={className}>
+      {coverUrl ? (
+        <img src={coverUrl} alt={`${song?.title ?? "歌曲"} 封面`} loading="lazy" onError={() => setFailedUrl(coverUrl)} />
+      ) : (
+        <MusicGlyph />
+      )}
+    </div>
+  );
+}
+
+export default function App() {
+  const initialPlayerState = loadPlayerState();
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const lyricPanelRef = useRef<HTMLDivElement | null>(null);
+  const modalLyricPanelRef = useRef<HTMLDivElement | null>(null);
+  const activeLyricRef = useRef<HTMLButtonElement | null>(null);
+  const activeModalLyricRef = useRef<HTMLButtonElement | null>(null);
+  const lyricManualScrollUntilRef = useRef(0);
+  const lastAutoLyricIndexRef = useRef(-1);
+  const lastModalAutoLyricIndexRef = useRef(-1);
+  const restorePlaybackSecondsRef = useRef(initialPlayerState.playbackSeconds);
+  const searchRequestIdRef = useRef(0);
+  const listRequestIdRef = useRef(0);
+  const cookieHealthRef = useRef<{ cookie: string; checkedAt: number; result: NeteaseCookieCheckResult | null }>({
+    cookie: "",
+    checkedAt: 0,
+    result: null
+  });
+  const playerStateSyncTimerRef = useRef<number | null>(null);
+  const playerStateHydratedRef = useRef(false);
+  const qrCheckFailureCountRef = useRef(0);
+  const qrAutoRefreshPendingRef = useRef(false);
+  const qrAutoRefreshCountRef = useRef(0);
+  const qrCloseTimerRef = useRef<number | null>(null);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<Song[]>([]);
+  const [searchHistory, setSearchHistory] = useState<string[]>(loadSearchHistory);
+  const [playlists, setPlaylists] = useState<UserPlaylist[]>([]);
+  const [tasks, setTasks] = useState<DownloadTask[]>([]);
+  const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [adminConfig, setAdminConfig] = useState<AdminConfigView>(defaultAdminConfig);
+  const [adminConfigTokenInput, setAdminConfigTokenInput] = useState("");
+  const [session, setSession] = useState<AuthSession>({ loggedIn: false, profile: null });
+  const [searching, setSearching] = useState(false);
+  const [loadingPlaylists, setLoadingPlaylists] = useState(false);
+  const [loadingPlaylistSongs, setLoadingPlaylistSongs] = useState(false);
+  const [loadingArtist, setLoadingArtist] = useState(false);
+  const [loadingCloudSongs, setLoadingCloudSongs] = useState(false);
+  const [loadingDailySongs, setLoadingDailySongs] = useState(false);
+  const [loadingDiscoverSongs, setLoadingDiscoverSongs] = useState(false);
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
+  const [activePlaylist, setActivePlaylist] = useState<UserPlaylist | null>(null);
+  const [activeArtist, setActiveArtist] = useState<ArtistProfile | null>(null);
+  const [activeAlbum, setActiveAlbum] = useState<AlbumProfile | null>(null);
+  const [playlistSongsPage, setPlaylistSongsPage] = useState(1);
+  const [playlistSongsLimit, setPlaylistSongsLimit] = useState(PLAYLIST_SONGS_PAGE_SIZE);
+  const [playlistSongsHasMore, setPlaylistSongsHasMore] = useState(false);
+  const [playlistSongsTotal, setPlaylistSongsTotal] = useState(0);
+  const [playlistSearchInput, setPlaylistSearchInput] = useState("");
+  const [playlistSearchKeyword, setPlaylistSearchKeyword] = useState("");
+  const [cloudMeta, setCloudMeta] = useState({ count: 0, size: 0, maxSize: 0 });
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [savingAdminConfig, setSavingAdminConfig] = useState(false);
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [batchDownloading, setBatchDownloading] = useState(false);
+  const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
+  const [qualitySelections, setQualitySelections] = useState<Record<string, DownloadQualityLevel>>({});
+  const [qualitySelectionTouched, setQualitySelectionTouched] = useState<Record<string, true>>({});
+  const [openQualityMenuId, setOpenQualityMenuId] = useState<string | null>(null);
+  const [mainTab, setMainTab] = useState<MainTab>("search");
+  const [navKey, setNavKey] = useState<NavKey>("discover");
+  const [viewHistory, setViewHistory] = useState<ViewState[]>([]);
+  const [currentTrack, setCurrentTrack] = useState<Song | null>(initialPlayerState.currentTrack);
+  const [playQueue, setPlayQueue] = useState<Song[]>(initialPlayerState.playQueue);
+  const [playHistory, setPlayHistory] = useState<Song[]>(loadPlayHistory);
+  const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("queue");
+  const [isPlayerExpanded, setIsPlayerExpanded] = useState(false);
+  const [resultSource, setResultSource] = useState<ResultSource>("search");
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [qrLoginOpen, setQrLoginOpen] = useState(false);
+  const [neteaseLoginMode, setNeteaseLoginMode] = useState<NeteaseLoginMode>("qr");
+  const [qrLoginKey, setQrLoginKey] = useState("");
+  const [qrLoginImage, setQrLoginImage] = useState("");
+  const [qrLoginMessage, setQrLoginMessage] = useState("打开网易云音乐 App 扫码登录。");
+  const [qrLoginExpiresIn, setQrLoginExpiresIn] = useState(0);
+  const [startingQrLogin, setStartingQrLogin] = useState(false);
+  const [sendingCaptcha, setSendingCaptcha] = useState(false);
+  const [loggingCellphoneIn, setLoggingCellphoneIn] = useState(false);
+  const [cellphoneLoginForm, setCellphoneLoginForm] = useState({
+    countryCode: "86",
+    phone: "",
+    captcha: ""
+  });
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSeconds, setPlaybackSeconds] = useState(initialPlayerState.playbackSeconds);
+  const [playbackDuration, setPlaybackDuration] = useState(0);
+  const [playbackMode, setPlaybackMode] = useState<"sequential" | "shuffle">(initialPlayerState.playbackMode === "shuffle" ? "shuffle" : "sequential");
+  const [lyrics, setLyrics] = useState<LyricLine[]>([]);
+  const [loadingLyrics, setLoadingLyrics] = useState(false);
+  const [lyricsError, setLyricsError] = useState("");
+  const [volume, setVolume] = useState(initialPlayerState.volume);
+  const [playerError, setPlayerError] = useState("");
+  const [likedSongIds, setLikedSongIds] = useState<string[]>([]);
+  const [togglingLike, setTogglingLike] = useState(false);
+  const [loginForm, setLoginForm] = useState({
+    accountName: "我的本地账号",
+    vipEnabled: true,
+    note: "演示账号资料"
+  });
+  const [message, setMessage] = useState("正在加载发现音乐。");
+  const [playerStateReady, setPlayerStateReady] = useState(false);
+
+  function getSelectedLevel(song: Song) {
+    return qualitySelections[song.id] ?? getPreferredPlaybackQuality(song);
+  }
+
+  function getSelectedLabel(song: Song) {
+    const selectedLevel = getSelectedLevel(song);
+    return song.availableQualities.find((quality) => quality.level === selectedLevel)?.label ?? "128K";
+  }
+
+  function getPreferredPlaybackQuality(song: Song) {
+    return getPreferredQualityForLevel(song, settings.defaultPlaybackQuality);
+  }
+
+  function getPreferredDownloadQuality(song: Song) {
+    return getPreferredQualityForLevel(song, settings.defaultDownloadQuality);
+  }
+
+  function getDownloadLevel(song: Song) {
+    return qualitySelectionTouched[song.id] ? getSelectedLevel(song) : getPreferredDownloadQuality(song);
+  }
+
+  function getPreferredQualityForLevel(song: Song, level: DownloadQualityLevel) {
+    return song.availableQualities.find((quality) => quality.level === level)?.level ?? song.availableQualities.at(-1)?.level ?? "standard";
+  }
+
+  function createQualitySelectionMap(songs: Song[], level = settings.defaultPlaybackQuality) {
+    return Object.fromEntries(songs.map((song) => [song.id, getPreferredQualityForLevel(song, level)]));
+  }
+
+  function applyQualityDefaults(songs: Song[], level = settings.defaultPlaybackQuality) {
+    setQualitySelections(createQualitySelectionMap(songs, level));
+    setQualitySelectionTouched({});
+    setSelectedSongIds([]);
+  }
+
+  function addToPlayHistory(song: Song) {
+    setPlayHistory((current) => {
+      const nextHistory = [song, ...current.filter((item) => item.id !== song.id)].slice(0, 30);
+      window.localStorage.setItem(PLAY_HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
+      void savePlayHistory(nextHistory);
+      return nextHistory;
+    });
+  }
+
+  function navigateTo(nextNavKey: NavKey, nextMainTab: MainTab = "search") {
+    if (nextNavKey === navKey && nextMainTab === mainTab) {
+      return;
+    }
+
+    const currentView = {
+      mainTab,
+      navKey,
+      snapshot: {
+        results,
+        playQueue,
+        resultSource,
+        activePlaylist,
+        activeArtist,
+        activeAlbum,
+        selectedPlaylistId,
+        playlistSongsPage,
+        playlistSongsLimit,
+        playlistSongsHasMore,
+        playlistSongsTotal,
+        playlistSearchInput,
+        playlistSearchKeyword,
+        cloudMeta,
+        qualitySelections,
+        qualitySelectionTouched
+      }
+    };
+    setViewHistory((current) => [currentView, ...current.filter((item) => item.mainTab !== currentView.mainTab || item.navKey !== currentView.navKey)].slice(0, 20));
+    setMainTab(nextMainTab);
+    setNavKey(nextNavKey);
+  }
+
+  function goBackView() {
+    const previousView = viewHistory[0];
+    if (!previousView) {
+      return;
+    }
+
+    setViewHistory((current) => current.slice(1));
+    setMainTab(previousView.mainTab);
+    setNavKey(previousView.navKey);
+    setResults(previousView.snapshot.results);
+    setPlayQueue(previousView.snapshot.playQueue);
+    setResultSource(previousView.snapshot.resultSource);
+    setActivePlaylist(previousView.snapshot.activePlaylist);
+    setActiveArtist(previousView.snapshot.activeArtist);
+    setActiveAlbum(previousView.snapshot.activeAlbum);
+    setSelectedPlaylistId(previousView.snapshot.selectedPlaylistId);
+    setPlaylistSongsPage(previousView.snapshot.playlistSongsPage);
+    setPlaylistSongsLimit(previousView.snapshot.playlistSongsLimit);
+    setPlaylistSongsHasMore(previousView.snapshot.playlistSongsHasMore);
+    setPlaylistSongsTotal(previousView.snapshot.playlistSongsTotal);
+    setPlaylistSearchInput(previousView.snapshot.playlistSearchInput);
+    setPlaylistSearchKeyword(previousView.snapshot.playlistSearchKeyword);
+    setCloudMeta(previousView.snapshot.cloudMeta);
+    setQualitySelections(previousView.snapshot.qualitySelections);
+    setQualitySelectionTouched(previousView.snapshot.qualitySelectionTouched);
+  }
+
+  function openSearchPage() {
+    setQuery("");
+    setResults([]);
+    setActivePlaylist(null);
+    setActiveArtist(null);
+    setActiveAlbum(null);
+    setResultSource("search");
+    navigateTo("search");
+    setMessage("输入关键词开始搜索。");
+  }
+
+  function addSearchHistory(keyword: string) {
+    setSearchHistory((current) => {
+      const nextHistory = [keyword, ...current.filter((item) => item !== keyword)].slice(0, 10);
+      window.localStorage.setItem(SEARCH_HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
+      void saveSearchHistory(nextHistory);
+      return nextHistory;
+    });
+  }
+
+  function removeSearchHistory(keyword: string) {
+    setSearchHistory((current) => {
+      const nextHistory = current.filter((item) => item !== keyword);
+      window.localStorage.setItem(SEARCH_HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
+      void removeSearchHistoryRemote(keyword).catch(() => {
+        void saveSearchHistory(nextHistory);
+      });
+      return nextHistory;
+    });
+  }
+
+  function getSongArtists(song: Song): SongArtist[] {
+    if (Array.isArray(song.artists) && song.artists.length > 0) {
+      return song.artists
+        .map((artist) => ({
+          id: artist.id?.trim() || undefined,
+          name: artist.name.trim()
+        }))
+        .filter((artist) => artist.name);
+    }
+
+    return song.artist
+      .split("/")
+      .map((name) => name.trim())
+      .filter(Boolean)
+      .map((name, index) => ({
+        id: index === 0 ? song.primaryArtistId?.trim() || undefined : undefined,
+        name
+      }));
+  }
+
+  async function runSearch(nextQuery: string) {
+    const trimmed = nextQuery.trim();
+    if (!trimmed) {
+      setResults([]);
+      return;
+    }
+
+    navigateTo("search");
+    setActivePlaylist(null);
+    setActiveArtist(null);
+    setActiveAlbum(null);
+    setResultSource("search");
+    setResults([]);
+    const requestId = searchRequestIdRef.current + 1;
+    searchRequestIdRef.current = requestId;
+    setSearching(true);
+    setMessage(`正在搜索 “${trimmed}”`);
+
+    try {
+      const data = await searchSongs(trimmed);
+      if (requestId !== searchRequestIdRef.current) {
+        return;
+      }
+
+      addSearchHistory(trimmed);
+      setResults(data);
+      setPlayQueue(data);
+      setResultSource("search");
+      applyQualityDefaults(data);
+      setCurrentTrack((current) => current ?? data[0] ?? null);
+      setMessage(`共找到 ${data.length} 首歌曲`);
+    } catch (error) {
+      if (requestId !== searchRequestIdRef.current) {
+        return;
+      }
+      setMessage(error instanceof Error ? error.message : "搜索失败");
+    } finally {
+      if (requestId === searchRequestIdRef.current) {
+        setSearching(false);
+      }
+    }
+  }
+
+  async function loadDiscoverSongs(options: { keepExisting?: boolean } = {}) {
+    const requestId = listRequestIdRef.current + 1;
+    listRequestIdRef.current = requestId;
+    const shouldKeepCurrentResults =
+      options.keepExisting || (mainTab === "search" && navKey === "discover" && resultSource === "discover");
+    navigateTo("discover");
+    setActivePlaylist(null);
+    setActiveArtist(null);
+    setActiveAlbum(null);
+    setResultSource("discover");
+    if (!shouldKeepCurrentResults) {
+      setResults([]);
+    }
+    setLoadingDiscoverSongs(true);
+    setMessage("正在加载发现音乐");
+
+    try {
+      const songs = await getDiscoverSongs();
+      if (requestId !== listRequestIdRef.current) {
+        return;
+      }
+
+      setResults(songs);
+      setPlayQueue(songs);
+      setResultSource("discover");
+      applyQualityDefaults(songs);
+      saveCachedDiscoverSongs(songs);
+      setMessage(`发现音乐 · 共 ${songs.length} 首推荐新歌`);
+    } catch (error) {
+      if (requestId !== listRequestIdRef.current) {
+        return;
+      }
+      setMessage(error instanceof Error ? error.message : "获取发现音乐失败");
+    } finally {
+      setLoadingDiscoverSongs(false);
+    }
+  }
+
+  async function refreshTasks() {
+    try {
+      setTasks(await getTasks());
+    } catch {
+      // Keep current queue if refresh fails.
+    }
+  }
+
+  async function loadUserPlaylists() {
+    const cookieOk = await ensureNeteaseCookieHealthy();
+    if (!cookieOk) {
+      setPlaylists([]);
+      return;
+    }
+
+    setLoadingPlaylists(true);
+    setMessage("正在读取网易云歌单");
+
+    try {
+      const data = await getPlaylists();
+      setPlaylists(data);
+      setMessage(`共读取 ${data.length} 个歌单`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "获取歌单失败");
+    } finally {
+      setLoadingPlaylists(false);
+    }
+  }
+
+  async function loadPlaylistSongs(playlist: UserPlaylist, page = 1, keywordOverride = playlistSearchKeyword) {
+    const cookieOk = await ensureNeteaseCookieHealthy();
+    if (!cookieOk) {
+      return;
+    }
+
+    const normalizedKeyword = keywordOverride.trim();
+    setLoadingPlaylistSongs(true);
+    setActivePlaylist(playlist);
+    setActiveArtist(null);
+    setActiveAlbum(null);
+    setSelectedPlaylistId(playlist.id);
+    setMessage(
+      normalizedKeyword
+        ? `正在筛选歌单：${playlist.name} · “${normalizedKeyword}” · 第 ${page} 页`
+        : `正在读取歌单：${playlist.name} · 第 ${page} 页`
+    );
+
+    try {
+      const pageData = await getPlaylistSongs(playlist.id, page, PLAYLIST_SONGS_PAGE_SIZE, normalizedKeyword);
+      setResults(pageData.songs);
+      setPlayQueue(pageData.songs);
+      setResultSource("playlist");
+      applyQualityDefaults(pageData.songs);
+      setPlaylistSongsPage(pageData.page);
+      setPlaylistSongsLimit(pageData.limit);
+      setPlaylistSongsHasMore(pageData.hasMore);
+      setPlaylistSongsTotal(pageData.total);
+      setPlaylistSearchKeyword(pageData.keyword ?? normalizedKeyword);
+      setPlaylistSearchInput(pageData.keyword ?? normalizedKeyword);
+      navigateTo("discover");
+      const totalPages = Math.max(1, Math.ceil((pageData.total || playlist.trackCount) / pageData.limit));
+      setMessage(
+        pageData.keyword
+          ? `${playlist.name} · 筛选 “${pageData.keyword}” · 第 ${pageData.page} / ${totalPages} 页 · 当前 ${pageData.songs.length} 首 / 匹配 ${pageData.total} 首`
+          : `${playlist.name} · 第 ${pageData.page} / ${Math.max(1, Math.ceil(playlist.trackCount / pageData.limit))} 页 · 当前 ${pageData.songs.length} 首 / 共 ${playlist.trackCount} 首`
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "获取歌单歌曲失败");
+    } finally {
+      setLoadingPlaylistSongs(false);
+    }
+  }
+
+  async function loadArtistPage(artistId: string, fallbackName?: string) {
+    const trimmedArtistId = artistId.trim();
+    if (!trimmedArtistId) {
+      setMessage("当前歌曲没有可跳转的歌手信息。");
+      return;
+    }
+
+    setLoadingArtist(true);
+    setActiveArtist(null);
+    setActivePlaylist(null);
+    setActiveAlbum(null);
+    setSelectedPlaylistId(null);
+    setResults([]);
+    setPlayQueue([]);
+    setResultSource("artist");
+    navigateTo("artist");
+    setMessage(`正在读取歌手：${fallbackName ?? "歌手详情"}`);
+
+    try {
+      const artist = await getArtistProfile(trimmedArtistId);
+      setActiveArtist(artist);
+      setResults(artist.topSongs);
+      setPlayQueue(artist.topSongs);
+      setResultSource("artist");
+      applyQualityDefaults(artist.topSongs);
+      navigateTo("artist");
+      setMessage(`${artist.name} · 热门歌曲 ${artist.topSongs.length} 首`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "获取歌手信息失败");
+    } finally {
+      setLoadingArtist(false);
+    }
+  }
+
+  async function handleOpenArtist(song: Song, artistTarget?: SongArtist) {
+    try {
+      const targetName = artistTarget?.name?.trim() || getSongArtists(song)[0]?.name || song.artist;
+      const targetId = artistTarget?.id?.trim() || song.primaryArtistId?.trim();
+      setMessage(`正在读取歌手：${targetName}`);
+      if (targetId) {
+        await loadArtistPage(targetId, targetName);
+        return;
+      }
+
+      const resolvedArtist = await resolveArtistByName(targetName);
+      await loadArtistPage(resolvedArtist.id, resolvedArtist.name);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "获取歌手信息失败");
+    }
+  }
+
+  async function loadAlbumPage(albumId: string, fallbackName?: string) {
+    const trimmedAlbumId = albumId.trim();
+    if (!trimmedAlbumId) {
+      setMessage("当前歌曲没有可跳转的专辑信息。");
+      return;
+    }
+
+    setActiveAlbum(null);
+    setActiveArtist(null);
+    setActivePlaylist(null);
+    setSelectedPlaylistId(null);
+    setResults([]);
+    setPlayQueue([]);
+    setResultSource("album");
+    navigateTo("album");
+    setMessage(`正在读取专辑：${fallbackName ?? "专辑详情"}`);
+
+    try {
+      const album = await getAlbumProfile(trimmedAlbumId);
+      setActiveAlbum(album);
+      setResults(album.songs);
+      setPlayQueue(album.songs);
+      setResultSource("album");
+      applyQualityDefaults(album.songs);
+      navigateTo("album");
+      setMessage(`${album.name} · 共 ${album.songs.length} 首歌曲`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "获取专辑信息失败");
+    }
+  }
+
+  async function handleOpenAlbum(song: Song) {
+    if (!song.albumId?.trim()) {
+      setMessage("当前歌曲没有可跳转的专辑信息。");
+      return;
+    }
+
+    await loadAlbumPage(song.albumId, song.album);
+  }
+
+  async function loadCloudSongs() {
+    const cookieOk = await ensureNeteaseCookieHealthy();
+    if (!cookieOk) {
+      return;
+    }
+
+    const requestId = listRequestIdRef.current + 1;
+    listRequestIdRef.current = requestId;
+    const shouldKeepCurrentResults = mainTab === "search" && navKey === "cloud" && resultSource === "cloud";
+    navigateTo("cloud");
+    setActivePlaylist(null);
+    setActiveArtist(null);
+    setActiveAlbum(null);
+    setResultSource("cloud");
+    if (!shouldKeepCurrentResults) {
+      setResults([]);
+    }
+    setLoadingCloudSongs(true);
+    setMessage("正在读取网易云音乐云盘");
+
+    try {
+      const data = await getCloudSongs();
+      if (requestId !== listRequestIdRef.current) {
+        return;
+      }
+
+      setResults(data.songs);
+      setPlayQueue(data.songs);
+      setResultSource("cloud");
+      setCloudMeta({ count: data.count, size: data.size, maxSize: data.maxSize });
+      applyQualityDefaults(data.songs);
+      setMessage(`云盘音乐 · 共 ${data.count} 首歌`);
+    } catch (error) {
+      if (requestId !== listRequestIdRef.current) {
+        return;
+      }
+      setMessage(error instanceof Error ? error.message : "获取云盘音乐失败");
+    } finally {
+      setLoadingCloudSongs(false);
+    }
+  }
+
+  async function loadDailySongs() {
+    const cookieOk = await ensureNeteaseCookieHealthy();
+    if (!cookieOk) {
+      return;
+    }
+
+    const requestId = listRequestIdRef.current + 1;
+    listRequestIdRef.current = requestId;
+    const shouldKeepCurrentResults = mainTab === "search" && navKey === "daily" && resultSource === "daily";
+    navigateTo("daily");
+    setActivePlaylist(null);
+    setActiveArtist(null);
+    setActiveAlbum(null);
+    setResultSource("daily");
+    if (!shouldKeepCurrentResults) {
+      setResults([]);
+    }
+    setLoadingDailySongs(true);
+    setMessage("正在读取网易云每日推荐");
+
+    try {
+      const songs = await getDailyRecommendSongs();
+      if (requestId !== listRequestIdRef.current) {
+        return;
+      }
+
+      setResults(songs);
+      setPlayQueue(songs);
+      setResultSource("daily");
+      applyQualityDefaults(songs);
+      setMessage(`每日推荐 · 共 ${songs.length} 首歌`);
+    } catch (error) {
+      if (requestId !== listRequestIdRef.current) {
+        return;
+      }
+      setMessage(error instanceof Error ? error.message : "获取每日推荐失败");
+    } finally {
+      setLoadingDailySongs(false);
+    }
+  }
+
+  async function refreshSettings() {
+    try {
+      const nextSettings = await getSettings();
+      setSettings(nextSettings);
+      return nextSettings;
+    } catch {
+      // Keep current settings if fetch fails.
+      return null;
+    }
+  }
+
+  async function refreshAdminConfig() {
+    try {
+      const nextConfig = await getAdminConfigRemote();
+      setAdminConfig(nextConfig);
+      setAdminConfigTokenInput("");
+      return nextConfig;
+    } catch {
+      return null;
+    }
+  }
+
+  async function refreshSession() {
+    try {
+      setSession(await getSession());
+    } catch {
+      // Keep current session if fetch fails.
+    }
+  }
+
+  async function ensureNeteaseCookieHealthy(options: { force?: boolean; silent?: boolean; cookieOverride?: string } = {}) {
+    const cookie = (options.cookieOverride ?? settings.neteaseCookie).trim();
+
+    if (!cookie) {
+      if (!options.silent) {
+        setMessage("当前操作需要有效的网易云 Cookie，请先登录或重新扫码。");
+      }
+      return false;
+    }
+
+    const cachedHealth = cookieHealthRef.current;
+    const isFreshCache =
+      !options.force &&
+      cachedHealth.cookie === cookie &&
+      cachedHealth.result !== null &&
+      Date.now() - cachedHealth.checkedAt < 60 * 1000;
+
+    if (isFreshCache) {
+      if (!cachedHealth.result?.ok && !options.silent) {
+        setMessage(cachedHealth.result?.message || "网易云 Cookie 已失效，请重新登录。");
+      }
+      return Boolean(cachedHealth.result?.ok);
+    }
+
+    try {
+      const result = await checkNeteaseCookie(cookie);
+      cookieHealthRef.current = {
+        cookie,
+        checkedAt: Date.now(),
+        result
+      };
+
+      if (!result.ok && !options.silent) {
+        setMessage(result.message || "网易云 Cookie 已失效，请重新登录。");
+      }
+
+      return result.ok;
+    } catch (error) {
+      if (!options.silent) {
+        setMessage(error instanceof Error ? error.message : "Cookie 检测失败");
+      }
+      return false;
+    }
+  }
+
+  function syncAudioForSong(song: Song, autoplay: boolean) {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    const nextUrl = getStreamUrl(song.id, getSelectedLevel(song), parseDurationSeconds(song.duration));
+    const currentUrl = audio.dataset.streamUrl ?? "";
+    const shouldReload = currentUrl !== nextUrl;
+
+    setCurrentTrack(song);
+    addToPlayHistory(song);
+    setPlayerError("");
+
+    if (shouldReload) {
+      audio.pause();
+      audio.src = nextUrl;
+      audio.dataset.streamUrl = nextUrl;
+      audio.load();
+      setPlaybackSeconds(0);
+      setPlaybackDuration(parseDurationSeconds(song.duration));
+    }
+
+    if (!autoplay) {
+      return;
+    }
+
+    void audio.play().catch(() => {
+      setIsPlaying(false);
+      setPlayerError("当前歌曲暂时无法预览，可能需要更完整的 Cookie 或该音源不支持在线播放。");
+    });
+  }
+
+  function handlePreview(song: Song) {
+    syncAudioForSong(song, true);
+  }
+
+  function handleSelectSong(song: Song) {
+    setMessage(`已选中：${song.title}。双击歌曲或点击试听开始播放。`);
+  }
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    await runSearch(query);
+  }
+
+  async function handleDownload(song: Song) {
+    if (!accountIsLoggedIn) {
+      setMessage("下载需要先登录账号，已为你打开登录窗口。");
+      await handleStartQrLogin();
+      return;
+    }
+
+    try {
+      const level = getDownloadLevel(song);
+      const selected = song.availableQualities.find((item) => item.level === level);
+      await createDownload(song, level);
+      navigateTo("downloads");
+      setMessage(`已加入下载：${song.title} · ${selected?.label ?? "128K"}`);
+      await refreshTasks();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "加入下载失败");
+    }
+  }
+
+  async function handleBatchDownload(songs: Song[], scopeLabel: string) {
+    if (batchDownloading || songs.length === 0) {
+      if (songs.length === 0) {
+        setMessage("当前没有可批量下载的歌曲。");
+      }
+      return;
+    }
+
+    if (!accountIsLoggedIn) {
+      setMessage("批量下载需要先登录账号，已为你打开登录窗口。");
+      await handleStartQrLogin();
+      return;
+    }
+
+    setBatchDownloading(true);
+    setMessage(`正在加入${scopeLabel}...`);
+
+    let successCount = 0;
+    let failedCount = 0;
+    let firstFailureMessage = "";
+
+    try {
+      for (const song of songs) {
+        try {
+          await createDownload(song, getDownloadLevel(song));
+          successCount += 1;
+        } catch (error) {
+          failedCount += 1;
+          if (!firstFailureMessage) {
+            firstFailureMessage = error instanceof Error ? error.message : "加入下载失败";
+          }
+        }
+      }
+
+      if (successCount > 0) {
+        navigateTo("downloads");
+        await refreshTasks();
+      }
+
+      if (successCount > 0 && failedCount === 0) {
+        setMessage(`已将 ${scopeLabel}的 ${successCount} 首歌曲加入下载队列。`);
+      } else if (successCount > 0) {
+        setMessage(`已加入 ${successCount} 首，失败 ${failedCount} 首。${firstFailureMessage}`);
+      } else {
+        setMessage(firstFailureMessage || "批量加入下载失败");
+      }
+    } finally {
+      setBatchDownloading(false);
+    }
+  }
+
+  function handleToggleSongSelection(songId: string) {
+    setSelectedSongIds((current) => (current.includes(songId) ? current.filter((id) => id !== songId) : [...current, songId]));
+  }
+
+  function handleToggleVisibleSongsSelection() {
+    setSelectedSongIds((current) => {
+      if (allVisibleSelected) {
+        return current.filter((id) => !visibleSongs.some((song) => song.id === id));
+      }
+
+      const nextIds = new Set(current);
+      visibleSongs.forEach((song) => nextIds.add(song.id));
+      return [...nextIds];
+    });
+  }
+
+  async function handleSaveAdminConfig(event: FormEvent) {
+    event.preventDefault();
+    setSavingAdminConfig(true);
+
+    const payload: AdminConfigUpdate = {
+      trustedUserWhitelistText: adminConfig.trustedUserWhitelistText,
+      systemDefaultToken: adminConfigTokenInput,
+      systemFallbackEnabled: adminConfig.systemFallbackEnabled
+    };
+
+    try {
+      const saved = await saveAdminConfigRemote(payload);
+      setAdminConfig(saved);
+      setAdminConfigTokenInput("");
+      setMessage("高级控制配置已保存");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "保存高级控制配置失败");
+    } finally {
+      setSavingAdminConfig(false);
+    }
+  }
+
+  async function handleSaveSettings(event: FormEvent) {
+    event.preventDefault();
+    setSavingSettings(true);
+
+    try {
+      const saved = await saveSettings(settings);
+      setSettings(saved);
+      setMessage("设置已保存");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "保存设置失败");
+    } finally {
+      setSavingSettings(false);
+    }
+  }
+
+  async function handleLogin(event: FormEvent) {
+    event.preventDefault();
+    setLoggingIn(true);
+
+    try {
+      const nextSession = await loginAccount(loginForm);
+      setSession(nextSession);
+      if (nextSession.profile) {
+        setSettings((current) => ({
+          ...current,
+          accountName: nextSession.profile.displayName,
+          vipEnabled: nextSession.profile.vipEnabled
+        }));
+      }
+      setMessage("本地会话已更新");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "登录失败");
+    } finally {
+      setLoggingIn(false);
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      setSession(await logoutAccount());
+      setAccountMenuOpen(false);
+      setMessage("已退出当前账号");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "退出失败");
+    }
+  }
+
+  async function handleClearCookie() {
+    const nextSettings = {
+      ...settings,
+      neteaseCookie: ""
+    };
+
+    try {
+      setSettings(await saveSettings(nextSettings));
+      setSession(await logoutAccount());
+      setPlaylists([]);
+      setAccountMenuOpen(false);
+      setMessage("已清除网易云 Cookie，可在设置页重新填写。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "清除 Cookie 失败");
+    }
+  }
+
+  async function startQrLoginFlow(options: { autoRefresh?: boolean } = {}) {
+    setStartingQrLogin(true);
+    setQrLoginOpen(true);
+    setNeteaseLoginMode(window.innerWidth <= 768 ? "cellphone" : "qr");
+    setQrLoginKey("");
+    setQrLoginImage("");
+    setQrLoginMessage(
+      window.innerWidth <= 768
+        ? CELLPHONE_LOGIN_DEFAULT_MESSAGE
+        : options.autoRefresh
+          ? "二维码已刷新，正在重新生成..."
+          : "正在生成网易云登录二维码..."
+    );
+    qrCheckFailureCountRef.current = 0;
+    qrAutoRefreshPendingRef.current = false;
+    setAccountMenuOpen(false);
+
+    try {
+      const data = await startNeteaseQrLogin();
+      qrAutoRefreshCountRef.current = options.autoRefresh ? qrAutoRefreshCountRef.current + 1 : 0;
+      setQrLoginKey(data.key);
+      setQrLoginImage(data.qrImage);
+      setQrLoginExpiresIn(300);
+      setQrLoginMessage("打开网易云音乐 App，扫码后在手机上确认登录。");
+    } catch (error) {
+      const failureMessage = error instanceof Error ? error.message : "二维码登录初始化失败";
+      setQrLoginMessage(options.autoRefresh ? `自动刷新失败：${failureMessage}` : failureMessage);
+    } finally {
+      setStartingQrLogin(false);
+    }
+  }
+
+  async function handleStartQrLogin() {
+    await startQrLoginFlow();
+  }
+
+  async function handleNeteaseLoginSuccess(nextSession?: AuthSession | null, successMessage = "网易云登录成功，Cookie 已自动写入设置。") {
+    if (nextSession) {
+      setSession(nextSession);
+    } else {
+      await refreshSession();
+    }
+
+    await refreshSettings();
+    cookieHealthRef.current = {
+      cookie: "",
+      checkedAt: 0,
+      result: null
+    };
+    setMessage(successMessage);
+  }
+
+  async function handleSendCaptcha() {
+    if (sendingCaptcha) {
+      return;
+    }
+
+    try {
+      setSendingCaptcha(true);
+      const result = await sendNeteaseCaptcha(cellphoneLoginForm.phone, cellphoneLoginForm.countryCode);
+      setQrLoginMessage(result.message);
+    } catch (error) {
+      setQrLoginMessage(error instanceof Error ? error.message : "验证码发送失败");
+    } finally {
+      setSendingCaptcha(false);
+    }
+  }
+
+  async function handleCellphoneLoginSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (loggingCellphoneIn) {
+      return;
+    }
+
+    try {
+      setLoggingCellphoneIn(true);
+      const result = await loginWithNeteaseCellphone(
+        cellphoneLoginForm.phone,
+        cellphoneLoginForm.captcha,
+        cellphoneLoginForm.countryCode
+      );
+      setQrLoginMessage(result.message);
+
+      if (result.code === 200) {
+        await handleNeteaseLoginSuccess(result.session, "网易云验证码登录成功，Cookie 已自动写入设置。");
+        closeQrLogin();
+      }
+    } catch (error) {
+      setQrLoginMessage(error instanceof Error ? error.message : "手机号登录失败");
+    } finally {
+      setLoggingCellphoneIn(false);
+    }
+  }
+
+  function closeQrLogin() {
+    if (qrCloseTimerRef.current) {
+      window.clearTimeout(qrCloseTimerRef.current);
+      qrCloseTimerRef.current = null;
+    }
+
+    qrCheckFailureCountRef.current = 0;
+    qrAutoRefreshPendingRef.current = false;
+    qrAutoRefreshCountRef.current = 0;
+    setQrLoginOpen(false);
+    setQrLoginKey("");
+    setQrLoginImage("");
+    setQrLoginMessage(QR_LOGIN_DEFAULT_MESSAGE);
+    setQrLoginExpiresIn(0);
+    setNeteaseLoginMode("qr");
+  }
+
+  function handleSwitchNeteaseLoginMode(mode: NeteaseLoginMode) {
+    setNeteaseLoginMode(mode);
+    setQrLoginMessage(
+      mode === "qr"
+        ? qrLoginKey && qrLoginImage
+          ? "打开网易云音乐 App，扫码后在手机上确认登录。"
+          : QR_LOGIN_DEFAULT_MESSAGE
+        : CELLPHONE_LOGIN_DEFAULT_MESSAGE
+    );
+  }
+
+  function handleTogglePlayback() {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    if (!currentTrack) {
+      const fallbackSong = results[0];
+      if (fallbackSong) {
+        syncAudioForSong(fallbackSong, true);
+      }
+      return;
+    }
+
+      const nextUrl = getStreamUrl(currentTrack.id, getSelectedLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
+    const hasSource = audio.dataset.streamUrl === nextUrl;
+
+    if (!hasSource) {
+      syncAudioForSong(currentTrack, true);
+      return;
+    }
+
+    if (audio.paused) {
+      void audio.play().catch(() => {
+        setIsPlaying(false);
+        setPlayerError("播放启动失败，请重新点一次播放。");
+      });
+      return;
+    }
+
+    audio.pause();
+  }
+
+  function handleReplay() {
+    const audio = audioRef.current;
+    if (!audio || !currentTrack) {
+      return;
+    }
+
+    if (!audio.dataset.streamUrl) {
+      syncAudioForSong(currentTrack, true);
+      return;
+    }
+
+    audio.currentTime = 0;
+    setPlaybackSeconds(0);
+    void audio.play().catch(() => {
+      setIsPlaying(false);
+      setPlayerError("重播失败，请重新尝试。");
+    });
+  }
+
+  async function handleToggleCurrentTrackLike() {
+    if (!currentTrack || togglingLike) {
+      return;
+    }
+
+    const cookieOk = await ensureNeteaseCookieHealthy();
+    if (!cookieOk) {
+      return;
+    }
+
+    const alreadyLiked = likedSongIds.includes(currentTrack.id);
+    setTogglingLike(true);
+
+    try {
+      const liked = await setSongLiked(currentTrack.id, !alreadyLiked);
+      setLikedSongIds((current) =>
+        liked ? Array.from(new Set([currentTrack.id, ...current])) : current.filter((id) => id !== currentTrack.id)
+      );
+      setMessage(liked ? `已喜欢：${currentTrack.title}` : `已取消喜欢：${currentTrack.title}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : alreadyLiked ? "取消喜欢失败" : "加入喜欢失败");
+    } finally {
+      setTogglingLike(false);
+    }
+  }
+
+  function getActivePlaybackQueue() {
+    return playQueue.length > 0 ? playQueue : results;
+  }
+
+  function getNextSongFromQueue(queue: Song[], options: { excludeSongId?: string; mode?: "sequential" | "shuffle" } = {}) {
+    if (queue.length === 0) {
+      return null;
+    }
+
+    if (options.mode === "shuffle") {
+      const candidates = options.excludeSongId ? queue.filter((song) => song.id !== options.excludeSongId) : queue;
+      const nextPool = candidates.length > 0 ? candidates : queue;
+      return nextPool[Math.floor(Math.random() * nextPool.length)] ?? null;
+    }
+
+    const currentIndex = queue.findIndex((song) => song.id === options.excludeSongId);
+    return currentIndex >= 0 && currentIndex < queue.length - 1 ? queue[currentIndex + 1] : queue[0];
+  }
+
+  function handleTogglePlaybackMode() {
+    setPlaybackMode((current) => {
+      const nextMode = current === "shuffle" ? "sequential" : "shuffle";
+      setMessage(nextMode === "shuffle" ? "已切换到随机播放" : "已切换到顺序播放");
+      return nextMode;
+    });
+  }
+
+  function handleNextTrack() {
+    const queue = getActivePlaybackQueue();
+    if (queue.length === 0) {
+      return;
+    }
+
+    const nextSong = getNextSongFromQueue(queue, {
+      excludeSongId: currentTrack?.id,
+      mode: playbackMode
+    });
+    if (nextSong) {
+      syncAudioForSong(nextSong, true);
+    }
+  }
+
+  function handleRemoveFromQueue(songId: string) {
+    setPlayQueue((current) => {
+      const nextQueue = current.filter((song) => song.id !== songId);
+      if (currentTrack?.id === songId) {
+        const nextSong = getNextSongFromQueue(nextQueue, {
+          mode: playbackMode
+        });
+        if (nextSong) {
+          window.setTimeout(() => syncAudioForSong(nextSong, true), 0);
+        } else {
+          audioRef.current?.pause();
+          setCurrentTrack(null);
+          setPlaybackSeconds(0);
+          setPlaybackDuration(0);
+        }
+      }
+
+      return nextQueue;
+    });
+  }
+
+  function handlePlaylistPageChange(nextPage: number) {
+    if (!activePlaylist || loadingPlaylistSongs) {
+      return;
+    }
+
+    const totalSongs = playlistSearchKeyword ? playlistSongsTotal : activePlaylist.trackCount;
+    const totalPages = Math.max(1, Math.ceil(totalSongs / playlistSongsLimit));
+    const safePage = Math.min(totalPages, Math.max(1, nextPage));
+
+    if (safePage === playlistSongsPage) {
+      return;
+    }
+
+    void loadPlaylistSongs(activePlaylist, safePage, playlistSearchKeyword);
+  }
+
+  function handlePlaylistSearchSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!activePlaylist || loadingPlaylistSongs) {
+      return;
+    }
+
+    void loadPlaylistSongs(activePlaylist, 1, playlistSearchInput);
+  }
+
+  function handleClearPlaylistSearch() {
+    if (!activePlaylist || loadingPlaylistSongs) {
+      return;
+    }
+
+    setPlaylistSearchInput("");
+    setPlaylistSearchKeyword("");
+    void loadPlaylistSongs(activePlaylist, 1, "");
+  }
+
+  function markLyricsManualScroll() {
+    lyricManualScrollUntilRef.current = Date.now() + 3500;
+  }
+
+  function scrollLyricIntoPanel(panel: HTMLDivElement | null, lyricButton: HTMLButtonElement | null, behavior: ScrollBehavior = "smooth") {
+    if (!panel || !lyricButton) {
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      const panelRect = panel.getBoundingClientRect();
+      const lyricRect = lyricButton.getBoundingClientRect();
+      const lyricCenterOffset = lyricRect.top - panelRect.top + lyricRect.height / 2;
+      const targetTop = panel.scrollTop + lyricCenterOffset - panel.clientHeight / 2;
+      panel.scrollTo({ top: Math.max(0, targetTop), behavior });
+    });
+  }
+
+  function handleSeekToLyric(time: number) {
+    const audio = audioRef.current;
+    if (!audio || !currentTrack) {
+      return;
+    }
+
+    const shouldContinuePlaying = isPlaying || !audio.paused;
+    const nextUrl = getStreamUrl(currentTrack.id, getSelectedLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
+
+    const seek = () => {
+      audio.currentTime = time;
+      setPlaybackSeconds(time);
+      lyricManualScrollUntilRef.current = 0;
+      scrollLyricIntoPanel(lyricPanelRef.current, activeLyricRef.current);
+      scrollLyricIntoPanel(modalLyricPanelRef.current, activeModalLyricRef.current);
+
+      if (shouldContinuePlaying) {
+        void audio.play().catch(() => {
+          setIsPlaying(false);
+          setPlayerError("跳转歌词位置后播放失败，请重新点播放。");
+        });
+      }
+    };
+
+    if (audio.dataset.streamUrl !== nextUrl) {
+      audio.addEventListener("loadedmetadata", seek, { once: true });
+      syncAudioForSong(currentTrack, false);
+      return;
+    }
+
+    seek();
+  }
+
+  useEffect(() => {
+    const cachedDiscoverSongs = loadCachedDiscoverSongs();
+
+    if (cachedDiscoverSongs.length > 0) {
+      setResults(cachedDiscoverSongs);
+      setPlayQueue(cachedDiscoverSongs);
+      setResultSource("discover");
+      applyQualityDefaults(cachedDiscoverSongs);
+      setMessage(`已先加载缓存推荐 · ${cachedDiscoverSongs.length} 首，正在后台刷新`);
+    }
+
+    void loadDiscoverSongs({ keepExisting: cachedDiscoverSongs.length > 0 });
+  }, []);
+
+  useEffect(() => {
+    function handleWindowClick() {
+      setOpenQualityMenuId(null);
+      setAccountMenuOpen(false);
+    }
+
+    window.addEventListener("click", handleWindowClick);
+    return () => window.removeEventListener("click", handleWindowClick);
+  }, []);
+
+  useEffect(() => {
+    void refreshSettings().then((nextSettings) => {
+      const cookie = nextSettings?.neteaseCookie.trim();
+      if (cookie) {
+        void ensureNeteaseCookieHealthy({ silent: true, force: true, cookieOverride: cookie });
+      }
+    });
+    void refreshAdminConfig();
+    void refreshSession();
+    void refreshTasks();
+    const timer = window.setInterval(() => {
+      void refreshTasks();
+    }, 1200);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncHistoriesFromDatabase = async () => {
+      try {
+        const [remoteSearchHistory, remotePlayHistory] = await Promise.all([
+          getSearchHistory(),
+          getPlayHistory()
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        if (remoteSearchHistory.length > 0) {
+          setSearchHistory(remoteSearchHistory);
+          window.localStorage.setItem(SEARCH_HISTORY_STORAGE_KEY, JSON.stringify(remoteSearchHistory));
+        } else {
+          const localSearchHistory = loadSearchHistory();
+          if (localSearchHistory.length > 0) {
+            setSearchHistory(localSearchHistory);
+            void saveSearchHistory(localSearchHistory);
+          }
+        }
+
+        if (remotePlayHistory.length > 0) {
+          setPlayHistory(remotePlayHistory);
+          window.localStorage.setItem(PLAY_HISTORY_STORAGE_KEY, JSON.stringify(remotePlayHistory));
+        } else {
+          const localPlayHistory = loadPlayHistory();
+          if (localPlayHistory.length > 0) {
+            setPlayHistory(localPlayHistory);
+            void savePlayHistory(localPlayHistory);
+          }
+        }
+      } catch {
+        // Keep local fallback data if database sync fails.
+      }
+    };
+
+    void syncHistoriesFromDatabase();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session.profile?.id, session.profile?.provider]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncCurrentTrackLiked = async () => {
+      if (!currentTrack?.id || !settings.neteaseCookie.trim()) {
+        if (!cancelled) {
+          setLikedSongIds((current) => current.filter((id) => id !== currentTrack?.id));
+        }
+        return;
+      }
+
+      try {
+        const liked = await getSongLiked(currentTrack.id);
+        if (cancelled) {
+          return;
+        }
+
+        setLikedSongIds((current) =>
+          liked ? Array.from(new Set([currentTrack.id, ...current])) : current.filter((id) => id !== currentTrack.id)
+        );
+      } catch {
+        // Keep current like state if remote check fails.
+      }
+    };
+
+    void syncCurrentTrackLiked();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTrack?.id, settings.neteaseCookie]);
+
+  useEffect(() => {
+    let cancelled = false;
+    playerStateHydratedRef.current = false;
+    setPlayerStateReady(false);
+
+    const syncPlayerStateFromDatabase = async () => {
+      try {
+        const remotePlayerState = await getPlayerStateRemote();
+        if (cancelled) {
+          return;
+        }
+
+        if (hasPersistedPlayerState(remotePlayerState)) {
+          restorePlaybackSecondsRef.current = remotePlayerState.playbackSeconds;
+          setCurrentTrack(remotePlayerState.currentTrack);
+          setPlayQueue(remotePlayerState.playQueue);
+          setPlaybackSeconds(remotePlayerState.playbackSeconds);
+          setVolume(remotePlayerState.volume);
+          setPlaybackMode(remotePlayerState.playbackMode === "shuffle" ? "shuffle" : "sequential");
+          savePlayerStateLocal(remotePlayerState);
+        } else {
+          const localPlayerState = loadPlayerState();
+          if (hasPersistedPlayerState(localPlayerState)) {
+            restorePlaybackSecondsRef.current = localPlayerState.playbackSeconds;
+            void savePlayerStateRemote(localPlayerState);
+          }
+        }
+      } catch {
+        // Keep local fallback player state when database sync fails.
+      } finally {
+        if (!cancelled) {
+          playerStateHydratedRef.current = true;
+          setPlayerStateReady(true);
+        }
+      }
+    };
+
+    void syncPlayerStateFromDatabase();
+
+    return () => {
+      cancelled = true;
+      playerStateHydratedRef.current = false;
+      setPlayerStateReady(false);
+    };
+  }, [session.profile?.id, session.profile?.provider]);
+
+  useEffect(() => {
+    if (navKey === "playlists" && playlists.length === 0 && !loadingPlaylists) {
+      void loadUserPlaylists();
+    }
+  }, [navKey]);
+
+  useEffect(() => {
+    if (!qrLoginOpen || !qrLoginKey || neteaseLoginMode !== "qr") {
+      return;
+    }
+
+    let cancelled = false;
+    let checking = false;
+
+    const checkLogin = async () => {
+      if (checking || cancelled) {
+        return;
+      }
+
+      checking = true;
+      try {
+        const result = await checkNeteaseQrLogin(qrLoginKey);
+        if (cancelled) {
+          return;
+        }
+
+        qrCheckFailureCountRef.current = 0;
+        setQrLoginMessage(result.message);
+
+        if (result.code === 803) {
+          await handleNeteaseLoginSuccess(result.session, "网易云扫码登录成功，Cookie 已自动写入设置。");
+          qrCloseTimerRef.current = window.setTimeout(() => {
+            if (!cancelled) {
+              closeQrLogin();
+            }
+          }, 650);
+          return;
+        }
+
+        if (result.code === 800 && !qrAutoRefreshPendingRef.current) {
+          qrAutoRefreshPendingRef.current = true;
+          void startQrLoginFlow({ autoRefresh: true });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          qrCheckFailureCountRef.current += 1;
+          const failureMessage = error instanceof Error ? error.message : "二维码状态检查失败";
+
+          if (qrCheckFailureCountRef.current >= 3 && !qrAutoRefreshPendingRef.current) {
+            qrAutoRefreshPendingRef.current = true;
+            setQrLoginMessage(`状态检查连续失败，正在重新生成二维码…`);
+            void startQrLoginFlow({ autoRefresh: true });
+          } else {
+            setQrLoginMessage(`状态检查异常，正在重试… ${failureMessage}`);
+          }
+        }
+      } finally {
+        checking = false;
+      }
+    };
+
+    void checkLogin();
+    const timer = window.setInterval(() => void checkLogin(), 2000);
+
+    return () => {
+      cancelled = true;
+      if (qrCloseTimerRef.current) {
+        window.clearTimeout(qrCloseTimerRef.current);
+        qrCloseTimerRef.current = null;
+      }
+      window.clearInterval(timer);
+    };
+  }, [qrLoginOpen, qrLoginKey, neteaseLoginMode]);
+
+  useEffect(() => {
+    if (!qrLoginOpen || !qrLoginKey || qrLoginExpiresIn <= 0 || neteaseLoginMode !== "qr") {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setQrLoginExpiresIn((current) => {
+        const nextValue = Math.max(0, current - 1);
+        if (nextValue === 0) {
+          if (!qrAutoRefreshPendingRef.current && qrAutoRefreshCountRef.current < 2) {
+            qrAutoRefreshPendingRef.current = true;
+            setQrLoginMessage("二维码已过期，正在自动刷新…");
+            void startQrLoginFlow({ autoRefresh: true });
+          } else {
+            setQrLoginMessage("二维码已过期，请重新生成。");
+            setQrLoginKey("");
+          }
+        }
+
+        return nextValue;
+      });
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [qrLoginOpen, qrLoginKey, qrLoginExpiresIn, neteaseLoginMode]);
+
+  useEffect(() => {
+    if (!currentTrack) {
+      setLyrics([]);
+      setLyricsError("");
+      lastAutoLyricIndexRef.current = -1;
+      lastModalAutoLyricIndexRef.current = -1;
+      return;
+    }
+
+    lastAutoLyricIndexRef.current = -1;
+    lastModalAutoLyricIndexRef.current = -1;
+    let cancelled = false;
+    setLoadingLyrics(true);
+    setLyricsError("");
+
+    getLyrics(currentTrack.id)
+      .then((data) => {
+        if (!cancelled) {
+          setLyrics(data.lines);
+          setLyricsError(data.lines.length > 0 ? "" : "这首歌暂时没有返回可用歌词。");
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setLyrics([]);
+          setLyricsError(error instanceof Error ? error.message : "获取歌词失败");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingLyrics(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTrack?.id]);
+
+  const activeLyricIndex = useMemo(() => {
+    if (lyrics.length === 0) {
+      return -1;
+    }
+
+    let activeIndex = 0;
+    for (let index = 0; index < lyrics.length; index += 1) {
+      if (lyrics[index].time <= playbackSeconds + 0.15) {
+        activeIndex = index;
+      } else {
+        break;
+      }
+    }
+
+    return activeIndex;
+  }, [lyrics, playbackSeconds]);
+
+  useEffect(() => {
+    if (
+      rightPanelTab === "lyrics" &&
+      activeLyricIndex >= 0 &&
+      activeLyricIndex !== lastAutoLyricIndexRef.current &&
+      Date.now() > lyricManualScrollUntilRef.current
+    ) {
+      lastAutoLyricIndexRef.current = activeLyricIndex;
+      scrollLyricIntoPanel(lyricPanelRef.current, activeLyricRef.current);
+    }
+  }, [rightPanelTab, activeLyricIndex, playbackSeconds, lyrics]);
+
+  useEffect(() => {
+    if (
+      isPlayerExpanded &&
+      activeLyricIndex >= 0 &&
+      activeLyricIndex !== lastModalAutoLyricIndexRef.current &&
+      Date.now() > lyricManualScrollUntilRef.current
+    ) {
+      lastModalAutoLyricIndexRef.current = activeLyricIndex;
+      scrollLyricIntoPanel(modalLyricPanelRef.current, activeModalLyricRef.current);
+    }
+  }, [isPlayerExpanded, activeLyricIndex, playbackSeconds, lyrics]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsPlayerExpanded(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (playerStateSyncTimerRef.current) {
+        window.clearTimeout(playerStateSyncTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    audio.volume = volume / 100;
+  }, [volume]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    const handleTimeUpdate = () => {
+      setPlaybackSeconds(audio.currentTime || 0);
+    };
+
+    const handleLoadedMetadata = () => {
+      setPlaybackDuration(Number.isFinite(audio.duration) ? audio.duration : 0);
+    };
+
+    const handlePlay = () => {
+      setIsPlaying(true);
+      setPlayerError("");
+    };
+
+    const handlePause = () => {
+      setIsPlaying(false);
+    };
+
+    const handleEnded = () => {
+      setIsPlaying(false);
+      const queue = getActivePlaybackQueue();
+      const nextSong = getNextSongFromQueue(queue, {
+        excludeSongId: currentTrack?.id,
+        mode: playbackMode
+      });
+
+      if (nextSong) {
+        window.setTimeout(() => syncAudioForSong(nextSong, true), 0);
+      }
+    };
+
+    const handleError = () => {
+      setIsPlaying(false);
+      setPlayerError("当前歌曲没有成功返回可播放音频，请检查 Cookie 或换一个音质再试。");
+    };
+
+    audio.addEventListener("timeupdate", handleTimeUpdate);
+    audio.addEventListener("loadedmetadata", handleLoadedMetadata);
+    audio.addEventListener("play", handlePlay);
+    audio.addEventListener("pause", handlePause);
+    audio.addEventListener("ended", handleEnded);
+    audio.addEventListener("error", handleError);
+
+    return () => {
+      audio.removeEventListener("timeupdate", handleTimeUpdate);
+      audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      audio.removeEventListener("play", handlePlay);
+      audio.removeEventListener("pause", handlePause);
+      audio.removeEventListener("ended", handleEnded);
+      audio.removeEventListener("error", handleError);
+    };
+  }, [currentTrack?.id, playbackMode, playQueue, results]);
+
+  useEffect(() => {
+    const nextPlayerState: PersistedPlayerState = {
+      currentTrack,
+      playQueue,
+      playbackSeconds,
+      volume,
+      playbackMode
+    };
+
+    savePlayerStateLocal(nextPlayerState);
+  }, [currentTrack, playQueue, playbackSeconds, volume, playbackMode]);
+
+  useEffect(() => {
+    if (!playerStateReady || !playerStateHydratedRef.current) {
+      return;
+    }
+
+    const syncedState: PersistedPlayerState = {
+      currentTrack,
+      playQueue,
+      playbackSeconds: Math.floor(Math.max(0, playbackSeconds) / 5) * 5,
+      volume,
+      playbackMode
+    };
+
+    if (playerStateSyncTimerRef.current) {
+      window.clearTimeout(playerStateSyncTimerRef.current);
+    }
+
+    playerStateSyncTimerRef.current = window.setTimeout(() => {
+      void savePlayerStateRemote(syncedState);
+      playerStateSyncTimerRef.current = null;
+    }, 320);
+
+    return () => {
+      if (playerStateSyncTimerRef.current) {
+        window.clearTimeout(playerStateSyncTimerRef.current);
+        playerStateSyncTimerRef.current = null;
+      }
+    };
+  }, [playerStateReady, currentTrack, playQueue, volume, playbackMode, Math.floor(Math.max(0, playbackSeconds) / 5)]);
+
+  useEffect(() => {
+    if (!playerStateReady || !playerStateHydratedRef.current || isPlaying) {
+      return;
+    }
+
+    const exactState: PersistedPlayerState = {
+      currentTrack,
+      playQueue,
+      playbackSeconds,
+      volume,
+      playbackMode
+    };
+
+    void savePlayerStateRemote(exactState);
+  }, [playerStateReady, isPlaying, currentTrack, playQueue, playbackSeconds, volume, playbackMode]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !currentTrack) {
+      return;
+    }
+
+      const nextUrl = getStreamUrl(currentTrack.id, getSelectedLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
+    if (audio.dataset.streamUrl === nextUrl) {
+      return;
+    }
+
+    audio.pause();
+    audio.src = nextUrl;
+    audio.dataset.streamUrl = nextUrl;
+    audio.load();
+    setPlaybackDuration(parseDurationSeconds(currentTrack.duration));
+
+    const restoreTime = restorePlaybackSecondsRef.current;
+    if (restoreTime > 0) {
+      const handleRestoreSeek = () => {
+        const boundedTime = Math.min(restoreTime, Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : restoreTime);
+        audio.currentTime = boundedTime;
+        setPlaybackSeconds(boundedTime);
+        restorePlaybackSecondsRef.current = 0;
+      };
+
+      audio.addEventListener("loadedmetadata", handleRestoreSeek, { once: true });
+    }
+  }, [currentTrack?.id]);
+
+  const activeCount = useMemo(
+    () => tasks.filter((task) => task.status === "queued" || task.status === "downloading" || task.status === "preparing").length,
+    [tasks]
+  );
+  const completedCount = useMemo(() => tasks.filter((task) => task.status === "done").length, [tasks]);
+  const failedCount = useMemo(() => tasks.filter((task) => task.status === "failed").length, [tasks]);
+  const visibleSongs = useMemo(() => {
+    if (resultSource === "playlist" || resultSource === "cloud" || resultSource === "daily" || resultSource === "discover" || resultSource === "artist" || resultSource === "album") {
+      return results;
+    }
+
+    return results.slice(0, 30);
+  }, [results, navKey, resultSource]);
+  const selectedVisibleSongs = useMemo(
+    () => visibleSongs.filter((song) => selectedSongIds.includes(song.id)),
+    [visibleSongs, selectedSongIds]
+  );
+  const allVisibleSelected = visibleSongs.length > 0 && selectedVisibleSongs.length === visibleSongs.length;
+  const createdPlaylists = useMemo(() => playlists.filter((playlist) => playlist.owned), [playlists]);
+  const collectedPlaylists = useMemo(() => playlists.filter((playlist) => !playlist.owned), [playlists]);
+  const playlistTotalPages = useMemo(
+    () => {
+      if (!activePlaylist) {
+        return 1;
+      }
+
+      const totalSongs = playlistSearchKeyword ? playlistSongsTotal : activePlaylist.trackCount;
+      return Math.max(1, Math.ceil(totalSongs / playlistSongsLimit));
+    },
+    [activePlaylist, playlistSongsLimit, playlistSongsTotal, playlistSearchKeyword]
+  );
+  const playbackRatio = playbackDuration > 0 ? Math.min(100, (playbackSeconds / playbackDuration) * 100) : 0;
+  const playbackRangeStyle = { "--range-fill": `${playbackRatio}%` } as CSSProperties;
+  const volumeRangeStyle = { "--range-fill": `${volume}%` } as CSSProperties;
+  const activeMeta = navText[navKey];
+  const contentMeta =
+    mainTab === "settings"
+      ? { title: "设置", subtitle: "偏好配置中心" }
+      : navKey === "artist" && activeArtist
+        ? { title: "歌手", subtitle: activeArtist.name }
+        : navKey === "album" && activeAlbum
+          ? { title: "专辑", subtitle: activeAlbum.name }
+        : activeMeta;
+  const currentQualityLabel = currentTrack ? getSelectedLabel(currentTrack) : "128K";
+  const cloudUsagePercent = cloudMeta.maxSize > 0 ? Math.min(100, Math.round((cloudMeta.size / cloudMeta.maxSize) * 100)) : 0;
+  const dailyRecommendDateLabel = getDailyRecommendDateLabel();
+  const listHeaderMeta =
+    navKey === "discover"
+      ? { count: `推荐新歌 · ${results.length} 首`, note: "来自网易云推荐新歌", action: loadingDiscoverSongs ? "加载中" : "刷新推荐", disabled: loadingDiscoverSongs, onClick: loadDiscoverSongs }
+      : navKey === "cloud"
+      ? { count: `云盘音乐 · ${cloudMeta.count || results.length} 首`, note: `空间使用 ${cloudUsagePercent}%`, action: loadingCloudSongs ? "读取中" : "刷新云盘", disabled: loadingCloudSongs, onClick: loadCloudSongs }
+      : navKey === "daily"
+        ? { count: `${dailyRecommendDateLabel}日推 · ${results.length} 首`, note: "网易云每日 06:00 刷新", action: loadingDailySongs ? "读取中" : "刷新日推", disabled: loadingDailySongs, onClick: loadDailySongs }
+        : null;
+  const accountProfile = session.profile;
+  const accountDisplayName = accountProfile?.displayName ?? settings.accountName;
+  const accountAvatarUrl = accountProfile?.avatarUrl;
+  const accountVipEnabled = accountProfile?.vipEnabled ?? settings.vipEnabled;
+  const accountProviderLabel = accountProfile?.provider === "netease" ? "网易云已同步" : session.loggedIn ? "本地登录中" : "未登录";
+  const accountBadgeLabel = accountVipEnabled ? "黑胶 VIP" : "标准";
+  const accountStatusLabel = session.loggedIn || accountProfile?.provider === "netease" ? accountBadgeLabel : "未登录";
+  const accountIsLoggedIn = session.loggedIn || accountProfile?.provider === "netease";
+  const hasNeteaseDownloadAuth = accountIsLoggedIn;
+  const hasReadableLyrics = Boolean(currentTrack && !loadingLyrics && !lyricsError && lyrics.length > 0);
+  const shouldShowLyricsAtmosphere = Boolean(currentTrack?.coverUrl && (loadingLyrics || hasReadableLyrics));
+
+  const renderArtistMeta = (song: Song) => {
+    const artists = getSongArtists(song);
+
+    return artists.length > 0 ? (
+      <div className="artist-link-group">
+        {artists.map((artist, index) => (
+          <button
+            key={`${song.id}-${artist.id ?? artist.name}-${index}`}
+            type="button"
+            className="artist-link-button"
+            onClick={(event) => {
+              event.stopPropagation();
+              void handleOpenArtist(song, artist);
+            }}
+          >
+            {artist.name}
+          </button>
+        ))}
+      </div>
+    ) : (
+      <button
+        type="button"
+        className="artist-link-button"
+        onClick={(event) => {
+          event.stopPropagation();
+          void handleOpenArtist(song);
+        }}
+      >
+        {song.artist}
+      </button>
+    );
+  };
+
+  const renderAlbumMeta = (song: Song) => (
+    <button
+      type="button"
+      className="album-link-button"
+      onClick={(event) => {
+        event.stopPropagation();
+        void handleOpenAlbum(song);
+      }}
+    >
+      {song.album}
+    </button>
+  );
+
+  const renderPlaylistCard = (playlist: UserPlaylist) => (
+    <article key={playlist.id} className={selectedPlaylistId === playlist.id ? "playlist-card active" : "playlist-card"}>
+      <CoverArt
+        song={{
+          id: playlist.id,
+          title: playlist.name,
+          artist: playlist.creatorName,
+          album: "歌单",
+          coverUrl: playlist.coverUrl,
+          duration: "00:00",
+          quality: "歌单",
+          availableQualities: [{ level: "standard", label: "128K" }],
+          source: "netease"
+        }}
+        className="playlist-cover"
+      />
+      <div className="playlist-copy">
+        <strong>{playlist.name}</strong>
+        <span>{playlist.owned ? "我创建" : playlist.creatorName}</span>
+        <p>{playlist.trackCount} 首 · 播放 {playlist.playCount.toLocaleString()}</p>
+      </div>
+      <button type="button" className="primary-button" disabled={loadingPlaylistSongs && selectedPlaylistId === playlist.id} onClick={() => void loadPlaylistSongs(playlist, 1, "")}>
+        {loadingPlaylistSongs && selectedPlaylistId === playlist.id ? "载入中" : "打开"}
+      </button>
+    </article>
+  );
+
+  return (
+    <div className="app-shell">
+      <audio ref={audioRef} preload="none" />
+
+      <main className="app-layout">
+        <aside className="sidebar">
+            <div className="brand-block">
+              <div className="brand-mark" aria-hidden="true">
+                <MusicGlyph />
+              </div>
+              <div className="brand-copy">
+                <strong>TrackVault</strong>
+              </div>
+            </div>
+
+          <div className="identity-wrap" onClick={(event) => event.stopPropagation()}>
+            <button
+              type="button"
+              className="identity-card"
+              onClick={() => {
+                if (accountIsLoggedIn) {
+                  setAccountMenuOpen((current) => !current);
+                  return;
+                }
+
+                void handleStartQrLogin();
+              }}
+            >
+              {accountAvatarUrl ? (
+                <img className="identity-avatar" src={accountAvatarUrl} alt={accountDisplayName} />
+              ) : (
+                <div className="identity-avatar">{accountDisplayName.slice(0, 1)}</div>
+              )}
+              <div className="identity-copy">
+                <strong>{accountDisplayName}</strong>
+                <span className={accountVipEnabled ? "identity-status active" : "identity-status"}>
+                  {accountStatusLabel}
+                </span>
+              </div>
+            </button>
+
+            {accountIsLoggedIn && accountMenuOpen ? (
+              <div className="identity-popover" role="menu" aria-label="账号操作">
+                <p className="identity-popover-note">VIP 到期: 2026-07-28</p>
+                <button type="button" role="menuitem" onClick={() => void handleStartQrLogin()}>
+                  <span aria-hidden="true">⌁</span>
+                  切换账号
+                </button>
+                <button type="button" role="menuitem" className="danger" onClick={() => void handleClearCookie()}>
+                  <span aria-hidden="true">↩</span>
+                  退出登录
+                </button>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="sidebar-group">
+            <span className="group-label">导航</span>
+            <nav className="nav-list">
+              <button type="button" className={mainTab === "search" && navKey === "discover" ? "nav-button active" : "nav-button"} onClick={() => void loadDiscoverSongs()}>
+                发现音乐
+              </button>
+              <button type="button" className={mainTab === "search" && navKey === "search" ? "nav-button active" : "nav-button"} onClick={openSearchPage}>
+                搜索
+              </button>
+              <button type="button" className={mainTab === "search" && navKey === "daily" ? "nav-button active" : "nav-button"} onClick={() => void loadDailySongs()}>
+                每日推荐
+              </button>
+              <button type="button" className={mainTab === "search" && navKey === "playlists" ? "nav-button active" : "nav-button"} onClick={() => navigateTo("playlists")}>
+                我的歌单
+              </button>
+              <button type="button" className={mainTab === "search" && navKey === "cloud" ? "nav-button active" : "nav-button"} onClick={() => void loadCloudSongs()}>
+                云盘音乐
+              </button>
+              <button type="button" className={mainTab === "search" && navKey === "downloads" ? "nav-button active" : "nav-button"} onClick={() => navigateTo("downloads")}>
+                下载管理
+              </button>
+              <button type="button" className={mainTab === "search" && navKey === "history" ? "nav-button active" : "nav-button"} onClick={() => navigateTo("history")}>
+                播放历史
+              </button>
+              <button type="button" className={mainTab === "settings" ? "nav-button active" : "nav-button"} onClick={() => navigateTo(navKey, "settings")}>
+                设置
+              </button>
+            </nav>
+          </div>
+        </aside>
+
+        <section className="content-panel">
+          <header className="content-header">
+            <div className="content-titlebar">
+              {viewHistory.length > 0 ? (
+                <button type="button" className="back-button" onClick={goBackView} aria-label="返回上一个界面">
+                  <svg aria-hidden="true" viewBox="0 0 24 24">
+                    <path d="M14.8 6.4 9.2 12l5.6 5.6" />
+                  </svg>
+                </button>
+              ) : (
+                <span className="back-button-slot" aria-hidden="true" />
+              )}
+              <div className="content-titlecopy">
+                <p className="eyebrow">{contentMeta.title}</p>
+                <h1>{contentMeta.subtitle}</h1>
+              </div>
+            </div>
+            {mainTab === "search" && listHeaderMeta ? (
+              <div className="content-actions">
+                <div className="content-summary">
+                  <strong>{listHeaderMeta.count}</strong>
+                  <span>{listHeaderMeta.note}</span>
+                </div>
+                <button type="button" className="secondary-button" disabled={listHeaderMeta.disabled} onClick={() => void listHeaderMeta.onClick()}>
+                  {listHeaderMeta.action}
+                </button>
+              </div>
+            ) : null}
+          </header>
+
+          {mainTab === "search" && navKey === "playlists" ? (
+            <section className="playlist-manager">
+              <header className="playlist-manager-head">
+                <div>
+                  <p className="eyebrow">我的歌单</p>
+                  <h2>网易云账号歌单</h2>
+                </div>
+                <button type="button" className="secondary-button" disabled={loadingPlaylists} onClick={() => void loadUserPlaylists()}>
+                  {loadingPlaylists ? "读取中" : "刷新歌单"}
+                </button>
+              </header>
+
+              <div className="playlist-sections">
+                {playlists.length === 0 ? (
+                  <div className="empty-box">{loadingPlaylists ? "正在读取歌单..." : "还没有读取到歌单，请先在设置页配置有效 Cookie。"}</div>
+                ) : (
+                  <>
+                    <section className="playlist-section">
+                      <header className="playlist-section-head">
+                        <div>
+                          <h3>我创建的歌单</h3>
+                          <p>当前账号作为创建者的歌单</p>
+                        </div>
+                        <span>{createdPlaylists.length} 个</span>
+                      </header>
+                      <div className="playlist-grid">
+                        {createdPlaylists.length > 0 ? createdPlaylists.map(renderPlaylistCard) : <div className="empty-box">暂时没有创建的歌单。</div>}
+                      </div>
+                    </section>
+
+                    <section className="playlist-section">
+                      <header className="playlist-section-head">
+                        <div>
+                          <h3>我收藏的歌单</h3>
+                          <p>其他用户创建、当前账号收藏的歌单</p>
+                        </div>
+                        <span>{collectedPlaylists.length} 个</span>
+                      </header>
+                      <div className="playlist-grid">
+                        {collectedPlaylists.length > 0 ? collectedPlaylists.map(renderPlaylistCard) : <div className="empty-box">暂时没有收藏的歌单。</div>}
+                      </div>
+                    </section>
+                  </>
+                )}
+              </div>
+            </section>
+          ) : mainTab === "search" && (navKey === "discover" || navKey === "cloud" || navKey === "daily" || navKey === "artist" || navKey === "album") ? (
+            <section className="results-panel">
+              {navKey === "artist" && activeArtist ? (
+                <div className="artist-hero">
+                  <CoverArt
+                    song={{
+                      id: activeArtist.id,
+                      title: activeArtist.name,
+                      artist: activeArtist.name,
+                      album: "歌手",
+                      coverUrl: activeArtist.avatarUrl ?? activeArtist.coverUrl,
+                      duration: "00:00",
+                      quality: "歌手",
+                      availableQualities: [{ level: "standard", label: "128K" }],
+                      source: "netease-artist"
+                    }}
+                    className="artist-cover"
+                  />
+                  <div className="artist-hero-copy">
+                    <strong>{activeArtist.name}</strong>
+                    <span>{activeArtist.musicCount} 首单曲 · {activeArtist.albumCount} 张专辑 · {activeArtist.mvCount} 个 MV</span>
+                    <p>{activeArtist.description}</p>
+                  </div>
+                </div>
+              ) : null}
+              {navKey === "album" && activeAlbum ? (
+                <div className="artist-hero">
+                  <CoverArt
+                    song={{
+                      id: activeAlbum.id,
+                      title: activeAlbum.name,
+                      artist: activeAlbum.artist,
+                      album: activeAlbum.name,
+                      coverUrl: activeAlbum.coverUrl,
+                      duration: "00:00",
+                      quality: "专辑",
+                      availableQualities: [{ level: "standard", label: "128K" }],
+                      source: "netease-album"
+                    }}
+                    className="artist-cover"
+                  />
+                  <div className="artist-hero-copy">
+                    <strong>{activeAlbum.name}</strong>
+                    <span>
+                      {activeAlbum.artist} · {activeAlbum.trackCount} 首歌曲
+                      {activeAlbum.publishDate ? ` · ${activeAlbum.publishDate}` : ""}
+                      {activeAlbum.company ? ` · ${activeAlbum.company}` : ""}
+                    </span>
+                    <p>{activeAlbum.description}</p>
+                  </div>
+                </div>
+              ) : null}
+              {resultSource === "playlist" && activePlaylist ? (
+                <div className="form-actions playlist-toolbar">
+                  <div className="playlist-toolbar-pagination">
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={loadingPlaylistSongs || playlistSongsPage <= 1}
+                      onClick={() => handlePlaylistPageChange(playlistSongsPage - 1)}
+                    >
+                      上一页
+                    </button>
+                    <span>
+                      {activePlaylist.name} · 第 {playlistSongsPage} / {playlistTotalPages} 页 · {playlistSearchKeyword ? `匹配 ${playlistSongsTotal} 首 / 共 ${activePlaylist.trackCount} 首` : `共 ${activePlaylist.trackCount} 首`}
+                    </span>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={loadingPlaylistSongs || (!playlistSongsHasMore && playlistSongsPage >= playlistTotalPages)}
+                      onClick={() => handlePlaylistPageChange(playlistSongsPage + 1)}
+                    >
+                      下一页
+                    </button>
+                  </div>
+                  <form className="playlist-filter-form" onSubmit={handlePlaylistSearchSubmit}>
+                    <input
+                      value={playlistSearchInput}
+                      onChange={(event) => setPlaylistSearchInput(event.target.value)}
+                      placeholder="筛选当前歌单的歌名 / 歌手 / 专辑"
+                    />
+                    <button type="submit" className="secondary-button" disabled={loadingPlaylistSongs}>
+                      筛选
+                    </button>
+                    {playlistSearchKeyword ? (
+                      <button type="button" className="secondary-button" disabled={loadingPlaylistSongs} onClick={handleClearPlaylistSearch}>
+                        清除
+                      </button>
+                    ) : null}
+                  </form>
+                </div>
+              ) : null}
+              {selectedVisibleSongs.length > 0 ? (
+                <div className="form-actions results-selection-bar">
+                  <span>已选 {selectedVisibleSongs.length} 首</span>
+                  <div className="results-selection-actions">
+                    <button
+                      type="button"
+                      className={!hasNeteaseDownloadAuth ? "secondary-button compact locked-action-button" : "secondary-button compact"}
+                      disabled={batchDownloading}
+                      onClick={() => void handleBatchDownload(selectedVisibleSongs, "已选歌曲")}
+                    >
+                      {!hasNeteaseDownloadAuth ? <LockIcon /> : null}
+                      {batchDownloading ? "加入中" : "下载已选"}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button compact"
+                      disabled={batchDownloading}
+                      onClick={() => setSelectedSongIds([])}
+                    >
+                      清空选择
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              <div className="results-head">
+                <label className="result-check-cell result-check-header">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    aria-label={allVisibleSelected ? "取消全选当前列表" : "全选当前列表"}
+                    onChange={handleToggleVisibleSongsSelection}
+                  />
+                </label>
+                <span>歌曲</span>
+                <span>歌手 / 专辑</span>
+                <span>时长</span>
+                <span>音质</span>
+                <span>操作</span>
+              </div>
+
+              <div className="results-body">
+                {(navKey === "discover" ? loadingDiscoverSongs : navKey === "cloud" ? loadingCloudSongs : navKey === "daily" ? loadingDailySongs : loadingArtist) && visibleSongs.length === 0 ? (
+                  <div className="empty-box">{navKey === "discover" ? "正在加载发现音乐..." : navKey === "cloud" ? "正在读取云盘音乐..." : navKey === "daily" ? "正在读取每日推荐..." : "正在读取歌手热门歌曲..."}</div>
+                ) : null}
+                {!(navKey === "discover" ? loadingDiscoverSongs : navKey === "cloud" ? loadingCloudSongs : navKey === "daily" ? loadingDailySongs : loadingArtist) && visibleSongs.length === 0 ? (
+                  <div className="empty-box">{navKey === "discover" ? "暂时没有推荐歌曲，请稍后刷新。" : navKey === "cloud" ? "云盘里暂时没有读取到歌曲，或 Cookie 权限不足。" : navKey === "daily" ? "暂时没有读取到每日推荐，请确认 Cookie 登录态有效。" : "暂时没有读取到该歌手的热门歌曲。"}</div>
+                ) : null}
+                {visibleSongs.map((song) => (
+                  <article
+                    key={song.id}
+                    className={currentTrack?.id === song.id ? "result-row active" : "result-row"}
+                    onClick={() => handleSelectSong(song)}
+                    onDoubleClick={() => handlePreview(song)}
+                  >
+                    <label className="result-check-cell" onClick={(event) => event.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedSongIds.includes(song.id)}
+                        aria-label={`选择 ${song.title}`}
+                        onChange={() => handleToggleSongSelection(song.id)}
+                      />
+                    </label>
+                    <div className="result-track">
+                      <CoverArt song={song} className="result-cover" />
+                      <div className="result-copy">
+                        <strong>{song.title}</strong>
+                        <span>{song.quality}</span>
+                      </div>
+                    </div>
+
+                    <div className="result-meta">
+                      {renderArtistMeta(song)}
+                      {renderAlbumMeta(song)}
+                    </div>
+                    <span className="result-time">{song.duration}</span>
+
+                    <div className="quality-select" onClick={(event) => event.stopPropagation()}>
+                      <button
+                        type="button"
+                        className="quality-trigger"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setOpenQualityMenuId((current) => (current === song.id ? null : song.id));
+                        }}
+                      >
+                        <span>{getSelectedLabel(song)}</span>
+                        <span className={openQualityMenuId === song.id ? "quality-caret open" : "quality-caret"}>
+                          <ChevronIcon />
+                        </span>
+                      </button>
+
+                      {openQualityMenuId === song.id ? (
+                        <div className="quality-menu" onClick={(event) => event.stopPropagation()}>
+                          {song.availableQualities.map((quality) => {
+                            const isActive = quality.level === getSelectedLevel(song);
+
+                            return (
+                              <button
+                                key={quality.level}
+                                type="button"
+                                className={isActive ? "quality-option active" : "quality-option"}
+                                onClick={() => {
+                                  setQualitySelections((current) => ({
+                                    ...current,
+                                    [song.id]: quality.level
+                                  }));
+                                  setQualitySelectionTouched((current) => ({
+                                    ...current,
+                                    [song.id]: true
+                                  }));
+                                  setOpenQualityMenuId(null);
+
+                                  if (currentTrack?.id === song.id && isPlaying) {
+                                    window.setTimeout(() => {
+                                      syncAudioForSong(song, true);
+                                    }, 0);
+                                  }
+                                }}
+                              >
+                                {quality.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="row-actions">
+                      <button type="button" className="row-icon-button" aria-label={`试听 ${song.title}`} title="试听" onClick={(event) => { event.stopPropagation(); handlePreview(song); }}>
+                        <PreviewIcon />
+                      </button>
+                      <button
+                        type="button"
+                        className={!hasNeteaseDownloadAuth ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
+                        aria-label={!hasNeteaseDownloadAuth ? `登录后下载 ${song.title}` : `下载 ${song.title}`}
+                        title={!hasNeteaseDownloadAuth ? "登录后下载" : "下载"}
+                        onClick={(event) => { event.stopPropagation(); void handleDownload(song); }}
+                      >
+                        <DownloadIcon />
+                        {!hasNeteaseDownloadAuth ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : mainTab === "search" && navKey === "history" ? (
+            <section className="download-manager history-manager">
+              <header className="download-manager-head">
+                <div>
+                  <p className="eyebrow">播放历史</p>
+                  <h2>最近听过的歌曲</h2>
+                </div>
+                <div className="download-summary">
+                  <span>{playHistory.length} 首</span>
+                </div>
+              </header>
+
+              <div className="history-list">
+                {playHistory.length === 0 ? (
+                  <div className="empty-box">暂无播放历史。试听或播放一首歌后会出现在这里。</div>
+                ) : (
+                  playHistory.map((song, index) => (
+                    <article key={song.id} className={currentTrack?.id === song.id ? "history-row active" : "history-row"} onClick={() => handlePreview(song)}>
+                      <span className="queue-index">{String(index + 1).padStart(2, "0")}</span>
+                      <CoverArt song={song} className="result-cover" />
+                      <div className="history-copy">
+                        <strong>{song.title}</strong>
+                        <span>{song.artist} · {song.album}</span>
+                      </div>
+                      <span className="result-time">{song.duration}</span>
+                      <button type="button" className="secondary-button" onClick={(event) => { event.stopPropagation(); handlePreview(song); }}>
+                        播放
+                      </button>
+                    </article>
+                  ))
+                )}
+              </div>
+            </section>
+          ) : mainTab === "search" && navKey === "downloads" ? (
+            <section className="download-manager">
+              <header className="download-manager-head">
+                <div>
+                  <p className="eyebrow">下载管理</p>
+                  <h2>本地下载任务</h2>
+                </div>
+                <div className="download-summary">
+                  <span>{completedCount} 已完成</span>
+                  <span>{activeCount} 进行中</span>
+                  <span>{failedCount} 失败</span>
+                </div>
+              </header>
+
+              <div className="download-task-list">
+                {tasks.length === 0 ? (
+                  <div className="empty-box">还没有下载任务，回到发现音乐添加一首歌。</div>
+                ) : (
+                  tasks.map((task) => (
+                    <article key={task.id} className="download-task-row">
+                      <div className="download-task-main">
+                        <strong>{task.title}</strong>
+                        <span>{task.artist} · {task.quality}</span>
+                      </div>
+                      <span className="download-task-status">{statusLabel(task.status)}</span>
+                      <div className="download-task-progress">
+                        <div className="progress-track">
+                          <div className="progress-fill" style={{ width: `${task.progress}%` }} />
+                        </div>
+                        <span>{task.progress}%</span>
+                      </div>
+                      <div className="download-task-meta">
+                        {task.status === "done" ? <span>时长 {task.downloadedDuration ?? "--"} · 大小 {formatFileSize(task.fileSizeBytes)}</span> : null}
+                        {task.error ? <span className="queue-error">{task.error}</span> : null}
+                        <span>{task.outputPath ?? "等待写入产物"}</span>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+            </section>
+          ) : mainTab === "search" ? (
+            <>
+              <div className="toolbar-card search-hero">
+                <form className="search-form search-form-large" onSubmit={handleSubmit}>
+                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索歌曲、歌手、专辑" />
+                  <button type="submit" disabled={searching}>{searching ? "搜索中" : "搜索"}</button>
+                </form>
+              </div>
+
+              {resultSource === "search" && results.length > 0 ? (
+              <section className="results-panel">
+                {selectedVisibleSongs.length > 0 ? (
+                  <div className="form-actions results-selection-bar">
+                    <span>已选 {selectedVisibleSongs.length} 首</span>
+                    <div className="results-selection-actions">
+                      <button
+                        type="button"
+                        className={!hasNeteaseDownloadAuth ? "secondary-button compact locked-action-button" : "secondary-button compact"}
+                        disabled={batchDownloading}
+                        onClick={() => void handleBatchDownload(selectedVisibleSongs, "已选歌曲")}
+                      >
+                        {!hasNeteaseDownloadAuth ? <LockIcon /> : null}
+                        {batchDownloading ? "加入中" : "下载已选"}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button compact"
+                        disabled={batchDownloading}
+                        onClick={() => setSelectedSongIds([])}
+                      >
+                        清空选择
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                <header className="results-head">
+                  <label className="result-check-cell result-check-header">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      aria-label={allVisibleSelected ? "取消全选当前列表" : "全选当前列表"}
+                      onChange={handleToggleVisibleSongsSelection}
+                    />
+                  </label>
+                  <span>歌曲</span>
+                  <span>歌手 / 专辑</span>
+                  <span>时长</span>
+                  <span>音质</span>
+                  <span>操作</span>
+                </header>
+
+                <div className="results-body">
+                  {visibleSongs.map((song) => (
+                    <article
+                      key={song.id}
+                      className={currentTrack?.id === song.id ? "result-row active" : "result-row"}
+                      onClick={() => handleSelectSong(song)}
+                      onDoubleClick={() => handlePreview(song)}
+                    >
+                      <label className="result-check-cell" onClick={(event) => event.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedSongIds.includes(song.id)}
+                          aria-label={`选择 ${song.title}`}
+                          onChange={() => handleToggleSongSelection(song.id)}
+                        />
+                      </label>
+                      <div className="result-track">
+                        <CoverArt song={song} className="result-cover" />
+                        <div className="result-copy">
+                          <strong>{song.title}</strong>
+                          <span>{song.quality}</span>
+                        </div>
+                      </div>
+
+                      <div className="result-meta">
+                        {renderArtistMeta(song)}
+                        {renderAlbumMeta(song)}
+                      </div>
+
+                      <span className="result-time">{song.duration}</span>
+
+                      <div className="quality-select" onClick={(event) => event.stopPropagation()}>
+                        <button
+                          type="button"
+                          className="quality-trigger"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setOpenQualityMenuId((current) => (current === song.id ? null : song.id));
+                          }}
+                        >
+                          <span>{getSelectedLabel(song)}</span>
+                          <span className={openQualityMenuId === song.id ? "quality-caret open" : "quality-caret"}>
+                            <ChevronIcon />
+                          </span>
+                        </button>
+
+                        {openQualityMenuId === song.id ? (
+                          <div className="quality-menu" onClick={(event) => event.stopPropagation()}>
+                            {song.availableQualities.map((quality) => {
+                              const isActive = quality.level === getSelectedLevel(song);
+
+                              return (
+                                <button
+                                  key={quality.level}
+                                  type="button"
+                                  className={isActive ? "quality-option active" : "quality-option"}
+                                  onClick={() => {
+                                    setQualitySelections((current) => ({
+                                      ...current,
+                                      [song.id]: quality.level
+                                    }));
+                                    setQualitySelectionTouched((current) => ({
+                                      ...current,
+                                      [song.id]: true
+                                    }));
+                                    setOpenQualityMenuId(null);
+
+                                    if (currentTrack?.id === song.id && isPlaying) {
+                                      window.setTimeout(() => {
+                                        syncAudioForSong(song, true);
+                                      }, 0);
+                                    }
+                                  }}
+                                >
+                                  {quality.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="row-actions" onClick={(event) => event.stopPropagation()}>
+                        <button type="button" className="row-icon-button" aria-label={`试听 ${song.title}`} title="试听" onClick={() => handlePreview(song)}>
+                          <PreviewIcon />
+                        </button>
+                        <button
+                          type="button"
+                          className={!hasNeteaseDownloadAuth ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
+                          aria-label={!hasNeteaseDownloadAuth ? `登录后下载 ${song.title}` : `下载 ${song.title}`}
+                          title={!hasNeteaseDownloadAuth ? "登录后下载" : "下载"}
+                          onClick={() => void handleDownload(song)}
+                        >
+                          <DownloadIcon />
+                          {!hasNeteaseDownloadAuth ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+              ) : (
+                <section className="search-lobby">
+                  <div className="search-lobby-card">
+                    <p className="eyebrow">推荐搜索</p>
+                    <h2>从常听歌手开始</h2>
+                    <div className="quick-row">
+                      {quickKeywords.map((keyword) => (
+                        <button key={keyword} type="button" className="quick-chip" onClick={() => { setQuery(keyword); void runSearch(keyword); }}>
+                          {keyword}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="search-lobby-card">
+                    <p className="eyebrow">历史搜索</p>
+                    <h2>最近查找</h2>
+                    {searchHistory.length === 0 ? (
+                      <div className="empty-box">还没有搜索记录。输入关键词回车后会保存在这里。</div>
+                    ) : (
+                      <div className="quick-row">
+                        {searchHistory.map((keyword) => (
+                          <div key={keyword} className="quick-chip history-chip">
+                            <button type="button" className="history-chip-label" onClick={() => { setQuery(keyword); void runSearch(keyword); }}>
+                              {keyword}
+                            </button>
+                            <button
+                              type="button"
+                              className="history-chip-remove"
+                              aria-label={`删除搜索记录 ${keyword}`}
+                              title="删除记录"
+                              onClick={() => removeSearchHistory(keyword)}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </section>
+              )}
+            </>
+          ) : mainTab === "account" ? (
+            <section className="form-panel">
+              <div className="form-head">
+                <p className="eyebrow">账号管理</p>
+                <h1>管理本地登录状态和展示资料</h1>
+              </div>
+
+              <form className="form-grid" onSubmit={handleLogin}>
+                <label>
+                  <span>账号名称</span>
+                  <input value={loginForm.accountName} onChange={(event) => setLoginForm((current) => ({ ...current, accountName: event.target.value }))} placeholder="输入一个本地账号名" />
+                </label>
+
+                <label className="inline-row">
+                  <span>VIP 身份</span>
+                  <button type="button" className={loginForm.vipEnabled ? "toggle-button active" : "toggle-button"} onClick={() => setLoginForm((current) => ({ ...current, vipEnabled: !current.vipEnabled }))}>
+                    {loginForm.vipEnabled ? "VIP" : "普通"}
+                  </button>
+                </label>
+
+                <label>
+                  <span>资料备注</span>
+                  <textarea value={loginForm.note} onChange={(event) => setLoginForm((current) => ({ ...current, note: event.target.value }))} placeholder="例如：夜间下载、收藏现场版、华语为主" />
+                </label>
+
+                <div className="form-actions">
+                  <button type="submit" className="primary-button wide" disabled={loggingIn}>{loggingIn ? "登录中" : "建立登录态"}</button>
+                  <button type="button" className="secondary-button wide" onClick={() => void handleLogout()}>退出当前账号</button>
+                </div>
+              </form>
+            </section>
+          ) : (
+            <section className="form-panel">
+              <div className="form-head">
+                <p className="eyebrow">下载偏好</p>
+                <h1>下载任务与文件保存</h1>
+              </div>
+
+              <form className="settings-grid" onSubmit={handleSaveSettings}>
+                <label className="settings-card">
+                  <span>下载目录</span>
+                  <p>保存下载文件的本地目录，支持相对路径或绝对路径。</p>
+                  <input value={settings.downloadDirectory} onChange={(event) => setSettings((current) => ({ ...current, downloadDirectory: event.target.value }))} placeholder="downloads" />
+                </label>
+
+                <label className="settings-card">
+                  <span>默认播放音质</span>
+                  <p>用于试听、双击播放和底部播放器，默认按 128K 启动，手动改过的歌曲仍以手动选择为准。</p>
+                  <select
+                    value={settings.defaultPlaybackQuality}
+                    onChange={(event) => {
+                      const nextQuality = event.target.value as DownloadQualityLevel;
+                      setSettings((current) => ({ ...current, defaultPlaybackQuality: nextQuality }));
+                      applyQualityDefaults(results, nextQuality);
+                    }}
+                  >
+                    <option value="standard">128K</option>
+                    <option value="exhigh">320K</option>
+                    <option value="lossless">FLAC</option>
+                    <option value="hires">Hi-Res</option>
+                  </select>
+                </label>
+
+                <label className="settings-card">
+                  <span>默认下载音质</span>
+                  <p>加入下载队列时优先使用该音质；如果你手动改过某首歌的音质，会优先按手动选择下载。</p>
+                  <select
+                    value={settings.defaultDownloadQuality}
+                    onChange={(event) => {
+                      const nextQuality = event.target.value as DownloadQualityLevel;
+                      setSettings((current) => ({ ...current, defaultDownloadQuality: nextQuality }));
+                    }}
+                  >
+                    <option value="hires">Hi-Res</option>
+                    <option value="lossless">FLAC</option>
+                    <option value="exhigh">320K</option>
+                    <option value="standard">128K</option>
+                  </select>
+                </label>
+
+                <label className="settings-card">
+                  <span>同时下载任务数限制</span>
+                  <p>控制本地下载队列并发，范围 1-5。网络不稳时建议设为 1-2。</p>
+                  <input
+                    type="number"
+                    min="1"
+                    max="5"
+                    step="1"
+                    value={settings.maxConcurrentDownloads}
+                    onChange={(event) => {
+                      const nextValue = Number(event.target.value);
+                      setSettings((current) => ({
+                        ...current,
+                        maxConcurrentDownloads: Number.isFinite(nextValue) ? Math.min(5, Math.max(1, Math.round(nextValue))) : current.maxConcurrentDownloads
+                      }));
+                    }}
+                  />
+                </label>
+
+                <div className="form-actions">
+                  <button type="submit" className="primary-button wide" disabled={savingSettings}>{savingSettings ? "保存中" : "保存设置"}</button>
+                </div>
+              </form>
+
+              <div className="form-head">
+                <p className="eyebrow">高级控制</p>
+                <h1>白名单特权与保底凭证</h1>
+              </div>
+
+              <form className="settings-grid" onSubmit={handleSaveAdminConfig}>
+                <label className="settings-card">
+                  <span>Feature Pass Whitelist</span>
+                  <p>填写允许触发高阶凭证回退的用户 ID，支持逗号分隔或按行输入。</p>
+                  <textarea
+                    value={adminConfig.trustedUserWhitelistText}
+                    onChange={(event) => setAdminConfig((current) => ({ ...current, trustedUserWhitelistText: event.target.value }))}
+                    placeholder={"123456789\n987654321"}
+                  />
+                </label>
+
+                <label className="settings-card">
+                  <span>System Default Token</span>
+                  <p>{adminConfig.hasSystemDefaultToken ? "已配置全局保底凭证，留空表示保持不变。" : "管理员保底凭证，仅在命中白名单且个人凭证无高阶权限时回退使用。"}</p>
+                  <input
+                    type="password"
+                    value={adminConfigTokenInput}
+                    onChange={(event) => setAdminConfigTokenInput(event.target.value)}
+                    placeholder={adminConfig.hasSystemDefaultToken ? "••••••••••••••••" : "输入新的系统保底凭证"}
+                  />
+                </label>
+
+                <label className="settings-card">
+                  <span>启用系统保底回退</span>
+                  <p>仅对白名单内且已登录的测试用户生效，普通用户永远只能使用自己的个人凭证。</p>
+                  <input
+                    type="checkbox"
+                    checked={adminConfig.systemFallbackEnabled}
+                    onChange={(event) => setAdminConfig((current) => ({ ...current, systemFallbackEnabled: event.target.checked }))}
+                  />
+                </label>
+
+                <div className="form-actions">
+                  <button type="submit" className="primary-button wide" disabled={savingAdminConfig}>
+                    {savingAdminConfig ? "保存中" : "保存高级控制"}
+                  </button>
+                </div>
+              </form>
+            </section>
+          )}
+        </section>
+
+        <aside className="utility-panel play-sidebar">
+          <header className="play-sidebar-header">
+            <CoverArt song={currentTrack} className="play-sidebar-cover" />
+            <div className="play-sidebar-title">
+              <span>当前播放</span>
+              <strong>{currentTrack?.title ?? "未选择曲目"}</strong>
+              <p>{currentTrack ? currentTrack.artist : "从搜索结果里试听一首歌"}</p>
+            </div>
+          </header>
+
+          {playerError ? <div className="player-alert">{playerError}</div> : null}
+
+          <div className="right-tabs" role="tablist" aria-label="播放侧栏">
+            <button type="button" className={rightPanelTab === "queue" ? "right-tab active" : "right-tab"} onClick={() => setRightPanelTab("queue")}>
+              队列
+              <strong>{playQueue.length}</strong>
+            </button>
+            <button type="button" className={rightPanelTab === "lyrics" ? "right-tab active" : "right-tab"} onClick={() => setRightPanelTab("lyrics")}>
+              歌词
+            </button>
+          </div>
+
+          <section className="play-sidebar-body">
+            {rightPanelTab === "queue" ? (
+              <div className="play-queue-list">
+                {playQueue.length === 0 ? (
+                  <div className="empty-box">播放队列为空，先搜索或试听一首歌。</div>
+                ) : (
+                  playQueue.map((song, index) => (
+                    <article key={song.id} className={currentTrack?.id === song.id ? "play-queue-row active" : "play-queue-row"} onClick={() => handlePreview(song)}>
+                      <span className="queue-index">{String(index + 1).padStart(2, "0")}</span>
+                      <div className="queue-song-copy">
+                        <strong>{song.title}</strong>
+                        <span>{song.artist}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="queue-remove"
+                        aria-label={`从播放队列移除 ${song.title}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleRemoveFromQueue(song.id);
+                        }}
+                      >
+                        ×
+                      </button>
+                    </article>
+                  ))
+                )}
+              </div>
+            ) : null}
+
+            {rightPanelTab === "lyrics" ? (
+              <div ref={lyricPanelRef} className={hasReadableLyrics ? "lyrics-panel has-lyrics" : "lyrics-panel is-empty"} onWheel={markLyricsManualScroll} onPointerDown={markLyricsManualScroll} onTouchStart={markLyricsManualScroll}>
+                {shouldShowLyricsAtmosphere ? (
+                  <div
+                    className="lyrics-atmosphere"
+                    style={{ backgroundImage: `url("${currentTrack?.coverUrl}")` }}
+                    aria-hidden="true"
+                  />
+                ) : null}
+                {!currentTrack ? (
+                  <div className="lyrics-empty-state">
+                    <MusicGlyph />
+                    <p>未选择曲目，播放后这里显示歌词</p>
+                  </div>
+                ) : null}
+                {currentTrack && loadingLyrics ? <div className="empty-box">正在加载歌词...</div> : null}
+                {currentTrack && !loadingLyrics && lyricsError ? <div className="empty-box">{lyricsError}</div> : null}
+                {currentTrack && !loadingLyrics && !lyricsError ? (
+                  <div className="lyric-lines">
+                    {lyrics.map((line, index) => (
+                      <button
+                        type="button"
+                        key={`${line.time}-${line.text}-${index}`}
+                        ref={index === activeLyricIndex ? activeLyricRef : null}
+                        className={index === activeLyricIndex ? "lyric-line active" : "lyric-line"}
+                        onClick={() => handleSeekToLyric(line.time)}
+                        title={`跳转到 ${formatPlaybackTime(line.time)}`}
+                      >
+                        <span>{line.text}</span>
+                        {line.translation ? <small>{line.translation}</small> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        </aside>
+      </main>
+
+      {qrLoginOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="网易云扫码登录" onClick={closeQrLogin}>
+          <section className="qr-login-card" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <p className="eyebrow">Netease Login</p>
+                <h2>网易云登录</h2>
+              </div>
+              <button type="button" className="modal-close" onClick={closeQrLogin} aria-label="关闭扫码登录">
+                ×
+              </button>
+            </header>
+
+            <div className="qr-mode-switch" role="tablist" aria-label="网易云登录方式">
+                <button type="button" className={neteaseLoginMode === "qr" ? "qr-mode-button active" : "qr-mode-button"} onClick={() => handleSwitchNeteaseLoginMode("qr")}>扫码登录</button>
+                <button type="button" className={neteaseLoginMode === "cellphone" ? "qr-mode-button active" : "qr-mode-button"} onClick={() => handleSwitchNeteaseLoginMode("cellphone")}>验证码登录</button>
+            </div>
+
+            {neteaseLoginMode === "qr" ? (
+              <>
+                <div className="qr-box">
+                  {qrLoginImage ? (
+                    <img src={qrLoginImage} alt="网易云扫码登录二维码" />
+                  ) : (
+                    <div className="qr-placeholder">{startingQrLogin ? "生成中..." : "二维码暂不可用"}</div>
+                  )}
+                </div>
+
+                <div className="qr-expiry">
+                  <span>有效期</span>
+                  <strong>{formatPlaybackTime(qrLoginExpiresIn)}</strong>
+                </div>
+              </>
+            ) : (
+              <form className="cellphone-login-form" onSubmit={handleCellphoneLoginSubmit}>
+                <div className="cellphone-login-row">
+                  <label>
+                    <span>区号</span>
+                    <input
+                      value={cellphoneLoginForm.countryCode}
+                      onChange={(event) => setCellphoneLoginForm((current) => ({ ...current, countryCode: event.target.value.replace(/\\D/g, "").slice(0, 4) || "86" }))}
+                      inputMode="numeric"
+                    />
+                  </label>
+                  <label className="cellphone-login-phone">
+                    <span>手机号</span>
+                    <input
+                      value={cellphoneLoginForm.phone}
+                      onChange={(event) => setCellphoneLoginForm((current) => ({ ...current, phone: event.target.value.replace(/\\D/g, "").slice(0, 20) }))}
+                      inputMode="numeric"
+                      placeholder="请输入手机号"
+                    />
+                  </label>
+                </div>
+                <label>
+                  <span>验证码</span>
+                  <div className="cellphone-captcha-row">
+                    <input
+                      value={cellphoneLoginForm.captcha}
+                      onChange={(event) => setCellphoneLoginForm((current) => ({ ...current, captcha: event.target.value.replace(/\\D/g, "").slice(0, 8) }))}
+                      inputMode="numeric"
+                      placeholder="短信验证码"
+                    />
+                    <button type="button" className="secondary-button" disabled={sendingCaptcha} onClick={() => void handleSendCaptcha()}>
+                      {sendingCaptcha ? "发送中" : "发送验证码"}
+                    </button>
+                  </div>
+                </label>
+                <button type="submit" className="primary-button wide" disabled={loggingCellphoneIn}>
+                  {loggingCellphoneIn ? "登录中" : "验证码登录"}
+                </button>
+              </form>
+            )}
+            <p className="qr-message">{qrLoginMessage}</p>
+            <div className="qr-actions">
+              {neteaseLoginMode === "qr" ? (
+                <button type="button" className="secondary-button" disabled={startingQrLogin} onClick={() => void handleStartQrLogin()}>
+                  重新生成
+                </button>
+              ) : (
+                <button type="button" className="secondary-button" onClick={() => setCellphoneLoginForm({ countryCode: "86", phone: "", captcha: "" })}>
+                  清空
+                </button>
+              )}
+              <button type="button" className="primary-button" onClick={closeQrLogin}>
+                关闭
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      <section className={isPlayerExpanded ? "player-modal open" : "player-modal"} aria-hidden={!isPlayerExpanded}>
+        <div
+          className="player-modal-backdrop"
+          style={currentTrack?.coverUrl ? { backgroundImage: `url("${currentTrack.coverUrl}")` } : undefined}
+          aria-hidden="true"
+        />
+        <div className="player-modal-shade" aria-hidden="true" />
+
+        <button type="button" className="player-modal-close" aria-label="收起播放器" onClick={() => setIsPlayerExpanded(false)}>
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M6.5 9.5 12 15l5.5-5.5" />
+          </svg>
+        </button>
+
+        <div className="player-modal-window">
+          <div className="player-modal-grid">
+            <section className="turntable-stage" aria-label="黑胶唱机">
+              <div className={isPlaying ? "stylus playing" : "stylus"}>
+                <span className="stylus-pivot" />
+                <span className="stylus-arm" />
+                <span className="stylus-head" />
+              </div>
+
+              <div className={isPlaying ? "vinyl-disc spinning" : "vinyl-disc"}>
+                <div className="vinyl-rings" />
+                <CoverArt song={currentTrack} className="vinyl-cover" />
+              </div>
+            </section>
+
+            <section className="player-modal-content">
+              <div className="player-modal-title">
+                <h2 title={currentTrack?.title ?? "未选择曲目"}>{currentTrack?.title ?? "未选择曲目"}</h2>
+                <div className="player-meta-row">
+                  <span>专辑：{currentTrack?.album ?? "未知专辑"}</span>
+                  <span>歌手：{currentTrack?.artist ?? "未知歌手"}</span>
+                  <span>音质：{currentTrack ? getSelectedLabel(currentTrack) : "--"}</span>
+                </div>
+              </div>
+
+              <div ref={modalLyricPanelRef} className={hasReadableLyrics ? "player-modal-lyrics has-lyrics" : "player-modal-lyrics is-empty"} onWheel={markLyricsManualScroll} onPointerDown={markLyricsManualScroll} onTouchStart={markLyricsManualScroll}>
+                {!currentTrack ? (
+                  <div className="modal-lyrics-empty">
+                    <MusicGlyph />
+                    <p>选择一首歌，歌词会显示在这里</p>
+                  </div>
+                ) : null}
+                {currentTrack && loadingLyrics ? <div className="modal-lyrics-empty">正在加载歌词...</div> : null}
+                {currentTrack && !loadingLyrics && lyricsError ? <div className="modal-lyrics-empty">{lyricsError}</div> : null}
+                {currentTrack && !loadingLyrics && !lyricsError ? (
+                  <div className="modal-lyric-lines">
+                    {lyrics.map((line, index) => (
+                      <button
+                        type="button"
+                        key={`modal-${line.time}-${line.text}-${index}`}
+                        ref={index === activeLyricIndex ? activeModalLyricRef : null}
+                        className={index === activeLyricIndex ? "modal-lyric-line active" : "modal-lyric-line"}
+                        onClick={() => handleSeekToLyric(line.time)}
+                        title={`跳转到 ${formatPlaybackTime(line.time)}`}
+                      >
+                        <span>{line.text}</span>
+                        {line.translation ? <small>{line.translation}</small> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <footer className="player-modal-controls">
+          <div className="modal-track-card">
+            <CoverArt song={currentTrack} className="modal-track-cover" />
+            <div>
+              <strong>{currentTrack?.title ?? "等待选择歌曲"}</strong>
+              <span>{currentTrack?.artist ?? "从列表里播放一首歌"}</span>
+            </div>
+          </div>
+          <div className="control-buttons">
+            <button type="button" className={playbackMode === "shuffle" ? "dock-icon primary" : "dock-icon"} aria-label={playbackMode === "shuffle" ? "关闭随机播放" : "开启随机播放"} title={playbackMode === "shuffle" ? "随机播放已开启" : "开启随机播放"} onClick={handleTogglePlaybackMode}><PlayerIcon name="shuffle" /></button>
+            <button type="button" className="dock-icon" aria-label="上一首" onClick={handleReplay}><PlayerIcon name="previous" /></button>
+            <button type="button" className="dock-icon primary" onClick={handleTogglePlayback} aria-label={isPlaying ? "暂停" : "播放"}><PlayerIcon name={isPlaying ? "pause" : "play"} /></button>
+            <button type="button" className="dock-icon" aria-label="下一首" onClick={handleNextTrack}><PlayerIcon name="next" /></button>
+          </div>
+          <div className="dock-progress modal-progress">
+            <span>{formatPlaybackTime(playbackSeconds)}</span>
+            <input
+              className="range-progress"
+              style={playbackRangeStyle}
+              type="range"
+              min="0"
+              max={Math.max(playbackDuration, 1)}
+              step="1"
+              value={Math.min(playbackSeconds, Math.max(playbackDuration, 1))}
+              onChange={(event) => {
+                const audio = audioRef.current;
+                const nextTime = Number(event.target.value);
+                setPlaybackSeconds(nextTime);
+                if (audio) {
+                  audio.currentTime = nextTime;
+                }
+              }}
+            />
+            <span>{formatPlaybackTime(playbackDuration || parseDurationSeconds(currentTrack?.duration ?? "00:00"))}</span>
+          </div>
+          <div className="modal-volume">
+            <PlayerIcon name="volume" />
+            <input className="range-progress" style={volumeRangeStyle} type="range" min="0" max="100" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
+            <strong>{volume}</strong>
+          </div>
+        </footer>
+      </section>
+
+      <footer className="player-dock">
+        <div className="dock-track">
+          <button type="button" className="dock-cover-button" aria-label="打开全屏播放器" onClick={() => setIsPlayerExpanded(true)}>
+            <CoverArt song={currentTrack} className="dock-cover" />
+          </button>
+          <div className="dock-copy">
+            <strong>{currentTrack?.title ?? "等待选择歌曲"}</strong>
+            <p>{currentTrack ? `${currentTrack.artist} · ${currentTrack.album}` : "先点一首歌，再试听或直接播放。"}</p>
+          </div>
+          <button
+            type="button"
+            className={currentTrack && likedSongIds.includes(currentTrack.id) ? "dock-like active" : "dock-like"}
+            aria-label={currentTrack && likedSongIds.includes(currentTrack.id) ? "取消喜欢当前歌曲" : "喜欢当前歌曲"}
+            title={currentTrack && likedSongIds.includes(currentTrack.id) ? "取消喜欢" : "喜欢"}
+            disabled={!currentTrack || togglingLike}
+            onClick={() => void handleToggleCurrentTrackLike()}
+          >
+            <PlayerIcon name="heart" />
+          </button>
+        </div>
+
+        <div className="dock-controls">
+          <div className="control-buttons">
+            <button type="button" className={playbackMode === "shuffle" ? "dock-icon primary" : "dock-icon"} aria-label={playbackMode === "shuffle" ? "关闭随机播放" : "开启随机播放"} title={playbackMode === "shuffle" ? "随机播放已开启" : "开启随机播放"} onClick={handleTogglePlaybackMode}><PlayerIcon name="shuffle" /></button>
+            <button type="button" className="dock-icon" aria-label="上一首" onClick={handleReplay}><PlayerIcon name="previous" /></button>
+            <button type="button" className="dock-icon primary" onClick={handleTogglePlayback} aria-label={isPlaying ? "暂停" : "播放"}><PlayerIcon name={isPlaying ? "pause" : "play"} /></button>
+            <button type="button" className="dock-icon" aria-label="下一首" onClick={handleNextTrack}><PlayerIcon name="next" /></button>
+          </div>
+
+          <div className="dock-progress">
+            <span>{formatPlaybackTime(playbackSeconds)}</span>
+            <input
+              className="range-progress"
+              style={playbackRangeStyle}
+              type="range"
+              min="0"
+              max={Math.max(playbackDuration, 1)}
+              step="1"
+              value={Math.min(playbackSeconds, Math.max(playbackDuration, 1))}
+              onChange={(event) => {
+                const audio = audioRef.current;
+                const nextTime = Number(event.target.value);
+                setPlaybackSeconds(nextTime);
+                if (audio) {
+                  audio.currentTime = nextTime;
+                }
+              }}
+            />
+            <span>{formatPlaybackTime(playbackDuration || parseDurationSeconds(currentTrack?.duration ?? "00:00"))}</span>
+          </div>
+        </div>
+
+        <div className="dock-volume">
+          <button type="button" className="dock-queue-button" onClick={() => setIsPlayerExpanded(true)} aria-label="打开全屏播放器"><PlayerIcon name="queue" /></button>
+          <PlayerIcon name="volume" />
+          <input className="range-progress" style={volumeRangeStyle} type="range" min="0" max="100" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
+          <strong>{volume}</strong>
+          <button type="button" className="dock-more-button" aria-label="更多操作"><PlayerIcon name="more" /></button>
+        </div>
+      </footer>
+    </div>
+  );
+}

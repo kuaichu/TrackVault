@@ -1,0 +1,477 @@
+import type {
+  AlbumProfile,
+  AdminConfigUpdate,
+  AdminConfigView,
+  ArtistProfile,
+  AppSettings,
+  AuthSession,
+  NeteaseCaptchaSendResult,
+  NeteaseCellphoneLoginResult,
+  DownloadQualityLevel,
+  DownloadTask,
+  NeteaseCookieCheckResult,
+  NeteaseQrCheckResult,
+  NeteaseQrStartResult,
+  PersistedPlayerState,
+  PlaylistSongsPage,
+  Song,
+  SongLyrics,
+  UserPlaylist
+} from "./types";
+
+const CLIENT_SESSION_STORAGE_KEY = "trackvault:client-session-id";
+
+function getClientSessionId() {
+  try {
+    const existing = window.localStorage.getItem(CLIENT_SESSION_STORAGE_KEY);
+    if (existing) {
+      return existing;
+    }
+
+    const nextValue = crypto.randomUUID();
+    window.localStorage.setItem(CLIENT_SESSION_STORAGE_KEY, nextValue);
+    return nextValue;
+  } catch {
+    return "default";
+  }
+}
+
+async function apiFetch(input: string, init: RequestInit = {}) {
+  const headers = new Headers(init.headers ?? {});
+  headers.set("x-client-session-id", getClientSessionId());
+
+  return fetch(input, {
+    ...init,
+    headers
+  });
+}
+
+export function getStreamUrl(songId: string, level: DownloadQualityLevel, expectedDurationSeconds?: number) {
+  const params = new URLSearchParams({
+    id: songId,
+    level,
+    sid: getClientSessionId()
+  });
+
+  if (Number.isFinite(expectedDurationSeconds) && Number(expectedDurationSeconds) > 0) {
+    params.set("expectedDuration", String(Math.round(Number(expectedDurationSeconds))));
+  }
+
+  return `/api/stream?${params.toString()}`;
+}
+
+export async function searchSongs(query: string): Promise<Song[]> {
+  const response = await apiFetch(`/api/search?q=${encodeURIComponent(query)}`);
+  if (!response.ok) {
+    throw new Error("搜索失败");
+  }
+  const data = (await response.json()) as { results: Song[] };
+  return data.results;
+}
+
+export async function getDiscoverSongs(): Promise<Song[]> {
+  const response = await apiFetch("/api/discover/songs");
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取发现音乐失败");
+  }
+
+  const data = (await response.json()) as { songs: Song[] };
+  return data.songs;
+}
+
+export async function createDownload(song: Song, level: DownloadQualityLevel): Promise<DownloadTask> {
+  const response = await apiFetch("/api/download", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ song, level })
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "加入下载队列失败");
+  }
+
+  return (await response.json()) as DownloadTask;
+}
+
+export async function getTasks(): Promise<DownloadTask[]> {
+  const response = await apiFetch("/api/tasks");
+  if (!response.ok) {
+    throw new Error("获取任务失败");
+  }
+  return (await response.json()) as DownloadTask[];
+}
+
+export async function getPlaylists(): Promise<UserPlaylist[]> {
+  const response = await apiFetch("/api/playlists");
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取歌单失败");
+  }
+  const data = (await response.json()) as { playlists: UserPlaylist[] };
+  return data.playlists;
+}
+
+export async function getPlaylistSongs(playlistId: string, page = 1, limit = 100, keyword = ""): Promise<PlaylistSongsPage> {
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: String(limit)
+  });
+  if (keyword.trim()) {
+    params.set("keyword", keyword.trim());
+  }
+  const response = await apiFetch(`/api/playlists/${encodeURIComponent(playlistId)}/songs?${params.toString()}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取歌单歌曲失败");
+  }
+  return (await response.json()) as PlaylistSongsPage;
+}
+
+export async function getCloudSongs(): Promise<{ songs: Song[]; count: number; size: number; maxSize: number }> {
+  const response = await apiFetch("/api/cloud/songs");
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取云盘音乐失败");
+  }
+
+  return (await response.json()) as { songs: Song[]; count: number; size: number; maxSize: number };
+}
+
+export async function getDailyRecommendSongs(): Promise<Song[]> {
+  const response = await apiFetch("/api/recommend/daily");
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取每日推荐失败");
+  }
+
+  const data = (await response.json()) as { songs: Song[] };
+  return data.songs;
+}
+
+export async function getLyrics(songId: string): Promise<SongLyrics> {
+  const response = await apiFetch(`/api/lyrics/${encodeURIComponent(songId)}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取歌词失败");
+  }
+
+  const data = (await response.json()) as { lyrics: SongLyrics };
+  return data.lyrics;
+}
+
+export async function getArtistProfile(artistId: string): Promise<ArtistProfile> {
+  const response = await apiFetch(`/api/artists/${encodeURIComponent(artistId)}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取歌手信息失败");
+  }
+
+  const data = (await response.json()) as { artist: ArtistProfile };
+  return data.artist;
+}
+
+export async function getAlbumProfile(albumId: string): Promise<AlbumProfile> {
+  const response = await apiFetch(`/api/albums/${encodeURIComponent(albumId)}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取专辑信息失败");
+  }
+
+  const data = (await response.json()) as { album: AlbumProfile };
+  return data.album;
+}
+
+export async function getSongLiked(songId: string): Promise<boolean> {
+  const response = await apiFetch(`/api/likes/${encodeURIComponent(songId)}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取喜欢状态失败");
+  }
+
+  const data = (await response.json()) as { liked: boolean };
+  return Boolean(data.liked);
+}
+
+export async function setSongLiked(songId: string, liked: boolean): Promise<boolean> {
+  const response = await apiFetch(`/api/likes/${encodeURIComponent(songId)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ liked })
+  });
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? (liked ? "加入喜欢失败" : "取消喜欢失败"));
+  }
+
+  const data = (await response.json()) as { liked: boolean };
+  return Boolean(data.liked);
+}
+
+export async function resolveArtistByName(name: string): Promise<{ id: string; name: string }> {
+  const response = await apiFetch(`/api/artists/resolve/by-name?name=${encodeURIComponent(name)}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "解析歌手失败");
+  }
+
+  return (await response.json()) as { id: string; name: string };
+}
+
+export async function getSettings(): Promise<AppSettings> {
+  const response = await apiFetch("/api/settings");
+  if (!response.ok) {
+    throw new Error("获取设置失败");
+  }
+  return (await response.json()) as AppSettings;
+}
+
+export async function saveSettings(settings: AppSettings): Promise<AppSettings> {
+  const response = await apiFetch("/api/settings", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(settings)
+  });
+
+  if (!response.ok) {
+    throw new Error("保存设置失败");
+  }
+
+  return (await response.json()) as AppSettings;
+}
+
+export async function getAdminConfig(): Promise<AdminConfigView> {
+  const response = await apiFetch("/api/admin/config");
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取高级控制配置失败");
+  }
+
+  return (await response.json()) as AdminConfigView;
+}
+
+export async function saveAdminConfig(config: AdminConfigUpdate): Promise<AdminConfigView> {
+  const response = await apiFetch("/api/admin/config", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(config)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "保存高级控制配置失败");
+  }
+
+  return (await response.json()) as AdminConfigView;
+}
+
+export async function checkNeteaseCookie(cookie: string): Promise<NeteaseCookieCheckResult> {
+  const response = await apiFetch("/api/settings/netease-cookie/check", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ cookie })
+  });
+
+  if (!response.ok) {
+    throw new Error("检测 Cookie 失败");
+  }
+
+  return (await response.json()) as NeteaseCookieCheckResult;
+}
+
+export async function getSession(): Promise<AuthSession> {
+  const response = await apiFetch("/api/account");
+  if (!response.ok) {
+    throw new Error("获取账号信息失败");
+  }
+  return (await response.json()) as AuthSession;
+}
+
+export async function loginAccount(payload: { accountName: string; vipEnabled: boolean; note: string }): Promise<AuthSession> {
+  const response = await apiFetch("/api/account/login", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw new Error("登录失败");
+  }
+
+  return (await response.json()) as AuthSession;
+}
+
+export async function logoutAccount(): Promise<AuthSession> {
+  const response = await apiFetch("/api/account/logout", {
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw new Error("退出登录失败");
+  }
+
+  return (await response.json()) as AuthSession;
+}
+
+export async function startNeteaseQrLogin(): Promise<NeteaseQrStartResult> {
+  const response = await apiFetch("/api/account/netease/qr/start", {
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "二维码登录初始化失败");
+  }
+
+  return (await response.json()) as NeteaseQrStartResult;
+}
+
+export async function checkNeteaseQrLogin(key: string): Promise<NeteaseQrCheckResult> {
+  const response = await apiFetch(`/api/account/netease/qr/check?key=${encodeURIComponent(key)}`);
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "二维码登录状态检查失败");
+  }
+
+  return (await response.json()) as NeteaseQrCheckResult;
+}
+
+export async function sendNeteaseCaptcha(phone: string, countryCode = "86"): Promise<NeteaseCaptchaSendResult> {
+  const response = await apiFetch("/api/account/netease/captcha/send", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ phone, countryCode })
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "验证码发送失败");
+  }
+
+  return (await response.json()) as NeteaseCaptchaSendResult;
+}
+
+export async function loginWithNeteaseCellphone(phone: string, captcha: string, countryCode = "86"): Promise<NeteaseCellphoneLoginResult> {
+  const response = await apiFetch("/api/account/netease/cellphone/login", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ phone, captcha, countryCode })
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "手机号登录失败");
+  }
+
+  return (await response.json()) as NeteaseCellphoneLoginResult;
+}
+
+export async function getSearchHistory(): Promise<string[]> {
+  const response = await apiFetch("/api/history/search");
+  if (!response.ok) {
+    throw new Error("获取搜索记录失败");
+  }
+
+  const data = (await response.json()) as { items: string[] };
+  return data.items;
+}
+
+export async function saveSearchHistory(items: string[]): Promise<string[]> {
+  const response = await apiFetch("/api/history/search", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ items })
+  });
+
+  if (!response.ok) {
+    throw new Error("保存搜索记录失败");
+  }
+
+  const data = (await response.json()) as { items: string[] };
+  return data.items;
+}
+
+export async function removeSearchHistory(keyword: string): Promise<string[]> {
+  const response = await apiFetch(`/api/history/search?keyword=${encodeURIComponent(keyword)}`, {
+    method: "DELETE"
+  });
+
+  if (!response.ok) {
+    throw new Error("删除搜索记录失败");
+  }
+
+  const data = (await response.json()) as { items: string[] };
+  return data.items;
+}
+
+export async function getPlayHistory(): Promise<Song[]> {
+  const response = await apiFetch("/api/history/play");
+  if (!response.ok) {
+    throw new Error("获取播放历史失败");
+  }
+
+  const data = (await response.json()) as { items: Song[] };
+  return data.items;
+}
+
+export async function savePlayHistory(items: Song[]): Promise<Song[]> {
+  const response = await apiFetch("/api/history/play", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ items })
+  });
+
+  if (!response.ok) {
+    throw new Error("保存播放历史失败");
+  }
+
+  const data = (await response.json()) as { items: Song[] };
+  return data.items;
+}
+
+export async function getPlayerState(): Promise<PersistedPlayerState> {
+  const response = await apiFetch("/api/player-state");
+  if (!response.ok) {
+    throw new Error("获取播放器状态失败");
+  }
+
+  return (await response.json()) as PersistedPlayerState;
+}
+
+export async function savePlayerState(state: PersistedPlayerState): Promise<PersistedPlayerState> {
+  const response = await apiFetch("/api/player-state", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(state)
+  });
+
+  if (!response.ok) {
+    throw new Error("保存播放器状态失败");
+  }
+
+  return (await response.json()) as PersistedPlayerState;
+}
