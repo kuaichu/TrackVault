@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cancelNeteaseImportAuditJob, getNeteaseImportAuditJob, startNeteaseImportAuditJob } from "./netease-import-audit-job.js";
+import { cancelNeteaseImportAuditJob, formatNeteaseImportAuditJobExport, getNeteaseImportAuditJob, startNeteaseImportAuditJob } from "./netease-import-audit-job.js";
 
 const unavailableTrack = {
   id: "song-1",
@@ -96,4 +96,33 @@ test("cancelNeteaseImportAuditJob marks running jobs for cancellation", async ()
 
   const cancelled = await waitForJob(job.id, "cancelled");
   assert.equal(cancelled.status, "cancelled");
+});
+
+test("formatNeteaseImportAuditJobExport includes normal playable text playlist", () => {
+  const exported = formatNeteaseImportAuditJobExport(
+    {
+      playlistId: "liked",
+      playlistName: "我喜欢的音乐",
+      scannedCount: 2,
+      summary: {
+        total: 2,
+        playable: 1,
+        suspect: 1,
+        replaceable: 1,
+        needsReview: 0,
+        unusable: 0
+      },
+      playableTrackIds: ["1001"],
+      playableTextPlaylist: "正常歌曲 - 正常歌手",
+      items: [],
+      textPlaylist: "替代歌曲 - 替代歌手",
+      unusableText: "",
+      markdownReport: ""
+    },
+    "text"
+  );
+
+  assert.match(exported.content, /# 正常可播文字歌单/);
+  assert.match(exported.content, /正常歌曲 - 正常歌手/);
+  assert.match(exported.content, /替代歌曲 - 替代歌手/);
 });

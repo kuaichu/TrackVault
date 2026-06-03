@@ -46,3 +46,25 @@ test("formatPlaylistCompareExport creates a text playlist for selected compariso
   assert.match(output.content, /左边独有 - A/);
   assert.doesNotMatch(output.content, /晴天 - 周杰伦/);
 });
+
+test("comparePlaylists reports progress while comparing left tracks", () => {
+  const progress: Array<{ phase: string; processed: number; total: number; currentTitle?: string }> = [];
+
+  comparePlaylists(
+    {
+      left: { provider: "netease", playlistId: "left", playlistName: "左歌单", tracks: leftTracks },
+      right: { provider: "qq", playlistId: "right", playlistName: "右歌单", tracks: rightTracks }
+    },
+    {
+      onProgress: (nextProgress) => {
+        progress.push(nextProgress);
+      }
+    }
+  );
+
+  assert.equal(progress[0].phase, "comparing");
+  assert.equal(progress[0].total, leftTracks.length);
+  assert.ok(progress.some((item) => item.processed === 1 && item.currentTitle === "晴天"));
+  assert.equal(progress[progress.length - 1].phase, "completed");
+  assert.equal(progress[progress.length - 1].processed, leftTracks.length);
+});

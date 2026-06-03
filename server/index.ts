@@ -22,7 +22,9 @@ import { checkNeteaseQrLogin, loginWithNeteaseCellphone, sendNeteaseCaptcha, sta
 import { formatTransferExport } from "./playlist-transfer/export-formatters.js";
 import { buildNeteaseImportedPlaylistAudit } from "./playlist-transfer/netease-import-audit.js";
 import { cancelNeteaseImportAuditJob, formatNeteaseImportAuditJobExport, getNeteaseImportAuditJob, startNeteaseImportAuditJob } from "./playlist-transfer/netease-import-audit-job.js";
+import { getPlaylistCompareJob, startPlaylistCompareJob } from "./playlist-transfer/playlist-compare-job.js";
 import { comparePlaylists, formatPlaylistCompareExport } from "./playlist-transfer/playlist-compare.js";
+import { getPlaylistTransferRunJob, startPlaylistTransferRunJob } from "./playlist-transfer/playlist-transfer-job.js";
 import { checkNeteaseProviderTrackAvailability, createNeteasePlaylistFromTrackIds, loadNeteasePlaylistAuditEntries, loadNeteasePlaylistTransferTracks, searchNeteaseProviderTracks, searchNeteaseProviderTracksByTitle } from "./playlist-transfer/netease-provider.js";
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
 import { createPlaylistTransferJob, getNeteaseImportTrackIds } from "./playlist-transfer/service.js";
@@ -489,6 +491,36 @@ app.post("/api/playlist-transfer/jobs", async (request, response) => {
   }
 });
 
+app.post("/api/playlist-transfer/jobs/progress", async (request, response) => {
+  const ownerKey = await getCurrentUserKey();
+  const payload = request.body as TransferImportRequest;
+
+  const job = startPlaylistTransferRunJob(
+    {
+      ...payload,
+      ownerKey
+    },
+    {
+      loadSourceTracks: (input) => loadTransferSourceTracks(input),
+      searchTargetTracks: searchTransferTargetTracks,
+      checkAvailability: checkTransferTargetAvailability,
+      saveJob: savePlaylistTransferJob
+    }
+  );
+
+  response.status(202).json({ job });
+});
+
+app.get("/api/playlist-transfer/jobs/progress/:id", (request, response) => {
+  const job = getPlaylistTransferRunJob(request.params.id);
+  if (!job) {
+    response.status(404).json({ message: "歌单互转进度任务不存在" });
+    return;
+  }
+
+  response.json({ job });
+});
+
 app.get("/api/playlist-transfer/jobs/:id", async (request, response) => {
   const ownerKey = await getCurrentUserKey();
   const job = await getPlaylistTransferJob(ownerKey, request.params.id);
@@ -676,6 +708,50 @@ app.post("/api/playlist-transfer/netease-import-audit/jobs/:id/import/playable",
       message: error instanceof Error ? error.message : "创建正常歌曲新歌单失败"
     });
   }
+});
+
+app.post("/api/playlist-transfer/compare/jobs", (request, response) => {
+  const leftProvider = typeof request.body?.leftProvider === "string" ? request.body.leftProvider.trim() : "";
+  const rightProvider = typeof request.body?.rightProvider === "string" ? request.body.rightProvider.trim() : "";
+  const leftPlaylistId = typeof request.body?.leftPlaylistId === "string" ? request.body.leftPlaylistId.trim() : "";
+  const rightPlaylistId = typeof request.body?.rightPlaylistId === "string" ? request.body.rightPlaylistId.trim() : "";
+  const leftPlaylistName = typeof request.body?.leftPlaylistName === "string" && request.body.leftPlaylistName.trim()
+    ? request.body.leftPlaylistName.trim()
+    : `左侧歌单 ${leftPlaylistId}`;
+  const rightPlaylistName = typeof request.body?.rightPlaylistName === "string" && request.body.rightPlaylistName.trim()
+    ? request.body.rightPlaylistName.trim()
+    : `右侧歌单 ${rightPlaylistId}`;
+
+  if (!leftPlaylistId || !rightPlaylistId) {
+    response.status(400).json({ message: "请填写左右两个歌单 ID。" });
+    return;
+  }
+
+  const job = startPlaylistCompareJob(
+    {
+      leftProvider: leftProvider as "netease" | "qq",
+      leftPlaylistId,
+      leftPlaylistName,
+      rightProvider: rightProvider as "netease" | "qq",
+      rightPlaylistId,
+      rightPlaylistName
+    },
+    {
+      loadSideTracks: loadCompareSideTracks
+    }
+  );
+
+  response.status(202).json({ job });
+});
+
+app.get("/api/playlist-transfer/compare/jobs/:id", (request, response) => {
+  const job = getPlaylistCompareJob(request.params.id);
+  if (!job) {
+    response.status(404).json({ message: "歌单对比进度任务不存在" });
+    return;
+  }
+
+  response.json({ job });
 });
 
 app.post("/api/playlist-transfer/compare", async (request, response) => {

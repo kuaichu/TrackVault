@@ -6,13 +6,13 @@ import {
   createDownload,
   cancelNeteaseImportAuditJob,
   createNeteaseImportAuditPlayablePlaylist,
-  createPlaylistCompare,
   exportPlaylistCompare,
   exportNeteaseImportAuditJob,
   getAlbumProfile,
   getArtistProfile,
+  getPlaylistCompareJob,
   getNeteaseImportAuditJob,
-  createPlaylistTransferJob,
+  getPlaylistTransferRunJob,
   exportPlaylistTransferJob,
   importPlaylistTransferToNetease,
   getSongLiked,
@@ -43,9 +43,11 @@ import {
   saveSettings,
   startNeteaseQrLogin,
   startNeteaseImportAuditJob,
+  startPlaylistCompareJob,
+  startPlaylistTransferRunJob,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, Song, SongArtist, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserPlaylist } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserPlaylist } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
@@ -448,7 +450,9 @@ export default function App() {
   const qrAutoRefreshPendingRef = useRef(false);
   const qrAutoRefreshCountRef = useRef(0);
   const qrCloseTimerRef = useRef<number | null>(null);
+  const transferRunJobIdRef = useRef("");
   const neteaseAuditJobIdRef = useRef("");
+  const playlistCompareJobIdRef = useRef("");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Song[]>([]);
   const [searchHistory, setSearchHistory] = useState<string[]>(loadSearchHistory);
@@ -467,6 +471,7 @@ export default function App() {
   const [transferExportContent, setTransferExportContent] = useState("");
   const [transferImportName, setTransferImportName] = useState("转换后的歌单");
   const [transferImportResult, setTransferImportResult] = useState<NeteaseTransferImportResult | null>(null);
+  const [transferRunJob, setTransferRunJob] = useState<PlaylistTransferRunJob | null>(null);
   const [transferLoading, setTransferLoading] = useState(false);
   const [transferExporting, setTransferExporting] = useState(false);
   const [transferImporting, setTransferImporting] = useState(false);
@@ -488,6 +493,7 @@ export default function App() {
   const [compareLeftPlaylistId, setCompareLeftPlaylistId] = useState("");
   const [compareRightPlaylistId, setCompareRightPlaylistId] = useState("");
   const [playlistCompareResult, setPlaylistCompareResult] = useState<PlaylistCompareResult | null>(null);
+  const [playlistCompareJob, setPlaylistCompareJob] = useState<PlaylistCompareJob | null>(null);
   const [playlistCompareLoading, setPlaylistCompareLoading] = useState(false);
   const [playlistCompareExporting, setPlaylistCompareExporting] = useState(false);
   const [playlistCompareExportFormat, setPlaylistCompareExportFormat] = useState<TransferExportFormat>("text");
@@ -879,6 +885,42 @@ export default function App() {
     }
   }
 
+  async function pollPlaylistTransferRunJob(jobId: string) {
+    while (transferRunJobIdRef.current === jobId) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      if (transferRunJobIdRef.current !== jobId) {
+        return;
+      }
+
+      try {
+        const job = await getPlaylistTransferRunJob(jobId);
+        if (transferRunJobIdRef.current !== jobId) {
+          return;
+        }
+
+        setTransferRunJob(job);
+        if (job.status === "completed" && job.result) {
+          setTransferJob(job.result);
+          setTransferImportName(`${job.result.playlistName} 转换结果`);
+          setTransferImportResult(null);
+          setTransferLoading(false);
+          setMessage(`歌单互转完成：${job.result.summary.matched} 首匹配，${job.result.summary.manualReview} 首待确认，${job.result.summary.notFound} 首未找到。`);
+          return;
+        }
+
+        if (job.status === "failed") {
+          setTransferLoading(false);
+          setMessage(job.error ?? "创建歌单互转任务失败");
+          return;
+        }
+      } catch (error) {
+        setTransferLoading(false);
+        setMessage(error instanceof Error ? error.message : "获取歌单互转进度失败");
+        return;
+      }
+    }
+  }
+
   async function handleCreateTransferJob() {
     const sourceProvider = transferSourceProvider;
     const targetProvider = transferTargetProvider;
@@ -900,11 +942,13 @@ export default function App() {
     }
 
     setTransferLoading(true);
+    setTransferJob(null);
+    setTransferRunJob(null);
     setTransferExportContent("");
     setMessage("正在创建歌单互转任务");
 
     try {
-      const job = await createPlaylistTransferJob({
+      const job = await startPlaylistTransferRunJob({
         sourceProvider,
         targetProvider,
         playlistId,
@@ -912,13 +956,13 @@ export default function App() {
         text: transferTextInput,
         checkAvailability: transferCheckAvailability
       });
-      setTransferJob(job);
-      setTransferImportName(`${job.playlistName} 转换结果`);
+      transferRunJobIdRef.current = job.id;
+      setTransferRunJob(job);
       setTransferImportResult(null);
-      setMessage(`歌单互转完成：${job.summary.matched} 首匹配，${job.summary.manualReview} 首待确认，${job.summary.notFound} 首未找到。`);
+      setMessage(`已提交歌单互转任务：${playlistName}`);
+      void pollPlaylistTransferRunJob(job.id);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "创建歌单互转任务失败");
-    } finally {
       setTransferLoading(false);
     }
   }
@@ -1119,6 +1163,42 @@ export default function App() {
     });
   }
 
+  async function pollPlaylistCompareJob(jobId: string) {
+    while (playlistCompareJobIdRef.current === jobId) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      if (playlistCompareJobIdRef.current !== jobId) {
+        return;
+      }
+
+      try {
+        const job = await getPlaylistCompareJob(jobId);
+        if (playlistCompareJobIdRef.current !== jobId) {
+          return;
+        }
+
+        setPlaylistCompareJob(job);
+        if (job.status === "completed" && job.result) {
+          setPlaylistCompareResult(job.result);
+          setPlaylistCompareLoading(false);
+          setMessage(
+            `对比完成：完全一样 ${job.result.summary.exact} 首，歌名同但歌手不同 ${job.result.summary.sameTitleDifferentArtist} 首，歌名相似 ${job.result.summary.similarTitle} 首。`
+          );
+          return;
+        }
+
+        if (job.status === "failed") {
+          setPlaylistCompareLoading(false);
+          setMessage(job.error ?? "歌单对比失败");
+          return;
+        }
+      } catch (error) {
+        setPlaylistCompareLoading(false);
+        setMessage(error instanceof Error ? error.message : "获取歌单对比进度失败");
+        return;
+      }
+    }
+  }
+
   async function handleCreatePlaylistCompare() {
     if (compareLeftProvider === "netease" || compareRightProvider === "netease") {
       const cookieOk = await ensureNeteaseCookieHealthy();
@@ -1141,11 +1221,12 @@ export default function App() {
 
     setPlaylistCompareLoading(true);
     setPlaylistCompareResult(null);
+    setPlaylistCompareJob(null);
     setPlaylistCompareExportContent("");
     setMessage("正在对比两个歌单");
 
     try {
-      const result = await createPlaylistCompare({
+      const job = await startPlaylistCompareJob({
         leftProvider: compareLeftProvider,
         leftPlaylistId,
         leftPlaylistName,
@@ -1153,13 +1234,12 @@ export default function App() {
         rightPlaylistId,
         rightPlaylistName
       });
-      setPlaylistCompareResult(result);
-      setMessage(
-        `对比完成：完全一样 ${result.summary.exact} 首，歌名同但歌手不同 ${result.summary.sameTitleDifferentArtist} 首，歌名相似 ${result.summary.similarTitle} 首。`
-      );
+      playlistCompareJobIdRef.current = job.id;
+      setPlaylistCompareJob(job);
+      setMessage(`已提交歌单对比任务：${leftPlaylistName} / ${rightPlaylistName}`);
+      void pollPlaylistCompareJob(job.id);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "歌单对比失败");
-    } finally {
       setPlaylistCompareLoading(false);
     }
   }
@@ -2701,6 +2781,23 @@ export default function App() {
     }
   };
 
+  const getTransferRunJobStatusLabel = (job: PlaylistTransferRunJob) => {
+    switch (job.progress.phase) {
+      case "queued":
+        return "排队中";
+      case "loading":
+        return "读取来源歌单";
+      case "matching":
+        return "匹配中";
+      case "saving":
+        return "保存结果";
+      case "completed":
+        return "已完成";
+      case "failed":
+        return "失败";
+    }
+  };
+
   const getNeteaseAuditJobStatusLabel = (job: NeteaseImportAuditJob) => {
     if (job.status === "cancelling") {
       return "取消中";
@@ -2722,6 +2819,26 @@ export default function App() {
     }
   };
 
+  const getPlaylistCompareJobStatusLabel = (job: PlaylistCompareJob) => {
+    switch (job.progress.phase) {
+      case "queued":
+        return "排队中";
+      case "loading":
+        return "读取左右歌单";
+      case "comparing":
+        return "对比中";
+      case "completed":
+        return "已完成";
+      case "failed":
+        return "失败";
+    }
+  };
+
+  const transferRunProgress = transferRunJob?.progress;
+  const transferRunProgressTotal = Math.max(1, transferRunProgress?.total ?? 0);
+  const transferRunProgressPercent = transferRunProgress
+    ? Math.min(100, Math.round((transferRunProgress.processed / transferRunProgressTotal) * 100))
+    : 0;
   const neteaseAuditProgress = neteaseImportAuditJob?.progress;
   const neteaseAuditProgressTotal = Math.max(1, neteaseAuditProgress?.total ?? neteaseAuditMaxTracks);
   const neteaseAuditProgressPercent = neteaseAuditProgress
@@ -2732,6 +2849,11 @@ export default function App() {
     : false;
   const canExportNeteaseAudit = neteaseImportAuditJob?.status === "completed" && Boolean(neteaseImportAudit);
   const canCreateNeteaseAuditPlayablePlaylist = canExportNeteaseAudit && (neteaseImportAudit?.summary.playable ?? 0) > 0;
+  const playlistCompareProgress = playlistCompareJob?.progress;
+  const playlistCompareProgressTotal = Math.max(1, playlistCompareProgress?.total ?? 0);
+  const playlistCompareProgressPercent = playlistCompareProgress
+    ? Math.min(100, Math.round((playlistCompareProgress.processed / playlistCompareProgressTotal) * 100))
+    : 0;
 
   const getPlaylistCompareStatusLabel = (status: PlaylistCompareStatus) => {
     switch (status) {
@@ -2951,6 +3073,31 @@ export default function App() {
                       {transferLoading ? "转换中" : "开始转换"}
                     </button>
                   </div>
+                  {transferRunJob ? (
+                    <div className="audit-progress-panel">
+                      <div className="audit-progress-head">
+                        <strong>{getTransferRunJobStatusLabel(transferRunJob)}</strong>
+                        <span>{transferRunProgressPercent}%</span>
+                      </div>
+                      <div className="audit-progress-track" aria-label="歌单互转进度">
+                        <span style={{ width: `${transferRunProgressPercent}%` }} />
+                      </div>
+                      <div className="audit-progress-meta">
+                        <span>已处理 {transferRunJob.progress.processed}/{transferRunJob.progress.total}</span>
+                        <span>已匹配 {transferRunJob.progress.matched}</span>
+                        <span>待确认 {transferRunJob.progress.manualReview}</span>
+                        <span>未找到 {transferRunJob.progress.notFound}</span>
+                        <span>受限 {transferRunJob.progress.unavailable}</span>
+                        <span>重复 {transferRunJob.progress.duplicate}</span>
+                      </div>
+                      {transferRunJob.progress.currentTitle ? (
+                        <p>当前：{transferRunJob.progress.currentTitle}</p>
+                      ) : null}
+                      {transferRunJob.error ? (
+                        <p>{transferRunJob.error}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </section>
 
                 <section className="settings-card transfer-report-card">
@@ -3088,7 +3235,7 @@ export default function App() {
                         {neteaseAuditPlayableImporting ? "创建中" : "创建正常歌曲新歌单"}
                       </button>
                       <p>
-                        只导入原歌单里当前正常可播的 {neteaseImportAudit.summary.playable} 首；可替代歌曲保留在下面的文字歌单里，暂无替代歌曲单独列出。
+                        只导入原歌单里当前正常可播的 {neteaseImportAudit.summary.playable} 首；如果网易云拒绝直接创建，可以复制下面的正常可播文字歌单导入。
                       </p>
                       {neteaseAuditPlayableImportResult ? (
                         <p>
@@ -3115,6 +3262,10 @@ export default function App() {
                     </div>
 
                     <div className="netease-audit-output-grid">
+                      <label>
+                        <span>正常可播文字歌单</span>
+                        <textarea className="transfer-export-output" value={neteaseImportAudit.playableTextPlaylist || "当前扫描范围内没有正常可播歌曲。"} readOnly />
+                      </label>
                       <label>
                         <span>可重新导入的文字歌单</span>
                         <textarea className="transfer-export-output" value={neteaseImportAudit.textPlaylist || "没有可自动替代的歌曲。"} readOnly />
@@ -3191,6 +3342,31 @@ export default function App() {
                       {playlistCompareLoading ? "对比中" : "开始对比"}
                     </button>
                   </div>
+                  {playlistCompareJob ? (
+                    <div className="audit-progress-panel">
+                      <div className="audit-progress-head">
+                        <strong>{getPlaylistCompareJobStatusLabel(playlistCompareJob)}</strong>
+                        <span>{playlistCompareProgressPercent}%</span>
+                      </div>
+                      <div className="audit-progress-track" aria-label="歌单对比进度">
+                        <span style={{ width: `${playlistCompareProgressPercent}%` }} />
+                      </div>
+                      <div className="audit-progress-meta">
+                        <span>已对比 {playlistCompareJob.progress.processed}/{playlistCompareJob.progress.total}</span>
+                        <span>完全一样 {playlistCompareJob.progress.exact}</span>
+                        <span>同名异歌手 {playlistCompareJob.progress.sameTitleDifferentArtist}</span>
+                        <span>歌名相似 {playlistCompareJob.progress.similarTitle}</span>
+                        <span>仅左侧 {playlistCompareJob.progress.leftOnly}</span>
+                        <span>仅右侧 {playlistCompareJob.progress.rightOnly}</span>
+                      </div>
+                      {playlistCompareJob.progress.currentTitle ? (
+                        <p>当前：{playlistCompareJob.progress.currentTitle}</p>
+                      ) : null}
+                      {playlistCompareJob.error ? (
+                        <p>{playlistCompareJob.error}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </section>
 
                 {playlistCompareResult ? (

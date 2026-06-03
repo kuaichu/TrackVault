@@ -8,7 +8,7 @@ import type { NeteaseAuditSourceEntry, NeteaseRawPlaylistTrack, NeteaseRawPrivil
 import type { ProviderTrack, TransferTrack } from "./types.js";
 
 const require = createRequire(import.meta.url);
-const { playlist_create, playlist_track_add, playlist_track_all } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
+const { playlist_create, playlist_track_all, playlist_tracks } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
 
 function parseDurationSeconds(duration: string | undefined) {
   const [minutesText, secondsText] = (duration ?? "").split(":");
@@ -42,6 +42,14 @@ function songToProviderTrack(song: Song): ProviderTrack {
     durationSeconds: parseDurationSeconds(song.duration),
     raw: song
   };
+}
+
+function getNeteaseApiErrorMessage(body: { code?: number; message?: string; msg?: string }, fallback: string) {
+  if (body.code === 401) {
+    return "无权限操作歌单";
+  }
+
+  return body.message ?? body.msg ?? fallback;
 }
 
 export async function loadNeteasePlaylistTransferTracks(playlistId: string) {
@@ -109,7 +117,11 @@ export async function createNeteasePlaylistFromTrackIds(name: string, trackIds: 
     privacy: 0,
     cookie
   });
-  const body = createResponse.body as { id?: number | string; playlist?: { id?: number | string } };
+  const body = createResponse.body as { code?: number; message?: string; msg?: string; id?: number | string; playlist?: { id?: number | string } };
+  if (typeof body.code === "number" && body.code !== 200) {
+    throw new Error(getNeteaseApiErrorMessage(body, `网易云歌单创建失败：${body.code}`));
+  }
+
   const playlistId = String(body.id ?? body.playlist?.id ?? "");
   if (!playlistId) {
     throw new Error("网易云歌单创建成功但未返回歌单 ID。");
@@ -118,11 +130,17 @@ export async function createNeteasePlaylistFromTrackIds(name: string, trackIds: 
   const batchSize = 500;
   for (let index = 0; index < trackIds.length; index += batchSize) {
     const batch = trackIds.slice(index, index + batchSize);
-    await playlist_track_add({
+    const addResponse = await playlist_tracks({
+      op: "add",
       pid: playlistId,
-      ids: batch.join(","),
+      tracks: batch.join(","),
       cookie
     });
+    const addBody = addResponse.body as { code?: number; message?: string; msg?: string };
+    if (typeof addBody.code === "number" && addBody.code !== 200) {
+      const message = getNeteaseApiErrorMessage(addBody, `网易云拒绝添加歌曲：${addBody.code}`);
+      throw new Error(`网易云已创建歌单 ${playlistId}，但添加歌曲失败：${message}。请复制正常可播文字歌单导入。`);
+    }
   }
 
   return {

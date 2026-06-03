@@ -210,6 +210,9 @@ function formatCsv(audit: NeteaseImportedPlaylistAudit) {
 
 function formatText(audit: NeteaseImportedPlaylistAudit) {
   const sections = [
+    "# 正常可播文字歌单",
+    audit.playableTextPlaylist || "无",
+    "",
     "# 可重新导入的文字歌单",
     audit.textPlaylist || "无",
     "",

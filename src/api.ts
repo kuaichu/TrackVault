@@ -18,10 +18,12 @@ import type {
   NeteaseTransferImportResult,
   PersistedPlayerState,
   PlaylistCompareExportRequest,
+  PlaylistCompareJob,
   PlaylistCompareRequest,
   PlaylistCompareResult,
   PlaylistSongsPage,
   PlaylistTransferJob,
+  PlaylistTransferRunJob,
   Song,
   SongLyrics,
   TransferExportFormat,
@@ -514,6 +516,36 @@ export async function createPlaylistTransferJob(payload: TransferImportRequest):
   return (await response.json()) as PlaylistTransferJob;
 }
 
+export async function startPlaylistTransferRunJob(payload: TransferImportRequest): Promise<PlaylistTransferRunJob> {
+  const response = await apiFetch("/api/playlist-transfer/jobs/progress", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "启动歌单互转任务失败");
+  }
+
+  const data = (await response.json()) as { job: PlaylistTransferRunJob };
+  return data.job;
+}
+
+export async function getPlaylistTransferRunJob(jobId: string): Promise<PlaylistTransferRunJob> {
+  const response = await apiFetch(`/api/playlist-transfer/jobs/progress/${encodeURIComponent(jobId)}`);
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取歌单互转进度失败");
+  }
+
+  const data = (await response.json()) as { job: PlaylistTransferRunJob };
+  return data.job;
+}
+
 export async function exportPlaylistTransferJob(jobId: string, format: TransferExportFormat): Promise<TransferExportResult> {
   const response = await apiFetch(`/api/playlist-transfer/jobs/${encodeURIComponent(jobId)}/export`, {
     method: "POST",
@@ -658,6 +690,36 @@ export async function createPlaylistCompare(payload: PlaylistCompareRequest): Pr
   }
 
   return (await response.json()) as PlaylistCompareResult;
+}
+
+export async function startPlaylistCompareJob(payload: PlaylistCompareRequest): Promise<PlaylistCompareJob> {
+  const response = await apiFetch("/api/playlist-transfer/compare/jobs", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "启动歌单对比任务失败");
+  }
+
+  const data = (await response.json()) as { job: PlaylistCompareJob };
+  return data.job;
+}
+
+export async function getPlaylistCompareJob(jobId: string): Promise<PlaylistCompareJob> {
+  const response = await apiFetch(`/api/playlist-transfer/compare/jobs/${encodeURIComponent(jobId)}`);
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取歌单对比进度失败");
+  }
+
+  const data = (await response.json()) as { job: PlaylistCompareJob };
+  return data.job;
 }
 
 export async function exportPlaylistCompare(payload: PlaylistCompareExportRequest): Promise<TransferExportResult> {

@@ -11,15 +11,31 @@ import type {
   TransferTrackResult
 } from "./types.js";
 
-type CreatePlaylistTransferInput = TransferImportRequest & {
+export type CreatePlaylistTransferInput = TransferImportRequest & {
   ownerKey: string;
 };
 
-type CreatePlaylistTransferDeps = {
+export type PlaylistTransferProgressPhase = "loading" | "matching" | "saving" | "completed";
+
+export type PlaylistTransferProgress = {
+  phase: PlaylistTransferProgressPhase;
+  processed: number;
+  total: number;
+  matched: number;
+  manualReview: number;
+  notFound: number;
+  unavailable: number;
+  duplicate: number;
+  skipped: number;
+  currentTitle?: string;
+};
+
+export type CreatePlaylistTransferDeps = {
   loadSourceTracks?: (input: CreatePlaylistTransferInput) => Promise<TransferTrack[]>;
   searchTargetTracks: (track: TransferTrack, targetProvider: TransferTargetProvider) => Promise<ProviderTrack[]>;
   checkAvailability?: (candidate: MatchCandidate) => Promise<{ status: TransferTrackResult["status"]; reason: string } | null>;
   saveJob: (job: PlaylistTransferJob) => Promise<PlaylistTransferJob>;
+  onProgress?: (progress: PlaylistTransferProgress) => void;
 };
 
 function normalizeDuplicateKey(track: TransferTrack) {
@@ -76,10 +92,34 @@ function applyCandidateAvailability(result: TransferTrackResult): TransferTrackR
   };
 }
 
+function buildProgress(
+  phase: PlaylistTransferProgressPhase,
+  results: TransferTrackResult[],
+  total: number,
+  currentTitle?: string
+): PlaylistTransferProgress {
+  const summary = summarizeTransferResults(results);
+
+  return {
+    phase,
+    processed: results.length,
+    total,
+    matched: summary.matched,
+    manualReview: summary.manualReview,
+    notFound: summary.notFound,
+    unavailable: summary.unavailable,
+    duplicate: summary.duplicate,
+    skipped: summary.skipped,
+    currentTitle
+  };
+}
+
 export async function createPlaylistTransferJob(input: CreatePlaylistTransferInput, deps: CreatePlaylistTransferDeps) {
+  deps.onProgress?.(buildProgress("loading", [], 0));
   const sourceTracks = await loadInputTracks(input, deps);
   const seen = new Set<string>();
   const results: TransferTrackResult[] = [];
+  deps.onProgress?.(buildProgress("matching", results, sourceTracks.length));
 
   for (const sourceTrack of sourceTracks) {
     const duplicateKey = normalizeDuplicateKey(sourceTrack);
@@ -90,6 +130,7 @@ export async function createPlaylistTransferJob(input: CreatePlaylistTransferInp
         candidates: [],
         reason: "导入列表中已存在相同歌名和歌手"
       });
+      deps.onProgress?.(buildProgress("matching", results, sourceTracks.length, sourceTrack.title));
       continue;
     }
     seen.add(duplicateKey);
@@ -100,6 +141,7 @@ export async function createPlaylistTransferJob(input: CreatePlaylistTransferInp
         status: "matched",
         candidates: []
       });
+      deps.onProgress?.(buildProgress("matching", results, sourceTracks.length, sourceTrack.title));
       continue;
     }
 
@@ -118,6 +160,7 @@ export async function createPlaylistTransferJob(input: CreatePlaylistTransferInp
     }
 
     results.push(result);
+    deps.onProgress?.(buildProgress("matching", results, sourceTracks.length, sourceTrack.title));
   }
 
   const now = new Date().toISOString();
@@ -133,7 +176,10 @@ export async function createPlaylistTransferJob(input: CreatePlaylistTransferInp
     updatedAt: now
   };
 
-  return deps.saveJob(job);
+  deps.onProgress?.(buildProgress("saving", results, sourceTracks.length));
+  const savedJob = await deps.saveJob(job);
+  deps.onProgress?.(buildProgress("completed", results, sourceTracks.length));
+  return savedJob;
 }
 
 export function getNeteaseImportTrackIds(job: PlaylistTransferJob) {

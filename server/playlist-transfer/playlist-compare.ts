@@ -38,6 +38,20 @@ export type PlaylistCompareResult = {
   createdAt: string;
 };
 
+export type PlaylistCompareProgressPhase = "comparing" | "completed";
+
+export type PlaylistCompareProgress = {
+  phase: PlaylistCompareProgressPhase;
+  processed: number;
+  total: number;
+  exact: number;
+  sameTitleDifferentArtist: number;
+  similarTitle: number;
+  leftOnly: number;
+  rightOnly: number;
+  currentTitle?: string;
+};
+
 export type PlaylistCompareRequest = {
   leftProvider: TransferSourceProvider;
   leftPlaylistId?: string;
@@ -161,11 +175,36 @@ function findBestRightMatch(leftTrack: TransferTrack, rightTracks: TransferTrack
   return best;
 }
 
-export function comparePlaylists(input: { left: PlaylistCompareSide; right: PlaylistCompareSide }): PlaylistCompareResult {
+function buildCompareProgress(
+  phase: PlaylistCompareProgressPhase,
+  items: PlaylistCompareItem[],
+  processed: number,
+  total: number,
+  currentTitle?: string
+): PlaylistCompareProgress {
+  return {
+    phase,
+    processed,
+    total,
+    exact: items.filter((item) => item.status === "exact").length,
+    sameTitleDifferentArtist: items.filter((item) => item.status === "same_title_different_artist").length,
+    similarTitle: items.filter((item) => item.status === "similar_title").length,
+    leftOnly: items.filter((item) => item.status === "left_only").length,
+    rightOnly: items.filter((item) => item.status === "right_only").length,
+    currentTitle
+  };
+}
+
+export function comparePlaylists(
+  input: { left: PlaylistCompareSide; right: PlaylistCompareSide },
+  options: { onProgress?: (progress: PlaylistCompareProgress) => void } = {}
+): PlaylistCompareResult {
   const items: PlaylistCompareItem[] = [];
   const usedRightIndexes = new Set<number>();
+  const total = input.left.tracks.length;
+  options.onProgress?.(buildCompareProgress("comparing", items, 0, total));
 
-  for (const leftTrack of input.left.tracks) {
+  for (const [index, leftTrack] of input.left.tracks.entries()) {
     const best = findBestRightMatch(leftTrack, input.right.tracks, usedRightIndexes);
     if (!best) {
       items.push({
@@ -174,11 +213,13 @@ export function comparePlaylists(input: { left: PlaylistCompareSide; right: Play
         score: 0,
         reasons: ["仅左侧歌单存在"]
       });
+      options.onProgress?.(buildCompareProgress("comparing", items, index + 1, total, leftTrack.title));
       continue;
     }
 
     usedRightIndexes.add(best.index);
     items.push(best.item);
+    options.onProgress?.(buildCompareProgress("comparing", items, index + 1, total, leftTrack.title));
   }
 
   input.right.tracks.forEach((rightTrack, index) => {
@@ -193,6 +234,7 @@ export function comparePlaylists(input: { left: PlaylistCompareSide; right: Play
       reasons: ["仅右侧歌单存在"]
     });
   });
+  options.onProgress?.(buildCompareProgress("completed", items, total, total));
 
   return {
     left: {

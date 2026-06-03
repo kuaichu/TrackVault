@@ -62,6 +62,45 @@ test("createPlaylistTransferJob marks duplicate imported songs", async () => {
   assert.equal(job.tracks[1].status, "duplicate");
 });
 
+test("createPlaylistTransferJob reports progress while matching songs", async () => {
+  const progress: Array<{ phase: string; processed: number; total: number; currentTitle?: string }> = [];
+
+  await createPlaylistTransferJob(
+    {
+      ownerKey: "session:test",
+      sourceProvider: "text",
+      targetProvider: "netease",
+      playlistName: "进度歌单",
+      text: "非我 - 方山厨子Rex\n缺失歌 - 未知歌手"
+    },
+    {
+      searchTargetTracks: async (track) => (
+        track.title === "非我"
+          ? [
+              {
+                provider: "netease",
+                id: "n1",
+                title: "非我",
+                artists: ["方山厨子Rex"]
+              }
+            ]
+          : []
+      ),
+      saveJob: async (nextJob) => nextJob,
+      onProgress: (nextProgress) => {
+        progress.push(nextProgress);
+      }
+    }
+  );
+
+  assert.equal(progress[0].phase, "loading");
+  assert.ok(progress.some((item) => item.phase === "matching" && item.total === 2));
+  assert.ok(progress.some((item) => item.phase === "matching" && item.processed === 1 && item.currentTitle === "非我"));
+  assert.ok(progress.some((item) => item.phase === "saving" && item.processed === 2));
+  assert.equal(progress[progress.length - 1].phase, "completed");
+  assert.equal(progress[progress.length - 1].processed, 2);
+});
+
 test("getNeteaseImportTrackIds returns unique matched netease candidate ids", () => {
   const ids = getNeteaseImportTrackIds({
     id: "job-1",

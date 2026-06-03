@@ -52,6 +52,7 @@ export type NeteaseImportedPlaylistAudit = {
     unusable: number;
   };
   playableTrackIds: string[];
+  playableTextPlaylist: string;
   items: NeteaseImportAuditItem[];
   textPlaylist: string;
   unusableText: string;
@@ -296,6 +297,9 @@ function formatMarkdownReport(audit: Omit<NeteaseImportedPlaylistAudit, "markdow
     "",
     `扫描 ${audit.scannedCount} 首，正常可播 ${audit.summary.playable} 首；识别 ${audit.summary.suspect} 首不可用，可替代 ${audit.summary.replaceable} 首，待确认 ${audit.summary.needsReview} 首，暂无替代 ${audit.summary.unusable} 首。`,
     "",
+    "## 正常可播文字歌单",
+    audit.playableTextPlaylist || "无",
+    "",
     "## 可重新导入文字歌单",
     ...replaceable.map((item) => (item.selectedCandidate ? formatTrackLine(item.selectedCandidate) : "")).filter(Boolean),
     "",
@@ -316,6 +320,7 @@ export async function buildNeteaseImportedPlaylistAudit(input: BuildNeteaseImpor
   const candidateLimit = Math.min(10, Math.max(1, Math.trunc(input.candidateLimit ?? 5)));
   const items: NeteaseImportAuditItem[] = [];
   const playableTrackIds: string[] = [];
+  const playableTextLines: string[] = [];
   const playableTrackIdSet = new Set<string>();
   let scanned = 0;
 
@@ -345,6 +350,7 @@ export async function buildNeteaseImportedPlaylistAudit(input: BuildNeteaseImpor
       if (trackId && !playableTrackIdSet.has(trackId)) {
         playableTrackIdSet.add(trackId);
         playableTrackIds.push(trackId);
+        playableTextLines.push(formatTrackLine(rawTrackToTransferTrack(entry.track)));
       }
       scanned += 1;
       reportProgress(entry.track.name?.trim() || "未知歌曲");
@@ -401,6 +407,7 @@ export async function buildNeteaseImportedPlaylistAudit(input: BuildNeteaseImpor
     scannedCount: input.tracks.length,
     summary,
     playableTrackIds,
+    playableTextPlaylist: playableTextLines.join("\n"),
     items,
     textPlaylist,
     unusableText

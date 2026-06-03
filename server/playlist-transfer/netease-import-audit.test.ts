@@ -181,6 +181,7 @@ test("buildNeteaseImportedPlaylistAudit collects playable original tracks for cl
 
   assert.equal(audit.summary.playable, 1);
   assert.deepEqual(audit.playableTrackIds, ["1001"]);
+  assert.match(audit.playableTextPlaylist, /正常歌曲 - 正常歌手/);
 });
 
 test("buildNeteaseImportedPlaylistAudit reports scan progress", async () => {
