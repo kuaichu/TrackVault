@@ -21,6 +21,7 @@ import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, reso
 import { checkNeteaseQrLogin, loginWithNeteaseCellphone, sendNeteaseCaptcha, startNeteaseQrLogin } from "./netease-auth.js";
 import { formatTransferExport } from "./playlist-transfer/export-formatters.js";
 import { buildNeteaseImportedPlaylistAudit } from "./playlist-transfer/netease-import-audit.js";
+import { cancelNeteaseImportAuditJob, formatNeteaseImportAuditJobExport, getNeteaseImportAuditJob, startNeteaseImportAuditJob } from "./playlist-transfer/netease-import-audit-job.js";
 import { comparePlaylists, formatPlaylistCompareExport } from "./playlist-transfer/playlist-compare.js";
 import { checkNeteaseProviderTrackAvailability, createNeteasePlaylistFromTrackIds, loadNeteasePlaylistAuditEntries, loadNeteasePlaylistTransferTracks, searchNeteaseProviderTracks, searchNeteaseProviderTracksByTitle } from "./playlist-transfer/netease-provider.js";
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
@@ -434,6 +435,22 @@ function normalizeCompareStatuses(input: unknown): PlaylistCompareStatus[] {
   return input.filter((item): item is PlaylistCompareStatus => allowed.includes(item as PlaylistCompareStatus));
 }
 
+async function withAuditTimeout<T>(operation: Promise<T>, timeoutMs: number, fallback: T) {
+  let timeout: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((resolve) => {
+        timeout = setTimeout(() => resolve(fallback), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 async function checkTransferTargetAvailability(candidate: MatchCandidate) {
   if (candidate.provider === "netease") {
     return checkNeteaseProviderTrackAvailability(candidate);
@@ -556,6 +573,74 @@ app.post("/api/playlist-transfer/netease-import-audit", async (request, response
       message: error instanceof Error ? error.message : "网易云导入歌单清理失败"
     });
   }
+});
+
+app.post("/api/playlist-transfer/netease-import-audit/jobs", async (request, response) => {
+  const playlistId = typeof request.body?.playlistId === "string" ? request.body.playlistId.trim() : "";
+  const playlistName = typeof request.body?.playlistName === "string" && request.body.playlistName.trim()
+    ? request.body.playlistName.trim()
+    : "网易云歌单";
+  const maxTracks = Math.min(1000, Math.max(1, Math.trunc(Number(request.body?.maxTracks ?? 300)) || 300));
+  const candidateLimit = Math.min(10, Math.max(1, Math.trunc(Number(request.body?.candidateLimit ?? 5)) || 5));
+  const checkAvailability = request.body?.checkAvailability === true;
+
+  if (!playlistId) {
+    response.status(400).json({ message: "缺少网易云歌单 ID。" });
+    return;
+  }
+
+  const job = startNeteaseImportAuditJob(
+    {
+      playlistId,
+      playlistName,
+      maxTracks,
+      candidateLimit,
+      checkAvailability
+    },
+    {
+      loadEntries: loadNeteasePlaylistAuditEntries,
+      searchCandidates: (track) => withAuditTimeout(searchNeteaseProviderTracksByTitle(track), 12000, []),
+      checkCandidateAvailability: (candidate) => withAuditTimeout(checkNeteaseProviderTrackAvailability(candidate), 8000, null)
+    }
+  );
+
+  response.status(202).json({ job });
+});
+
+app.get("/api/playlist-transfer/netease-import-audit/jobs/:id", (request, response) => {
+  const job = getNeteaseImportAuditJob(request.params.id);
+  if (!job) {
+    response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
+    return;
+  }
+
+  response.json({ job });
+});
+
+app.post("/api/playlist-transfer/netease-import-audit/jobs/:id/cancel", (request, response) => {
+  const job = cancelNeteaseImportAuditJob(request.params.id);
+  if (!job) {
+    response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
+    return;
+  }
+
+  response.json({ job });
+});
+
+app.post("/api/playlist-transfer/netease-import-audit/jobs/:id/export", (request, response) => {
+  const job = getNeteaseImportAuditJob(request.params.id);
+  if (!job) {
+    response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
+    return;
+  }
+
+  if (job.status !== "completed" || !job.result) {
+    response.status(400).json({ message: "任务尚未完成，不能导出。" });
+    return;
+  }
+
+  const format = typeof request.body?.format === "string" ? request.body.format : "text";
+  response.json(formatNeteaseImportAuditJobExport(job.result, format as "markdown" | "text" | "csv" | "json"));
 });
 
 app.post("/api/playlist-transfer/compare", async (request, response) => {

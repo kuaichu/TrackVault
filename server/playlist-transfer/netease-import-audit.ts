@@ -56,6 +56,16 @@ export type NeteaseImportedPlaylistAudit = {
   markdownReport: string;
 };
 
+export type NeteaseImportAuditProgress = {
+  scanned: number;
+  total: number;
+  suspect: number;
+  replaceable: number;
+  needsReview: number;
+  unusable: number;
+  currentTitle?: string;
+};
+
 type CandidateAvailabilityStatus = "copyright_unavailable" | "vip_only" | "trial_only";
 
 type BuildNeteaseImportedPlaylistAuditInput = {
@@ -65,6 +75,8 @@ type BuildNeteaseImportedPlaylistAuditInput = {
   candidateLimit?: number;
   searchCandidates: (track: TransferTrack) => Promise<ProviderTrack[]>;
   checkCandidateAvailability?: (candidate: MatchCandidate) => Promise<{ status: CandidateAvailabilityStatus; reason: string } | null>;
+  onProgress?: (progress: NeteaseImportAuditProgress) => void;
+  shouldCancel?: () => boolean;
 };
 
 function normalizeText(value: string | undefined) {
@@ -301,15 +313,39 @@ function formatMarkdownReport(audit: Omit<NeteaseImportedPlaylistAudit, "markdow
 export async function buildNeteaseImportedPlaylistAudit(input: BuildNeteaseImportedPlaylistAuditInput): Promise<NeteaseImportedPlaylistAudit> {
   const candidateLimit = Math.min(10, Math.max(1, Math.trunc(input.candidateLimit ?? 5)));
   const items: NeteaseImportAuditItem[] = [];
+  let scanned = 0;
+
+  function assertNotCancelled() {
+    if (input.shouldCancel?.()) {
+      throw new Error("扫描已取消");
+    }
+  }
+
+  function reportProgress(currentTitle?: string) {
+    input.onProgress?.({
+      scanned,
+      total: input.tracks.length,
+      suspect: items.length,
+      replaceable: items.filter((item) => item.status === "replaceable").length,
+      needsReview: items.filter((item) => item.status === "needs_review").length,
+      unusable: items.filter((item) => item.status === "unusable").length,
+      currentTitle
+    });
+  }
 
   for (const entry of input.tracks) {
+    assertNotCancelled();
     const unusableReason = getNeteaseTrackUnusableReason(entry.track, entry.privilege);
     if (!unusableReason) {
+      scanned += 1;
+      reportProgress(entry.track.name?.trim() || "未知歌曲");
       continue;
     }
 
     const sourceTrack = rawTrackToTransferTrack(entry.track);
+    assertNotCancelled();
     const providerCandidates = await input.searchCandidates(sourceTrack);
+    assertNotCancelled();
     const candidates = await buildReplacementCandidates({
       sourceTrack,
       originalTrackId: String(entry.track.id),
@@ -317,6 +353,7 @@ export async function buildNeteaseImportedPlaylistAudit(input: BuildNeteaseImpor
       candidateLimit,
       checkCandidateAvailability: input.checkCandidateAvailability
     });
+    assertNotCancelled();
     const status = pickAuditStatus(candidates);
 
     items.push({
@@ -328,6 +365,8 @@ export async function buildNeteaseImportedPlaylistAudit(input: BuildNeteaseImpor
       selectedCandidate: status.selectedCandidate,
       reason: status.reason
     });
+    scanned += 1;
+    reportProgress(sourceTrack.title);
   }
 
   const summary = {

@@ -140,3 +140,79 @@ test("buildNeteaseImportedPlaylistAudit lists unusable tracks when no replacemen
   assert.equal(audit.items[0].status, "unusable");
   assert.match(audit.unusableText, /完全没结果 - 段奥娟/);
 });
+
+test("buildNeteaseImportedPlaylistAudit reports scan progress", async () => {
+  const progress: Array<{ scanned: number; total: number; suspect: number; replaceable: number }> = [];
+  await buildNeteaseImportedPlaylistAudit({
+    playlistId: "liked",
+    playlistName: "我喜欢的音乐",
+    tracks: [
+      {
+        track: unavailableTrack,
+        privilege: {
+          id: unavailableTrack.id,
+          st: -200,
+          pl: 0,
+          dl: 0
+        }
+      },
+      {
+        track: {
+          id: 1,
+          name: "可播放",
+          ar: [{ name: "歌手" }]
+        },
+        privilege: {
+          id: 1,
+          st: 0,
+          pl: 128000,
+          dl: 128000
+        }
+      }
+    ],
+    searchCandidates: async () => [
+      {
+        provider: "netease",
+        id: "replacement",
+        title: "一生一念",
+        artists: ["李常超"]
+      }
+    ],
+    onProgress: (nextProgress) => progress.push(nextProgress)
+  });
+
+  assert.equal(progress.length, 2);
+  assert.deepEqual(progress[progress.length - 1], {
+    scanned: 2,
+    total: 2,
+    suspect: 1,
+    replaceable: 1,
+    needsReview: 0,
+    unusable: 0,
+    currentTitle: "可播放"
+  });
+});
+
+test("buildNeteaseImportedPlaylistAudit stops when cancelled", async () => {
+  await assert.rejects(
+    () =>
+      buildNeteaseImportedPlaylistAudit({
+        playlistId: "liked",
+        playlistName: "我喜欢的音乐",
+        tracks: [
+          {
+            track: unavailableTrack,
+            privilege: {
+              id: unavailableTrack.id,
+              st: -200,
+              pl: 0,
+              dl: 0
+            }
+          }
+        ],
+        searchCandidates: async () => [],
+        shouldCancel: () => true
+      }),
+    /扫描已取消/
+  );
+});

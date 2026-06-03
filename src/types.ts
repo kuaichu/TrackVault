@@ -333,6 +333,34 @@ export type NeteaseImportAuditRequest = {
   checkAvailability?: boolean;
 };
 
+export type NeteaseImportAuditJobStatus = "queued" | "loading" | "running" | "cancelling" | "cancelled" | "completed" | "failed";
+
+export type NeteaseImportAuditJob = {
+  id: string;
+  status: NeteaseImportAuditJobStatus;
+  input: {
+    playlistId: string;
+    playlistName: string;
+    maxTracks: number;
+    candidateLimit: number;
+    checkAvailability: boolean;
+  };
+  progress: {
+    phase: "queued" | "loading" | "scanning" | "completed" | "failed" | "cancelled";
+    scanned: number;
+    total: number;
+    suspect: number;
+    replaceable: number;
+    needsReview: number;
+    unusable: number;
+    currentTitle?: string;
+  };
+  result?: NeteaseImportAudit;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type PlaylistCompareStatus =
   | "exact"
   | "same_title_different_artist"

@@ -10,6 +10,7 @@ import type {
   DownloadQualityLevel,
   DownloadTask,
   NeteaseImportAudit,
+  NeteaseImportAuditJob,
   NeteaseImportAuditRequest,
   NeteaseCookieCheckResult,
   NeteaseQrCheckResult,
@@ -562,6 +563,67 @@ export async function createNeteaseImportAudit(payload: NeteaseImportAuditReques
   }
 
   return (await response.json()) as NeteaseImportAudit;
+}
+
+export async function startNeteaseImportAuditJob(payload: NeteaseImportAuditRequest): Promise<NeteaseImportAuditJob> {
+  const response = await apiFetch("/api/playlist-transfer/netease-import-audit/jobs", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "启动网易云导入歌单清理失败");
+  }
+
+  const data = (await response.json()) as { job: NeteaseImportAuditJob };
+  return data.job;
+}
+
+export async function getNeteaseImportAuditJob(jobId: string): Promise<NeteaseImportAuditJob> {
+  const response = await apiFetch(`/api/playlist-transfer/netease-import-audit/jobs/${encodeURIComponent(jobId)}`);
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取网易云导入歌单清理进度失败");
+  }
+
+  const data = (await response.json()) as { job: NeteaseImportAuditJob };
+  return data.job;
+}
+
+export async function cancelNeteaseImportAuditJob(jobId: string): Promise<NeteaseImportAuditJob> {
+  const response = await apiFetch(`/api/playlist-transfer/netease-import-audit/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "取消网易云导入歌单清理失败");
+  }
+
+  const data = (await response.json()) as { job: NeteaseImportAuditJob };
+  return data.job;
+}
+
+export async function exportNeteaseImportAuditJob(jobId: string, format: TransferExportFormat): Promise<TransferExportResult> {
+  const response = await apiFetch(`/api/playlist-transfer/netease-import-audit/jobs/${encodeURIComponent(jobId)}/export`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ format })
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "导出网易云导入歌单清理结果失败");
+  }
+
+  return (await response.json()) as TransferExportResult;
 }
 
 export async function createPlaylistCompare(payload: PlaylistCompareRequest): Promise<PlaylistCompareResult> {

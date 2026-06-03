@@ -4,11 +4,13 @@ import {
   getAdminConfig as getAdminConfigRemote,
   sendNeteaseCaptcha,
   createDownload,
-  createNeteaseImportAudit,
+  cancelNeteaseImportAuditJob,
   createPlaylistCompare,
   exportPlaylistCompare,
+  exportNeteaseImportAuditJob,
   getAlbumProfile,
   getArtistProfile,
+  getNeteaseImportAuditJob,
   createPlaylistTransferJob,
   exportPlaylistTransferJob,
   importPlaylistTransferToNetease,
@@ -39,9 +41,10 @@ import {
   setSongLiked,
   saveSettings,
   startNeteaseQrLogin,
+  startNeteaseImportAuditJob,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, Song, SongArtist, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, UserPlaylist } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, Song, SongArtist, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserPlaylist } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
@@ -444,6 +447,7 @@ export default function App() {
   const qrAutoRefreshPendingRef = useRef(false);
   const qrAutoRefreshCountRef = useRef(0);
   const qrCloseTimerRef = useRef<number | null>(null);
+  const neteaseAuditJobIdRef = useRef("");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Song[]>([]);
   const [searchHistory, setSearchHistory] = useState<string[]>(loadSearchHistory);
@@ -468,9 +472,13 @@ export default function App() {
   const [neteaseAuditPlaylistId, setNeteaseAuditPlaylistId] = useState("");
   const [neteaseAuditMaxTracks, setNeteaseAuditMaxTracks] = useState(300);
   const [neteaseAuditCandidateLimit, setNeteaseAuditCandidateLimit] = useState(5);
-  const [neteaseAuditCheckAvailability, setNeteaseAuditCheckAvailability] = useState(true);
+  const [neteaseAuditCheckAvailability, setNeteaseAuditCheckAvailability] = useState(false);
   const [neteaseImportAudit, setNeteaseImportAudit] = useState<NeteaseImportAudit | null>(null);
+  const [neteaseImportAuditJob, setNeteaseImportAuditJob] = useState<NeteaseImportAuditJob | null>(null);
   const [neteaseAuditLoading, setNeteaseAuditLoading] = useState(false);
+  const [neteaseAuditExportFormat, setNeteaseAuditExportFormat] = useState<TransferExportFormat>("text");
+  const [neteaseAuditExportContent, setNeteaseAuditExportContent] = useState("");
+  const [neteaseAuditExporting, setNeteaseAuditExporting] = useState(false);
   const [compareLeftProvider, setCompareLeftProvider] = useState<"netease" | "qq">("netease");
   const [compareRightProvider, setCompareRightProvider] = useState<"netease" | "qq">("netease");
   const [compareLeftPlaylistId, setCompareLeftPlaylistId] = useState("");
@@ -950,6 +958,58 @@ export default function App() {
     }
   }
 
+  function downloadExportedContent(exported: TransferExportResult) {
+    const blob = new Blob([exported.content], { type: exported.contentType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = exported.filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function pollNeteaseImportAuditJob(jobId: string) {
+    while (neteaseAuditJobIdRef.current === jobId) {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      if (neteaseAuditJobIdRef.current !== jobId) {
+        return;
+      }
+
+      try {
+        const job = await getNeteaseImportAuditJob(jobId);
+        if (neteaseAuditJobIdRef.current !== jobId) {
+          return;
+        }
+
+        setNeteaseImportAuditJob(job);
+        if (job.status === "completed" && job.result) {
+          setNeteaseImportAudit(job.result);
+          setNeteaseAuditLoading(false);
+          setMessage(`清理完成：识别 ${job.result.summary.suspect} 首不可用，可整理 ${job.result.summary.replaceable} 首，暂无替代 ${job.result.summary.unusable} 首。`);
+          return;
+        }
+
+        if (job.status === "failed") {
+          setNeteaseAuditLoading(false);
+          setMessage(job.error ?? "网易云导入歌单清理失败");
+          return;
+        }
+
+        if (job.status === "cancelled") {
+          setNeteaseAuditLoading(false);
+          setMessage("网易云导入歌单清理已取消。");
+          return;
+        }
+      } catch (error) {
+        setNeteaseAuditLoading(false);
+        setMessage(error instanceof Error ? error.message : "获取网易云导入歌单清理进度失败");
+        return;
+      }
+    }
+  }
+
   async function handleCreateNeteaseImportAudit() {
     const cookieOk = await ensureNeteaseCookieHealthy();
     if (!cookieOk) {
@@ -964,22 +1024,58 @@ export default function App() {
 
     setNeteaseAuditLoading(true);
     setNeteaseImportAudit(null);
-    setMessage(`正在扫描：${selectedPlaylist.name}`);
+    setNeteaseImportAuditJob(null);
+    setNeteaseAuditExportContent("");
+    setMessage(`已提交扫描任务：${selectedPlaylist.name}`);
 
     try {
-      const audit = await createNeteaseImportAudit({
+      const job = await startNeteaseImportAuditJob({
         playlistId: selectedPlaylist.id,
         playlistName: selectedPlaylist.name,
         maxTracks: neteaseAuditMaxTracks,
         candidateLimit: neteaseAuditCandidateLimit,
         checkAvailability: neteaseAuditCheckAvailability
       });
-      setNeteaseImportAudit(audit);
-      setMessage(`清理完成：识别 ${audit.summary.suspect} 首不可用，可整理 ${audit.summary.replaceable} 首，暂无替代 ${audit.summary.unusable} 首。`);
+      neteaseAuditJobIdRef.current = job.id;
+      setNeteaseImportAuditJob(job);
+      void pollNeteaseImportAuditJob(job.id);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "网易云导入歌单清理失败");
-    } finally {
       setNeteaseAuditLoading(false);
+    }
+  }
+
+  async function handleCancelNeteaseImportAudit() {
+    if (!neteaseImportAuditJob) {
+      return;
+    }
+
+    try {
+      const job = await cancelNeteaseImportAuditJob(neteaseImportAuditJob.id);
+      setNeteaseImportAuditJob(job);
+      setMessage("已请求取消网易云导入歌单清理任务。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "取消网易云导入歌单清理失败");
+    }
+  }
+
+  async function handleExportNeteaseImportAudit() {
+    if (!neteaseImportAuditJob || neteaseImportAuditJob.status !== "completed") {
+      return;
+    }
+
+    setNeteaseAuditExporting(true);
+    setMessage("正在生成网易云导入歌单清理结果文件");
+
+    try {
+      const exported = await exportNeteaseImportAuditJob(neteaseImportAuditJob.id, neteaseAuditExportFormat);
+      setNeteaseAuditExportContent(exported.content);
+      downloadExportedContent(exported);
+      setMessage(`已生成并下载：${exported.filename}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "导出网易云导入歌单清理结果失败");
+    } finally {
+      setNeteaseAuditExporting(false);
     }
   }
 
@@ -2575,6 +2671,37 @@ export default function App() {
     }
   };
 
+  const getNeteaseAuditJobStatusLabel = (job: NeteaseImportAuditJob) => {
+    if (job.status === "cancelling") {
+      return "取消中";
+    }
+
+    switch (job.progress.phase) {
+      case "queued":
+        return "排队中";
+      case "loading":
+        return "读取歌单";
+      case "scanning":
+        return "扫描中";
+      case "completed":
+        return "已完成";
+      case "failed":
+        return "失败";
+      case "cancelled":
+        return "已取消";
+    }
+  };
+
+  const neteaseAuditProgress = neteaseImportAuditJob?.progress;
+  const neteaseAuditProgressTotal = Math.max(1, neteaseAuditProgress?.total ?? neteaseAuditMaxTracks);
+  const neteaseAuditProgressPercent = neteaseAuditProgress
+    ? Math.min(100, Math.round((neteaseAuditProgress.scanned / neteaseAuditProgressTotal) * 100))
+    : 0;
+  const canCancelNeteaseAudit = neteaseImportAuditJob
+    ? neteaseImportAuditJob.status === "queued" || neteaseImportAuditJob.status === "loading" || neteaseImportAuditJob.status === "running"
+    : false;
+  const canExportNeteaseAudit = neteaseImportAuditJob?.status === "completed" && Boolean(neteaseImportAudit);
+
   const getPlaylistCompareStatusLabel = (status: PlaylistCompareStatus) => {
     switch (status) {
       case "exact":
@@ -2848,7 +2975,36 @@ export default function App() {
                     <button type="button" className="primary-button wide" disabled={neteaseAuditLoading} onClick={() => void handleCreateNeteaseImportAudit()}>
                       {neteaseAuditLoading ? "扫描中" : "扫描并整理文字歌单"}
                     </button>
+                    {canCancelNeteaseAudit ? (
+                      <button type="button" className="secondary-button" onClick={() => void handleCancelNeteaseImportAudit()}>
+                        取消扫描
+                      </button>
+                    ) : null}
                   </div>
+                  {neteaseImportAuditJob ? (
+                    <div className="audit-progress-panel">
+                      <div className="audit-progress-head">
+                        <strong>{getNeteaseAuditJobStatusLabel(neteaseImportAuditJob)}</strong>
+                        <span>{neteaseAuditProgressPercent}%</span>
+                      </div>
+                      <div className="audit-progress-track" aria-label="网易云导入歌单清理进度">
+                        <span style={{ width: `${neteaseAuditProgressPercent}%` }} />
+                      </div>
+                      <div className="audit-progress-meta">
+                        <span>已扫描 {neteaseImportAuditJob.progress.scanned}/{neteaseImportAuditJob.progress.total}</span>
+                        <span>识别 {neteaseImportAuditJob.progress.suspect}</span>
+                        <span>可替代 {neteaseImportAuditJob.progress.replaceable}</span>
+                        <span>待确认 {neteaseImportAuditJob.progress.needsReview}</span>
+                        <span>暂无替代 {neteaseImportAuditJob.progress.unusable}</span>
+                      </div>
+                      {neteaseImportAuditJob.progress.currentTitle ? (
+                        <p>当前：{neteaseImportAuditJob.progress.currentTitle}</p>
+                      ) : null}
+                      {neteaseImportAuditJob.error ? (
+                        <p>{neteaseImportAuditJob.error}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </section>
 
                 {neteaseImportAudit ? (
@@ -2886,6 +3042,18 @@ export default function App() {
                       ))}
                     </div>
 
+                    <div className="form-actions transfer-export-actions">
+                      <select value={neteaseAuditExportFormat} onChange={(event) => setNeteaseAuditExportFormat(event.target.value as TransferExportFormat)}>
+                        <option value="text">纯文本</option>
+                        <option value="markdown">Markdown</option>
+                        <option value="csv">CSV</option>
+                        <option value="json">JSON</option>
+                      </select>
+                      <button type="button" className="secondary-button" disabled={!canExportNeteaseAudit || neteaseAuditExporting} onClick={() => void handleExportNeteaseImportAudit()}>
+                        {neteaseAuditExporting ? "导出中" : "下载清理结果"}
+                      </button>
+                    </div>
+
                     <div className="netease-audit-output-grid">
                       <label>
                         <span>可重新导入的文字歌单</span>
@@ -2896,6 +3064,9 @@ export default function App() {
                         <textarea className="transfer-export-output" value={neteaseImportAudit.unusableText || "当前扫描范围内没有暂无替代的歌曲。"} readOnly />
                       </label>
                     </div>
+                    {neteaseAuditExportContent ? (
+                      <textarea className="transfer-export-output" value={neteaseAuditExportContent} readOnly />
+                    ) : null}
                   </section>
                 ) : null}
 
