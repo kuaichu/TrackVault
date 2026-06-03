@@ -5,6 +5,7 @@ import {
   sendNeteaseCaptcha,
   createDownload,
   cancelNeteaseImportAuditJob,
+  createNeteaseImportAuditPlayablePlaylist,
   createPlaylistCompare,
   exportPlaylistCompare,
   exportNeteaseImportAuditJob,
@@ -479,6 +480,9 @@ export default function App() {
   const [neteaseAuditExportFormat, setNeteaseAuditExportFormat] = useState<TransferExportFormat>("text");
   const [neteaseAuditExportContent, setNeteaseAuditExportContent] = useState("");
   const [neteaseAuditExporting, setNeteaseAuditExporting] = useState(false);
+  const [neteaseAuditPlayablePlaylistName, setNeteaseAuditPlayablePlaylistName] = useState("");
+  const [neteaseAuditPlayableImporting, setNeteaseAuditPlayableImporting] = useState(false);
+  const [neteaseAuditPlayableImportResult, setNeteaseAuditPlayableImportResult] = useState<NeteaseTransferImportResult | null>(null);
   const [compareLeftProvider, setCompareLeftProvider] = useState<"netease" | "qq">("netease");
   const [compareRightProvider, setCompareRightProvider] = useState<"netease" | "qq">("netease");
   const [compareLeftPlaylistId, setCompareLeftPlaylistId] = useState("");
@@ -986,8 +990,9 @@ export default function App() {
         setNeteaseImportAuditJob(job);
         if (job.status === "completed" && job.result) {
           setNeteaseImportAudit(job.result);
+          setNeteaseAuditPlayablePlaylistName(`${job.result.playlistName} - 正常歌曲`);
           setNeteaseAuditLoading(false);
-          setMessage(`清理完成：识别 ${job.result.summary.suspect} 首不可用，可整理 ${job.result.summary.replaceable} 首，暂无替代 ${job.result.summary.unusable} 首。`);
+          setMessage(`清理完成：正常 ${job.result.summary.playable} 首；识别 ${job.result.summary.suspect} 首不可用，可整理 ${job.result.summary.replaceable} 首，暂无替代 ${job.result.summary.unusable} 首。`);
           return;
         }
 
@@ -1026,6 +1031,8 @@ export default function App() {
     setNeteaseImportAudit(null);
     setNeteaseImportAuditJob(null);
     setNeteaseAuditExportContent("");
+    setNeteaseAuditPlayablePlaylistName(`${selectedPlaylist.name} - 正常歌曲`);
+    setNeteaseAuditPlayableImportResult(null);
     setMessage(`已提交扫描任务：${selectedPlaylist.name}`);
 
     try {
@@ -1076,6 +1083,29 @@ export default function App() {
       setMessage(error instanceof Error ? error.message : "导出网易云导入歌单清理结果失败");
     } finally {
       setNeteaseAuditExporting(false);
+    }
+  }
+
+  async function handleCreateNeteaseAuditPlayablePlaylist() {
+    if (!neteaseImportAuditJob || neteaseImportAuditJob.status !== "completed" || !neteaseImportAudit) {
+      return;
+    }
+
+    setNeteaseAuditPlayableImporting(true);
+    setMessage("正在创建正常歌曲新歌单");
+
+    try {
+      const result = await createNeteaseImportAuditPlayablePlaylist(
+        neteaseImportAuditJob.id,
+        neteaseAuditPlayablePlaylistName.trim() || `${neteaseImportAudit.playlistName} - 正常歌曲`
+      );
+      setNeteaseAuditPlayableImportResult(result);
+      setMessage(`已创建正常歌曲新歌单，导入 ${result.addedCount} 首，跳过 ${result.skippedCount} 首。`);
+      void loadUserPlaylists();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "创建正常歌曲新歌单失败");
+    } finally {
+      setNeteaseAuditPlayableImporting(false);
     }
   }
 
@@ -2701,6 +2731,7 @@ export default function App() {
     ? neteaseImportAuditJob.status === "queued" || neteaseImportAuditJob.status === "loading" || neteaseImportAuditJob.status === "running"
     : false;
   const canExportNeteaseAudit = neteaseImportAuditJob?.status === "completed" && Boolean(neteaseImportAudit);
+  const canCreateNeteaseAuditPlayablePlaylist = canExportNeteaseAudit && (neteaseImportAudit?.summary.playable ?? 0) > 0;
 
   const getPlaylistCompareStatusLabel = (status: PlaylistCompareStatus) => {
     switch (status) {
@@ -3015,6 +3046,7 @@ export default function App() {
                         <p>扫描 {neteaseImportAudit.scannedCount} 首 · 识别 {neteaseImportAudit.summary.suspect} 首不可用</p>
                       </div>
                       <div className="transfer-summary-grid netease-audit-summary-grid">
+                        <strong>{neteaseImportAudit.summary.playable}<small>正常可播</small></strong>
                         <strong>{neteaseImportAudit.summary.replaceable}<small>可替代</small></strong>
                         <strong>{neteaseImportAudit.summary.needsReview}<small>待确认</small></strong>
                         <strong>{neteaseImportAudit.summary.unusable}<small>暂无替代</small></strong>
@@ -3040,6 +3072,34 @@ export default function App() {
                           <span className={`transfer-status transfer-status-${item.status}`}>{getNeteaseAuditStatusLabel(item.status)}</span>
                         </article>
                       ))}
+                    </div>
+
+                    <div className="transfer-import-panel">
+                      <label>
+                        <span>正常歌曲新歌单名</span>
+                        <input value={neteaseAuditPlayablePlaylistName} onChange={(event) => setNeteaseAuditPlayablePlaylistName(event.target.value)} />
+                      </label>
+                      <button
+                        type="button"
+                        className="primary-button"
+                        disabled={!canCreateNeteaseAuditPlayablePlaylist || neteaseAuditPlayableImporting}
+                        onClick={() => void handleCreateNeteaseAuditPlayablePlaylist()}
+                      >
+                        {neteaseAuditPlayableImporting ? "创建中" : "创建正常歌曲新歌单"}
+                      </button>
+                      <p>
+                        只导入原歌单里当前正常可播的 {neteaseImportAudit.summary.playable} 首；可替代歌曲保留在下面的文字歌单里，暂无替代歌曲单独列出。
+                      </p>
+                      {neteaseAuditPlayableImportResult ? (
+                        <p>
+                          已创建 {neteaseAuditPlayableImportResult.addedCount} 首，跳过 {neteaseAuditPlayableImportResult.skippedCount} 首。
+                          {neteaseAuditPlayableImportResult.playlistUrl ? (
+                            <a href={neteaseAuditPlayableImportResult.playlistUrl} target="_blank" rel="noreferrer">打开新歌单</a>
+                          ) : (
+                            <>歌单 ID：{neteaseAuditPlayableImportResult.playlistId}</>
+                          )}
+                        </p>
+                      ) : null}
                     </div>
 
                     <div className="form-actions transfer-export-actions">

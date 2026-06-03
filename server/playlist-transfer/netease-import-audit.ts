@@ -45,11 +45,13 @@ export type NeteaseImportedPlaylistAudit = {
   scannedCount: number;
   summary: {
     total: number;
+    playable: number;
     suspect: number;
     replaceable: number;
     needsReview: number;
     unusable: number;
   };
+  playableTrackIds: string[];
   items: NeteaseImportAuditItem[];
   textPlaylist: string;
   unusableText: string;
@@ -292,7 +294,7 @@ function formatMarkdownReport(audit: Omit<NeteaseImportedPlaylistAudit, "markdow
   const lines = [
     `# ${audit.playlistName} 导入歌单清理报告`,
     "",
-    `扫描 ${audit.scannedCount} 首，识别 ${audit.summary.suspect} 首不可用；可替代 ${audit.summary.replaceable} 首，待确认 ${audit.summary.needsReview} 首，暂无替代 ${audit.summary.unusable} 首。`,
+    `扫描 ${audit.scannedCount} 首，正常可播 ${audit.summary.playable} 首；识别 ${audit.summary.suspect} 首不可用，可替代 ${audit.summary.replaceable} 首，待确认 ${audit.summary.needsReview} 首，暂无替代 ${audit.summary.unusable} 首。`,
     "",
     "## 可重新导入文字歌单",
     ...replaceable.map((item) => (item.selectedCandidate ? formatTrackLine(item.selectedCandidate) : "")).filter(Boolean),
@@ -313,6 +315,8 @@ function formatMarkdownReport(audit: Omit<NeteaseImportedPlaylistAudit, "markdow
 export async function buildNeteaseImportedPlaylistAudit(input: BuildNeteaseImportedPlaylistAuditInput): Promise<NeteaseImportedPlaylistAudit> {
   const candidateLimit = Math.min(10, Math.max(1, Math.trunc(input.candidateLimit ?? 5)));
   const items: NeteaseImportAuditItem[] = [];
+  const playableTrackIds: string[] = [];
+  const playableTrackIdSet = new Set<string>();
   let scanned = 0;
 
   function assertNotCancelled() {
@@ -337,6 +341,11 @@ export async function buildNeteaseImportedPlaylistAudit(input: BuildNeteaseImpor
     assertNotCancelled();
     const unusableReason = getNeteaseTrackUnusableReason(entry.track, entry.privilege);
     if (!unusableReason) {
+      const trackId = String(entry.track.id);
+      if (trackId && !playableTrackIdSet.has(trackId)) {
+        playableTrackIdSet.add(trackId);
+        playableTrackIds.push(trackId);
+      }
       scanned += 1;
       reportProgress(entry.track.name?.trim() || "未知歌曲");
       continue;
@@ -371,6 +380,7 @@ export async function buildNeteaseImportedPlaylistAudit(input: BuildNeteaseImpor
 
   const summary = {
     total: input.tracks.length,
+    playable: playableTrackIds.length,
     suspect: items.length,
     replaceable: items.filter((item) => item.status === "replaceable").length,
     needsReview: items.filter((item) => item.status === "needs_review").length,
@@ -390,6 +400,7 @@ export async function buildNeteaseImportedPlaylistAudit(input: BuildNeteaseImpor
     playlistName: input.playlistName,
     scannedCount: input.tracks.length,
     summary,
+    playableTrackIds,
     items,
     textPlaylist,
     unusableText

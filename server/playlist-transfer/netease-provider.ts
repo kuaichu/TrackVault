@@ -127,6 +127,7 @@ export async function createNeteasePlaylistFromTrackIds(name: string, trackIds: 
 
   return {
     playlistId,
+    playlistUrl: `https://music.163.com/#/playlist?id=${encodeURIComponent(playlistId)}`,
     addedCount: trackIds.length
   };
 }

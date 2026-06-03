@@ -4778,7 +4778,7 @@ input[type="range"] {
 }
 
 .netease-audit-summary-grid {
-  grid-template-columns: repeat(4, minmax(72px, 1fr));
+  grid-template-columns: repeat(5, minmax(70px, 1fr));
 }
 
 .netease-audit-output-grid {

@@ -141,6 +141,48 @@ test("buildNeteaseImportedPlaylistAudit lists unusable tracks when no replacemen
   assert.match(audit.unusableText, /完全没结果 - 段奥娟/);
 });
 
+test("buildNeteaseImportedPlaylistAudit collects playable original tracks for clean playlist creation", async () => {
+  const audit = await buildNeteaseImportedPlaylistAudit({
+    playlistId: "liked",
+    playlistName: "我喜欢的音乐",
+    tracks: [
+      {
+        track: {
+          id: 1001,
+          name: "正常歌曲",
+          ar: [{ name: "正常歌手" }]
+        },
+        privilege: {
+          id: 1001,
+          st: 0,
+          pl: 128000,
+          dl: 128000
+        }
+      },
+      {
+        track: unavailableTrack,
+        privilege: {
+          id: unavailableTrack.id,
+          st: -200,
+          pl: 0,
+          dl: 0
+        }
+      }
+    ],
+    searchCandidates: async () => [
+      {
+        provider: "netease",
+        id: "replacement",
+        title: "一生一念",
+        artists: ["李常超"]
+      }
+    ]
+  });
+
+  assert.equal(audit.summary.playable, 1);
+  assert.deepEqual(audit.playableTrackIds, ["1001"]);
+});
+
 test("buildNeteaseImportedPlaylistAudit reports scan progress", async () => {
   const progress: Array<{ scanned: number; total: number; suspect: number; replaceable: number }> = [];
   await buildNeteaseImportedPlaylistAudit({

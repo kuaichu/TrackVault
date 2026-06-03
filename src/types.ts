@@ -292,6 +292,7 @@ export type TransferExportResult = {
 
 export type NeteaseTransferImportResult = {
   playlistId: string;
+  playlistUrl?: string;
   addedCount: number;
   skippedCount: number;
 };
@@ -314,11 +315,13 @@ export type NeteaseImportAudit = {
   scannedCount: number;
   summary: {
     total: number;
+    playable: number;
     suspect: number;
     replaceable: number;
     needsReview: number;
     unusable: number;
   };
+  playableTrackIds: string[];
   items: NeteaseImportAuditItem[];
   textPlaylist: string;
   unusableText: string;

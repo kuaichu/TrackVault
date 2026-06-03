@@ -643,6 +643,41 @@ app.post("/api/playlist-transfer/netease-import-audit/jobs/:id/export", (request
   response.json(formatNeteaseImportAuditJobExport(job.result, format as "markdown" | "text" | "csv" | "json"));
 });
 
+app.post("/api/playlist-transfer/netease-import-audit/jobs/:id/import/playable", async (request, response) => {
+  const job = getNeteaseImportAuditJob(request.params.id);
+  if (!job) {
+    response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
+    return;
+  }
+
+  if (job.status !== "completed" || !job.result) {
+    response.status(400).json({ message: "任务尚未完成，不能创建正常歌曲新歌单。" });
+    return;
+  }
+
+  const trackIds = job.result.playableTrackIds;
+  if (trackIds.length === 0) {
+    response.status(400).json({ message: "扫描结果里没有正常可播歌曲，不能创建新歌单。" });
+    return;
+  }
+
+  const name = typeof request.body?.name === "string" && request.body.name.trim()
+    ? request.body.name.trim()
+    : `${job.result.playlistName} - 正常歌曲`;
+
+  try {
+    const result = await createNeteasePlaylistFromTrackIds(name, trackIds);
+    response.json({
+      ...result,
+      skippedCount: Math.max(0, job.result.scannedCount - trackIds.length)
+    });
+  } catch (error) {
+    response.status(400).json({
+      message: error instanceof Error ? error.message : "创建正常歌曲新歌单失败"
+    });
+  }
+});
+
 app.post("/api/playlist-transfer/compare", async (request, response) => {
   const leftProvider = typeof request.body?.leftProvider === "string" ? request.body.leftProvider.trim() : "";
   const rightProvider = typeof request.body?.rightProvider === "string" ? request.body.rightProvider.trim() : "";
