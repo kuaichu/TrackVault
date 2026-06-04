@@ -204,3 +204,268 @@ export type DownloadRequest = {
   song: Song;
   level: DownloadQualityLevel;
 };
+
+export type TransferSourceProvider = "netease" | "qq" | "text" | "csv";
+export type TransferTargetProvider = "netease" | "qq" | "text";
+export type TransferExportFormat = "markdown" | "text" | "csv" | "json";
+
+export type TransferTrackStatus =
+  | "matched"
+  | "manual_review"
+  | "not_found"
+  | "copyright_unavailable"
+  | "vip_only"
+  | "trial_only"
+  | "duplicate"
+  | "metadata_conflict"
+  | "skipped";
+
+export type TransferTrack = {
+  source: TransferSourceProvider;
+  sourceTrackId?: string;
+  title: string;
+  artists: string[];
+  album?: string;
+  durationSeconds?: number;
+  rawText?: string;
+};
+
+export type MatchCandidate = {
+  provider: "netease" | "qq";
+  targetTrackId: string;
+  title: string;
+  artists: string[];
+  album?: string;
+  durationSeconds?: number;
+  availability?: {
+    status: "available" | "copyright_unavailable" | "vip_only" | "trial_only";
+    reason?: string;
+  };
+  confidenceScore: number;
+  reasons: string[];
+};
+
+export type TransferTrackResult = {
+  sourceTrack: TransferTrack;
+  status: TransferTrackStatus;
+  candidates: MatchCandidate[];
+  selectedCandidate?: MatchCandidate;
+  reason?: string;
+};
+
+export type TransferSummary = {
+  total: number;
+  matched: number;
+  manualReview: number;
+  notFound: number;
+  unavailable: number;
+  duplicate: number;
+  skipped: number;
+};
+
+export type PlaylistTransferJob = {
+  id: string;
+  ownerKey: string;
+  sourceProvider: TransferSourceProvider;
+  targetProvider: TransferTargetProvider;
+  playlistName: string;
+  tracks: TransferTrackResult[];
+  summary: TransferSummary;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PlaylistTransferRunJobStatus = "queued" | "loading" | "running" | "saving" | "completed" | "failed";
+
+export type PlaylistTransferRunJob = {
+  id: string;
+  status: PlaylistTransferRunJobStatus;
+  input: TransferImportRequest & {
+    ownerKey: string;
+  };
+  progress: {
+    phase: "queued" | "loading" | "matching" | "saving" | "completed" | "failed";
+    processed: number;
+    total: number;
+    matched: number;
+    manualReview: number;
+    notFound: number;
+    unavailable: number;
+    duplicate: number;
+    skipped: number;
+    currentTitle?: string;
+  };
+  result?: PlaylistTransferJob;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TransferImportRequest = {
+  sourceProvider: TransferSourceProvider;
+  targetProvider: TransferTargetProvider;
+  playlistName?: string;
+  playlistId?: string;
+  text?: string;
+  checkAvailability?: boolean;
+};
+
+export type TransferExportResult = {
+  filename: string;
+  contentType: string;
+  content: string;
+};
+
+export type NeteaseTransferImportResult = {
+  playlistId: string;
+  playlistUrl?: string;
+  addedCount: number;
+  skippedCount: number;
+};
+
+export type NeteaseImportAuditStatus = "replaceable" | "needs_review" | "unusable";
+
+export type NeteaseImportAuditItem = {
+  originalTrackId: string;
+  sourceTrack: TransferTrack;
+  unusableReason: string;
+  status: NeteaseImportAuditStatus;
+  candidates: MatchCandidate[];
+  selectedCandidate?: MatchCandidate;
+  reason?: string;
+};
+
+export type NeteaseImportAudit = {
+  playlistId: string;
+  playlistName: string;
+  scannedCount: number;
+  summary: {
+    total: number;
+    playable: number;
+    suspect: number;
+    replaceable: number;
+    needsReview: number;
+    unusable: number;
+  };
+  playableTrackIds: string[];
+  playableTextPlaylist: string;
+  items: NeteaseImportAuditItem[];
+  textPlaylist: string;
+  unusableText: string;
+  markdownReport: string;
+};
+
+export type NeteaseImportAuditRequest = {
+  playlistId: string;
+  playlistName?: string;
+  maxTracks?: number;
+  candidateLimit?: number;
+  checkAvailability?: boolean;
+};
+
+export type NeteaseImportAuditJobStatus = "queued" | "loading" | "running" | "cancelling" | "cancelled" | "completed" | "failed";
+
+export type NeteaseImportAuditJob = {
+  id: string;
+  status: NeteaseImportAuditJobStatus;
+  input: {
+    playlistId: string;
+    playlistName: string;
+    maxTracks: number;
+    candidateLimit: number;
+    checkAvailability: boolean;
+  };
+  progress: {
+    phase: "queued" | "loading" | "scanning" | "completed" | "failed" | "cancelled";
+    scanned: number;
+    total: number;
+    suspect: number;
+    replaceable: number;
+    needsReview: number;
+    unusable: number;
+    currentTitle?: string;
+  };
+  result?: NeteaseImportAudit;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PlaylistCompareStatus =
+  | "exact"
+  | "same_title_different_artist"
+  | "similar_title"
+  | "left_only"
+  | "right_only";
+
+export type PlaylistCompareItem = {
+  status: PlaylistCompareStatus;
+  leftTrack?: TransferTrack;
+  rightTrack?: TransferTrack;
+  score: number;
+  reasons: string[];
+};
+
+export type PlaylistCompareResult = {
+  left: {
+    provider: TransferSourceProvider;
+    playlistId?: string;
+    playlistName: string;
+    total: number;
+  };
+  right: {
+    provider: TransferSourceProvider;
+    playlistId?: string;
+    playlistName: string;
+    total: number;
+  };
+  items: PlaylistCompareItem[];
+  summary: {
+    totalLeft: number;
+    totalRight: number;
+    exact: number;
+    sameTitleDifferentArtist: number;
+    similarTitle: number;
+    leftOnly: number;
+    rightOnly: number;
+  };
+  createdAt: string;
+};
+
+export type PlaylistCompareRequest = {
+  leftProvider: "netease" | "qq";
+  leftPlaylistId: string;
+  leftPlaylistName?: string;
+  rightProvider: "netease" | "qq";
+  rightPlaylistId: string;
+  rightPlaylistName?: string;
+};
+
+export type PlaylistCompareExportRequest = {
+  result: PlaylistCompareResult;
+  format: TransferExportFormat;
+  statuses: PlaylistCompareStatus[];
+};
+
+export type PlaylistCompareJobStatus = "queued" | "loading" | "running" | "completed" | "failed";
+
+export type PlaylistCompareJob = {
+  id: string;
+  status: PlaylistCompareJobStatus;
+  input: PlaylistCompareRequest;
+  progress: {
+    phase: "queued" | "loading" | "comparing" | "completed" | "failed";
+    processed: number;
+    total: number;
+    exact: number;
+    sameTitleDifferentArtist: number;
+    similarTitle: number;
+    leftOnly: number;
+    rightOnly: number;
+    currentTitle?: string;
+  };
+  result?: PlaylistCompareResult;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+};

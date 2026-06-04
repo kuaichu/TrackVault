@@ -9,13 +9,26 @@ import type {
   NeteaseCellphoneLoginResult,
   DownloadQualityLevel,
   DownloadTask,
+  NeteaseImportAudit,
+  NeteaseImportAuditJob,
+  NeteaseImportAuditRequest,
   NeteaseCookieCheckResult,
   NeteaseQrCheckResult,
   NeteaseQrStartResult,
+  NeteaseTransferImportResult,
   PersistedPlayerState,
+  PlaylistCompareExportRequest,
+  PlaylistCompareJob,
+  PlaylistCompareRequest,
+  PlaylistCompareResult,
   PlaylistSongsPage,
+  PlaylistTransferJob,
+  PlaylistTransferRunJob,
   Song,
   SongLyrics,
+  TransferExportFormat,
+  TransferExportResult,
+  TransferImportRequest,
   UserPlaylist
 } from "./types";
 
@@ -474,4 +487,254 @@ export async function savePlayerState(state: PersistedPlayerState): Promise<Pers
   }
 
   return (await response.json()) as PersistedPlayerState;
+}
+
+export async function getPlaylistTransferJobs(): Promise<PlaylistTransferJob[]> {
+  const response = await apiFetch("/api/playlist-transfer/jobs");
+  if (!response.ok) {
+    throw new Error("获取歌单互转任务失败");
+  }
+
+  const data = (await response.json()) as { jobs: PlaylistTransferJob[] };
+  return data.jobs;
+}
+
+export async function createPlaylistTransferJob(payload: TransferImportRequest): Promise<PlaylistTransferJob> {
+  const response = await apiFetch("/api/playlist-transfer/jobs", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "创建歌单互转任务失败");
+  }
+
+  return (await response.json()) as PlaylistTransferJob;
+}
+
+export async function startPlaylistTransferRunJob(payload: TransferImportRequest): Promise<PlaylistTransferRunJob> {
+  const response = await apiFetch("/api/playlist-transfer/jobs/progress", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "启动歌单互转任务失败");
+  }
+
+  const data = (await response.json()) as { job: PlaylistTransferRunJob };
+  return data.job;
+}
+
+export async function getPlaylistTransferRunJob(jobId: string): Promise<PlaylistTransferRunJob> {
+  const response = await apiFetch(`/api/playlist-transfer/jobs/progress/${encodeURIComponent(jobId)}`);
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取歌单互转进度失败");
+  }
+
+  const data = (await response.json()) as { job: PlaylistTransferRunJob };
+  return data.job;
+}
+
+export async function exportPlaylistTransferJob(jobId: string, format: TransferExportFormat): Promise<TransferExportResult> {
+  const response = await apiFetch(`/api/playlist-transfer/jobs/${encodeURIComponent(jobId)}/export`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ format })
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "导出歌单互转报告失败");
+  }
+
+  return (await response.json()) as TransferExportResult;
+}
+
+export async function importPlaylistTransferToNetease(jobId: string, name: string): Promise<NeteaseTransferImportResult> {
+  const response = await apiFetch(`/api/playlist-transfer/jobs/${encodeURIComponent(jobId)}/import/netease`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ name })
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "导入网易云歌单失败");
+  }
+
+  return (await response.json()) as NeteaseTransferImportResult;
+}
+
+export async function createNeteaseImportAudit(payload: NeteaseImportAuditRequest): Promise<NeteaseImportAudit> {
+  const response = await apiFetch("/api/playlist-transfer/netease-import-audit", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "网易云导入歌单清理失败");
+  }
+
+  return (await response.json()) as NeteaseImportAudit;
+}
+
+export async function startNeteaseImportAuditJob(payload: NeteaseImportAuditRequest): Promise<NeteaseImportAuditJob> {
+  const response = await apiFetch("/api/playlist-transfer/netease-import-audit/jobs", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "启动网易云导入歌单清理失败");
+  }
+
+  const data = (await response.json()) as { job: NeteaseImportAuditJob };
+  return data.job;
+}
+
+export async function getNeteaseImportAuditJob(jobId: string): Promise<NeteaseImportAuditJob> {
+  const response = await apiFetch(`/api/playlist-transfer/netease-import-audit/jobs/${encodeURIComponent(jobId)}`);
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取网易云导入歌单清理进度失败");
+  }
+
+  const data = (await response.json()) as { job: NeteaseImportAuditJob };
+  return data.job;
+}
+
+export async function cancelNeteaseImportAuditJob(jobId: string): Promise<NeteaseImportAuditJob> {
+  const response = await apiFetch(`/api/playlist-transfer/netease-import-audit/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "取消网易云导入歌单清理失败");
+  }
+
+  const data = (await response.json()) as { job: NeteaseImportAuditJob };
+  return data.job;
+}
+
+export async function exportNeteaseImportAuditJob(jobId: string, format: TransferExportFormat): Promise<TransferExportResult> {
+  const response = await apiFetch(`/api/playlist-transfer/netease-import-audit/jobs/${encodeURIComponent(jobId)}/export`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ format })
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "导出网易云导入歌单清理结果失败");
+  }
+
+  return (await response.json()) as TransferExportResult;
+}
+
+export async function createNeteaseImportAuditPlayablePlaylist(jobId: string, name: string): Promise<NeteaseTransferImportResult> {
+  const response = await apiFetch(`/api/playlist-transfer/netease-import-audit/jobs/${encodeURIComponent(jobId)}/import/playable`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ name })
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "创建正常歌曲新歌单失败");
+  }
+
+  return (await response.json()) as NeteaseTransferImportResult;
+}
+
+export async function createPlaylistCompare(payload: PlaylistCompareRequest): Promise<PlaylistCompareResult> {
+  const response = await apiFetch("/api/playlist-transfer/compare", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "歌单对比失败");
+  }
+
+  return (await response.json()) as PlaylistCompareResult;
+}
+
+export async function startPlaylistCompareJob(payload: PlaylistCompareRequest): Promise<PlaylistCompareJob> {
+  const response = await apiFetch("/api/playlist-transfer/compare/jobs", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "启动歌单对比任务失败");
+  }
+
+  const data = (await response.json()) as { job: PlaylistCompareJob };
+  return data.job;
+}
+
+export async function getPlaylistCompareJob(jobId: string): Promise<PlaylistCompareJob> {
+  const response = await apiFetch(`/api/playlist-transfer/compare/jobs/${encodeURIComponent(jobId)}`);
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取歌单对比进度失败");
+  }
+
+  const data = (await response.json()) as { job: PlaylistCompareJob };
+  return data.job;
+}
+
+export async function exportPlaylistCompare(payload: PlaylistCompareExportRequest): Promise<TransferExportResult> {
+  const response = await apiFetch("/api/playlist-transfer/compare/export", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "导出歌单对比结果失败");
+  }
+
+  return (await response.json()) as TransferExportResult;
 }

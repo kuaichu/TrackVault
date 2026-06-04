@@ -8,6 +8,7 @@
     "dev:client": "wait-on tcp:127.0.0.1:3010 && vite",
     "dev:server": "tsx watch server/index.ts",
     "build": "vite build && tsc -p tsconfig.server.json",
+    "test": "tsx --test \"server/**/*.test.ts\"",
     "start": "node dist-server/index.js"
   },
   "dependencies": {
