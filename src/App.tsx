@@ -526,6 +526,7 @@ export default function App() {
   const [savingAdminConfig, setSavingAdminConfig] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const [batchDownloading, setBatchDownloading] = useState(false);
+  const [directDownloadingSongId, setDirectDownloadingSongId] = useState<string | null>(null);
   const [savingTaskFileId, setSavingTaskFileId] = useState<string | null>(null);
   const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
   const [qualitySelections, setQualitySelections] = useState<Record<string, DownloadQualityLevel>>({});
@@ -1575,19 +1576,30 @@ export default function App() {
   }
 
   async function handleDownload(song: Song) {
+    if (directDownloadingSongId || batchDownloading) {
+      return;
+    }
+
     if (!accountIsLoggedIn) {
       setMessage("下载需要先登录账号，已为你打开登录窗口。");
       await handleStartQrLogin();
       return;
     }
 
+    setDirectDownloadingSongId(song.id);
+
     try {
       const level = getDownloadLevel(song);
       const selected = song.availableQualities.find((item) => item.level === level);
-      startDirectSongDownload(song, level);
-      setMessage(`已交给浏览器直连下载：${song.title} · ${selected?.label ?? "128K"}`);
+      setMessage(`正在从网易云直连下载：${song.title} · ${selected?.label ?? "128K"}`);
+      await startDirectSongDownload(song, level, (progress) => {
+        setMessage(`正在从网易云直连下载：${song.title} · ${progress}%`);
+      });
+      setMessage(`已保存到本机下载：${song.title}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "启动下载失败");
+    } finally {
+      setDirectDownloadingSongId(null);
     }
   }
 
@@ -1633,7 +1645,10 @@ export default function App() {
     try {
       for (const song of songs) {
         try {
-          startDirectSongDownload(song, getDownloadLevel(song));
+          setMessage(`正在直连下载 ${successCount + failedCount + 1}/${songs.length}：${song.title}`);
+          await startDirectSongDownload(song, getDownloadLevel(song), (progress) => {
+            setMessage(`正在直连下载 ${successCount + failedCount + 1}/${songs.length}：${song.title} · ${progress}%`);
+          });
           successCount += 1;
         } catch (error) {
           failedCount += 1;
@@ -3866,8 +3881,9 @@ export default function App() {
                       <button
                         type="button"
                         className={!hasNeteaseDownloadAuth ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
-                        aria-label={!hasNeteaseDownloadAuth ? `登录后下载 ${song.title}` : `下载 ${song.title}`}
-                        title={!hasNeteaseDownloadAuth ? "登录后下载" : "下载"}
+                        aria-label={!hasNeteaseDownloadAuth ? `登录后下载 ${song.title}` : directDownloadingSongId === song.id ? `正在下载 ${song.title}` : `下载 ${song.title}`}
+                        title={!hasNeteaseDownloadAuth ? "登录后下载" : directDownloadingSongId === song.id ? "正在下载" : "下载"}
+                        disabled={Boolean(directDownloadingSongId || batchDownloading)}
                         onClick={(event) => { event.stopPropagation(); void handleDownload(song); }}
                       >
                         <DownloadIcon />
@@ -4105,8 +4121,9 @@ export default function App() {
                         <button
                           type="button"
                           className={!hasNeteaseDownloadAuth ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
-                          aria-label={!hasNeteaseDownloadAuth ? `登录后下载 ${song.title}` : `下载 ${song.title}`}
-                          title={!hasNeteaseDownloadAuth ? "登录后下载" : "下载"}
+                          aria-label={!hasNeteaseDownloadAuth ? `登录后下载 ${song.title}` : directDownloadingSongId === song.id ? `正在下载 ${song.title}` : `下载 ${song.title}`}
+                          title={!hasNeteaseDownloadAuth ? "登录后下载" : directDownloadingSongId === song.id ? "正在下载" : "下载"}
+                          disabled={Boolean(directDownloadingSongId || batchDownloading)}
                           onClick={() => void handleDownload(song)}
                         >
                           <DownloadIcon />

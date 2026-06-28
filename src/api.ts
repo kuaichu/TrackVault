@@ -73,6 +73,13 @@ export function getStreamUrl(songId: string, level: DownloadQualityLevel, expect
   return `/api/stream?${params.toString()}`;
 }
 
+type DirectDownloadInfo = {
+  url: string;
+  filename: string;
+  type?: string | null;
+  time?: number | null;
+};
+
 export function getDirectDownloadUrl(song: Song, level: DownloadQualityLevel) {
   const params = new URLSearchParams({
     id: song.id,
@@ -87,14 +94,62 @@ export function getDirectDownloadUrl(song: Song, level: DownloadQualityLevel) {
   return `/api/download/direct?${params.toString()}`;
 }
 
-export function startDirectSongDownload(song: Song, level: DownloadQualityLevel) {
+function saveBlob(blob: Blob, filename: string) {
+  const objectUrl = window.URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.href = getDirectDownloadUrl(song, level);
-  link.download = "";
-  link.rel = "noreferrer";
+  link.href = objectUrl;
+  link.download = filename;
   document.body.appendChild(link);
   link.click();
   link.remove();
+  window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000);
+}
+
+export async function startDirectSongDownload(song: Song, level: DownloadQualityLevel, onProgress?: (progress: number) => void) {
+  const directResponse = await apiFetch(getDirectDownloadUrl(song, level));
+  if (!directResponse.ok) {
+    const data = (await directResponse.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取直连下载地址失败");
+  }
+
+  const directDownload = (await directResponse.json()) as DirectDownloadInfo;
+  const mediaResponse = await fetch(directDownload.url, {
+    credentials: "omit",
+    mode: "cors"
+  }).catch(() => {
+    throw new Error("浏览器被网易云 CDN 跨域策略拦截，无法无中转保存到本机。");
+  });
+
+  if (!mediaResponse.ok) {
+    throw new Error(`网易云 CDN 下载失败：HTTP ${mediaResponse.status}`);
+  }
+
+  const contentLength = Number(mediaResponse.headers.get("content-length") ?? "0");
+  if (!mediaResponse.body || !contentLength) {
+    const blob = await mediaResponse.blob();
+    saveBlob(blob, directDownload.filename);
+    return;
+  }
+
+  const reader = mediaResponse.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let receivedBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    if (value) {
+      chunks.push(value);
+      receivedBytes += value.length;
+      onProgress?.(Math.max(1, Math.min(99, Math.round((receivedBytes / contentLength) * 100))));
+    }
+  }
+
+  saveBlob(new Blob(chunks, { type: mediaResponse.headers.get("content-type") ?? "application/octet-stream" }), directDownload.filename);
+  onProgress?.(100);
 }
 
 export async function searchSongs(query: string): Promise<Song[]> {

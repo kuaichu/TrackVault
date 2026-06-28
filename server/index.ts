@@ -273,11 +273,6 @@ app.get("/api/stream", async (request, response) => {
   }
 });
 
-function buildContentDisposition(filename: string) {
-  const fallback = filename.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "_");
-  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
-}
-
 app.get("/api/download/direct", async (request, response) => {
   const song = {
     id: typeof request.query.id === "string" ? request.query.id : "",
@@ -299,8 +294,7 @@ app.get("/api/download/direct", async (request, response) => {
 
   try {
     const directDownload = await resolveDirectDownload(song, level as DownloadQualityLevel, userCookieOverride);
-    response.setHeader("Content-Disposition", buildContentDisposition(directDownload.filename));
-    response.redirect(302, directDownload.url);
+    response.json(directDownload);
   } catch (error) {
     response.status(error instanceof MediaAccessError ? error.status : 502).json({
       message: error instanceof Error ? error.message : "获取直连下载地址失败"
