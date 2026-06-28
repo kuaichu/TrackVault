@@ -531,6 +531,28 @@ input[type="range"] {
   gap: 12px;
 }
 
+.cookie-login-tools {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.cookie-login-tools .secondary-button {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  text-decoration: none;
+}
+
+.cookie-login-guide {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .cellphone-login-row {
   display: grid;
   grid-template-columns: 88px minmax(0, 1fr);
@@ -568,6 +590,12 @@ input[type="range"] {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 120px;
   gap: 10px;
+}
+
+@media (max-width: 520px) {
+  .cookie-login-tools {
+    grid-template-columns: 1fr;
+  }
 }
 
 .nav-list {

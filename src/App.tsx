@@ -124,6 +124,7 @@ const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
 const QR_LOGIN_DEFAULT_MESSAGE = "打开网易云音乐 App 扫码登录。";
 const CELLPHONE_LOGIN_DEFAULT_MESSAGE = "请输入手机号并发送验证码登录。";
 const COOKIE_LOGIN_DEFAULT_MESSAGE = "粘贴网页登录后的 MUSIC_U Cookie。";
+const COOKIE_LOGIN_GUIDE = "Chrome/Edge：登录 music.163.com 后按 F12，进入 Application / 应用 -> Cookies -> https://music.163.com，复制 MUSIC_U 的 Value。";
 
 type SongCachePayload = {
   savedAt: number;
@@ -554,6 +555,7 @@ export default function App() {
   });
   const [cookieLoginInput, setCookieLoginInput] = useState("");
   const [importingCookie, setImportingCookie] = useState(false);
+  const [copyingCookieGuide, setCopyingCookieGuide] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSeconds, setPlaybackSeconds] = useState(initialPlayerState.playbackSeconds);
   const [playbackDuration, setPlaybackDuration] = useState(0);
@@ -1835,6 +1837,18 @@ export default function App() {
       setQrLoginMessage(error instanceof Error ? error.message : "Cookie 导入失败");
     } finally {
       setImportingCookie(false);
+    }
+  }
+
+  async function handleCopyCookieGuide() {
+    try {
+      setCopyingCookieGuide(true);
+      await navigator.clipboard.writeText(COOKIE_LOGIN_GUIDE);
+      setQrLoginMessage("已复制获取 Cookie 的操作提示。");
+    } catch {
+      setQrLoginMessage(COOKIE_LOGIN_GUIDE);
+    } finally {
+      window.setTimeout(() => setCopyingCookieGuide(false), 900);
     }
   }
 
@@ -4424,6 +4438,15 @@ export default function App() {
               </form>
             ) : (
               <form className="cellphone-login-form" onSubmit={handleCookieLoginSubmit}>
+                <div className="cookie-login-tools">
+                  <a className="secondary-button" href="https://music.163.com/" target="_blank" rel="noreferrer">
+                    打开网易云网页登录
+                  </a>
+                  <button type="button" className="secondary-button" onClick={() => void handleCopyCookieGuide()}>
+                    {copyingCookieGuide ? "已复制" : "复制获取提示"}
+                  </button>
+                </div>
+                <p className="cookie-login-guide">{COOKIE_LOGIN_GUIDE}</p>
                 <label>
                   <span>MUSIC_U Cookie</span>
                   <textarea
