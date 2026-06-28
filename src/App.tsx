@@ -124,7 +124,7 @@ const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
 const QR_LOGIN_DEFAULT_MESSAGE = "打开网易云音乐 App 扫码登录。";
 const CELLPHONE_LOGIN_DEFAULT_MESSAGE = "请输入手机号并发送验证码登录。";
 const COOKIE_LOGIN_DEFAULT_MESSAGE = "粘贴网页登录后的 MUSIC_U Cookie。";
-const COOKIE_LOGIN_GUIDE = "Chrome/Edge：F12 -> Application / 应用 -> Cookies -> https://music.163.com -> MUSIC_U -> 复制 Value。Firefox：F12 -> 存储 -> Cookies -> https://music.163.com -> MUSIC_U -> 复制值。";
+const COOKIE_LOGIN_GUIDE = "Chrome/Edge：F12 -> Application / 应用 -> Cookies -> https://music.163.com -> MUSIC_U -> 复制 Value。Firefox：F12 -> 存储 -> Cookies -> https://music.163.com -> MUSIC_U -> 复制值。直接粘贴值，或 MUSIC_U:\"...\" 都可以。";
 
 type SongCachePayload = {
   savedAt: number;
@@ -1797,12 +1797,26 @@ export default function App() {
   }
 
   function normalizeNeteaseCookieInput(input: string) {
-    const trimmed = input.trim();
+    let trimmed = input.trim();
     if (!trimmed) {
       return "";
     }
 
-    return trimmed.includes("=") ? trimmed : `MUSIC_U=${trimmed}`;
+    const cookiePair = trimmed
+      .split(";")
+      .map((item) => item.trim())
+      .find((item) => /^MUSIC_U\s*[=:]/i.test(item));
+    if (cookiePair) {
+      trimmed = cookiePair;
+    }
+
+    const musicUValue = trimmed.match(/^"?MUSIC_U"?\s*[:=]\s*"?([^";\s]+)"?$/i)?.[1];
+    if (musicUValue) {
+      return `MUSIC_U=${musicUValue}`;
+    }
+
+    const bareValue = trimmed.replace(/^"+|"+$/g, "");
+    return bareValue.includes("=") ? bareValue : `MUSIC_U=${bareValue}`;
   }
 
   async function handleCookieLoginSubmit(event: FormEvent<HTMLFormElement>) {
