@@ -45,6 +45,13 @@ export type ResolvedSongStream = {
   } | null;
 };
 
+export type DirectDownloadResolution = {
+  url: string;
+  filename: string;
+  type?: string | null;
+  time?: number | null;
+};
+
 function normalizeTask(task: DownloadTask): DownloadTask {
   const normalizedTask: DownloadTask = {
     ...task,
@@ -503,6 +510,20 @@ export async function resolveSongStream(
 export async function assertDownloadAccess(song: Song, level: DownloadQualityLevel, userCookieOverride?: string) {
   const plan = await buildMediaCredentialPlan({ userCookieOverride });
   await resolveSongDownloadWithPlan(song, level, plan);
+}
+
+export async function resolveDirectDownload(song: Song, level: DownloadQualityLevel, userCookieOverride?: string): Promise<DirectDownloadResolution> {
+  const plan = await buildMediaCredentialPlan({ userCookieOverride });
+  const resolvedSong = await resolveSongDownloadWithPlan(song, level, plan);
+  const extension = getFileExtension(resolvedSong.url, null, resolvedSong.type);
+  const safeFileName = sanitizeFileName(`${song.title}-${song.artist}-${song.id}`);
+
+  return {
+    url: resolvedSong.url,
+    filename: `${safeFileName}.${extension}`,
+    type: resolvedSong.type,
+    time: resolvedSong.time
+  };
 }
 
 export async function checkNeteaseCookie(cookie: string): Promise<NeteaseCookieCheckResult> {

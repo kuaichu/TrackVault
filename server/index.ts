@@ -17,7 +17,7 @@ import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./settings-store.js";
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
-import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, getTaskFileForDownload, resolveSongStream } from "./task-store.js";
+import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, getTaskFileForDownload, resolveDirectDownload, resolveSongStream } from "./task-store.js";
 import { checkNeteaseQrLogin, loginWithNeteaseCellphone, sendNeteaseCaptcha, startNeteaseQrLogin } from "./netease-auth.js";
 import { formatTransferExport } from "./playlist-transfer/export-formatters.js";
 import { buildNeteaseImportedPlaylistAudit } from "./playlist-transfer/netease-import-audit.js";
@@ -269,6 +269,41 @@ app.get("/api/stream", async (request, response) => {
   } catch (error) {
     response.status(error instanceof MediaAccessError ? error.status : 502).json({
       message: error instanceof Error ? error.message : "音频流获取失败"
+    });
+  }
+});
+
+function buildContentDisposition(filename: string) {
+  const fallback = filename.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "_");
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
+app.get("/api/download/direct", async (request, response) => {
+  const song = {
+    id: typeof request.query.id === "string" ? request.query.id : "",
+    title: typeof request.query.title === "string" ? request.query.title : "",
+    artist: typeof request.query.artist === "string" ? request.query.artist : "",
+    album: typeof request.query.album === "string" ? request.query.album : "",
+    duration: typeof request.query.duration === "string" ? request.query.duration : "",
+    quality: "",
+    availableQualities: [],
+    source: "netease"
+  };
+  const level = typeof request.query.level === "string" ? request.query.level : "standard";
+  const userCookieOverride = typeof request.headers["x-user-cookie"] === "string" ? request.headers["x-user-cookie"] : undefined;
+
+  if (!song.id || !song.title || !song.artist) {
+    response.status(400).json({ message: "缺少歌曲信息" });
+    return;
+  }
+
+  try {
+    const directDownload = await resolveDirectDownload(song, level as DownloadQualityLevel, userCookieOverride);
+    response.setHeader("Content-Disposition", buildContentDisposition(directDownload.filename));
+    response.redirect(302, directDownload.url);
+  } catch (error) {
+    response.status(error instanceof MediaAccessError ? error.status : 502).json({
+      message: error instanceof Error ? error.message : "获取直连下载地址失败"
     });
   }
 });

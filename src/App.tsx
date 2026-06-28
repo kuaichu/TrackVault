@@ -3,7 +3,6 @@ import {
   checkNeteaseCookie,
   getAdminConfig as getAdminConfigRemote,
   sendNeteaseCaptcha,
-  createDownload,
   downloadTaskFile,
   cancelNeteaseImportAuditJob,
   createNeteaseImportAuditPlayablePlaylist,
@@ -43,6 +42,7 @@ import {
   setSongLiked,
   saveSettings,
   startNeteaseQrLogin,
+  startDirectSongDownload,
   startNeteaseImportAuditJob,
   startPlaylistCompareJob,
   startPlaylistTransferRunJob,
@@ -103,7 +103,7 @@ const navText: Record<NavKey, { title: string; subtitle: string }> = {
   playlists: { title: "我的歌单", subtitle: "读取网易云账号歌单并载入歌曲" },
   transfer: { title: "歌单互转", subtitle: "跨平台匹配、缺失识别与文字歌单导出" },
   cloud: { title: "云盘音乐", subtitle: "读取网易云音乐云盘并载入歌曲" },
-  downloads: { title: "下载管理", subtitle: "集中查看本地下载任务、进度和输出文件" },
+  downloads: { title: "下载管理", subtitle: "查看服务器下载任务、进度和输出文件" },
   history: { title: "播放历史", subtitle: "回看最近播放并快速继续收听" }
   ,
   artist: { title: "歌手", subtitle: "查看歌手热门歌曲与简介" },
@@ -1584,12 +1584,10 @@ export default function App() {
     try {
       const level = getDownloadLevel(song);
       const selected = song.availableQualities.find((item) => item.level === level);
-      await createDownload(song, level);
-      navigateTo("downloads");
-      setMessage(`已加入下载：${song.title} · ${selected?.label ?? "128K"}`);
-      await refreshTasks();
+      startDirectSongDownload(song, level);
+      setMessage(`已交给浏览器直连下载：${song.title} · ${selected?.label ?? "128K"}`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "加入下载失败");
+      setMessage(error instanceof Error ? error.message : "启动下载失败");
     }
   }
 
@@ -1626,7 +1624,7 @@ export default function App() {
     }
 
     setBatchDownloading(true);
-    setMessage(`正在加入${scopeLabel}...`);
+    setMessage(`正在启动${scopeLabel}直连下载...`);
 
     let successCount = 0;
     let failedCount = 0;
@@ -1635,27 +1633,22 @@ export default function App() {
     try {
       for (const song of songs) {
         try {
-          await createDownload(song, getDownloadLevel(song));
+          startDirectSongDownload(song, getDownloadLevel(song));
           successCount += 1;
         } catch (error) {
           failedCount += 1;
           if (!firstFailureMessage) {
-            firstFailureMessage = error instanceof Error ? error.message : "加入下载失败";
+            firstFailureMessage = error instanceof Error ? error.message : "启动下载失败";
           }
         }
       }
 
-      if (successCount > 0) {
-        navigateTo("downloads");
-        await refreshTasks();
-      }
-
       if (successCount > 0 && failedCount === 0) {
-        setMessage(`已将 ${scopeLabel}的 ${successCount} 首歌曲加入下载队列。`);
+        setMessage(`已向浏览器提交 ${scopeLabel}的 ${successCount} 首直连下载。`);
       } else if (successCount > 0) {
-        setMessage(`已加入 ${successCount} 首，失败 ${failedCount} 首。${firstFailureMessage}`);
+        setMessage(`已提交 ${successCount} 首，失败 ${failedCount} 首。${firstFailureMessage}`);
       } else {
-        setMessage(firstFailureMessage || "批量加入下载失败");
+        setMessage(firstFailureMessage || "批量启动下载失败");
       }
     } finally {
       setBatchDownloading(false);
@@ -3751,7 +3744,7 @@ export default function App() {
                       onClick={() => void handleBatchDownload(selectedVisibleSongs, "已选歌曲")}
                     >
                       {!hasNeteaseDownloadAuth ? <LockIcon /> : null}
-                      {batchDownloading ? "加入中" : "下载已选"}
+                        {batchDownloading ? "启动中" : "直连下载已选"}
                     </button>
                     <button
                       type="button"
@@ -3923,7 +3916,7 @@ export default function App() {
               <header className="download-manager-head">
                 <div>
                   <p className="eyebrow">下载管理</p>
-                  <h2>本地下载任务</h2>
+                  <h2>服务器下载任务</h2>
                 </div>
                 <div className="download-summary">
                   <span>{completedCount} 已完成</span>
@@ -3994,7 +3987,7 @@ export default function App() {
                         onClick={() => void handleBatchDownload(selectedVisibleSongs, "已选歌曲")}
                       >
                         {!hasNeteaseDownloadAuth ? <LockIcon /> : null}
-                        {batchDownloading ? "加入中" : "下载已选"}
+                      {batchDownloading ? "启动中" : "直连下载已选"}
                       </button>
                       <button
                         type="button"
@@ -4202,13 +4195,13 @@ export default function App() {
             <section className="form-panel">
               <div className="form-head">
                 <p className="eyebrow">下载偏好</p>
-                <h1>下载任务与文件保存</h1>
+                <h1>服务器下载任务与文件保存</h1>
               </div>
 
               <form className="settings-grid" onSubmit={handleSaveSettings}>
                 <label className="settings-card">
-                  <span>下载目录</span>
-                  <p>保存下载文件的本地目录，支持相对路径或绝对路径。</p>
+                  <span>服务器下载目录</span>
+                  <p>保存服务器下载任务产物的目录，浏览器直连下载不会写入这里。</p>
                   <input value={settings.downloadDirectory} onChange={(event) => setSettings((current) => ({ ...current, downloadDirectory: event.target.value }))} placeholder="downloads" />
                 </label>
 
@@ -4232,7 +4225,7 @@ export default function App() {
 
                 <label className="settings-card">
                   <span>默认下载音质</span>
-                  <p>加入下载队列时优先使用该音质；如果你手动改过某首歌的音质，会优先按手动选择下载。</p>
+                  <p>直连下载和服务器下载任务都会优先使用该音质；如果你手动改过某首歌的音质，会优先按手动选择下载。</p>
                   <select
                     value={settings.defaultDownloadQuality}
                     onChange={(event) => {
@@ -4249,7 +4242,7 @@ export default function App() {
 
                 <label className="settings-card">
                   <span>同时下载任务数限制</span>
-                  <p>控制本地下载队列并发，范围 1-5。网络不稳时建议设为 1-2。</p>
+                  <p>控制服务器下载任务并发，范围 1-5。浏览器直连下载不受这个设置影响。</p>
                   <input
                     type="number"
                     min="1"

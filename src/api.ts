@@ -73,6 +73,30 @@ export function getStreamUrl(songId: string, level: DownloadQualityLevel, expect
   return `/api/stream?${params.toString()}`;
 }
 
+export function getDirectDownloadUrl(song: Song, level: DownloadQualityLevel) {
+  const params = new URLSearchParams({
+    id: song.id,
+    title: song.title,
+    artist: song.artist,
+    album: song.album,
+    duration: song.duration,
+    level,
+    sid: getClientSessionId()
+  });
+
+  return `/api/download/direct?${params.toString()}`;
+}
+
+export function startDirectSongDownload(song: Song, level: DownloadQualityLevel) {
+  const link = document.createElement("a");
+  link.href = getDirectDownloadUrl(song, level);
+  link.download = "";
+  link.rel = "noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
 export async function searchSongs(query: string): Promise<Song[]> {
   const response = await apiFetch(`/api/search?q=${encodeURIComponent(query)}`);
   if (!response.ok) {
