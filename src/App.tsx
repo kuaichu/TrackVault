@@ -4,6 +4,7 @@ import {
   getAdminConfig as getAdminConfigRemote,
   sendNeteaseCaptcha,
   createDownload,
+  downloadTaskFile,
   cancelNeteaseImportAuditJob,
   createNeteaseImportAuditPlayablePlaylist,
   exportPlaylistCompare,
@@ -525,6 +526,7 @@ export default function App() {
   const [savingAdminConfig, setSavingAdminConfig] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const [batchDownloading, setBatchDownloading] = useState(false);
+  const [savingTaskFileId, setSavingTaskFileId] = useState<string | null>(null);
   const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
   const [qualitySelections, setQualitySelections] = useState<Record<string, DownloadQualityLevel>>({});
   const [qualitySelectionTouched, setQualitySelectionTouched] = useState<Record<string, true>>({});
@@ -1588,6 +1590,24 @@ export default function App() {
       await refreshTasks();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "加入下载失败");
+    }
+  }
+
+  async function handleSaveTaskFile(task: DownloadTask) {
+    if (savingTaskFileId) {
+      return;
+    }
+
+    setSavingTaskFileId(task.id);
+    setMessage(`正在保存到本机：${task.title}`);
+
+    try {
+      await downloadTaskFile(task);
+      setMessage(`已开始保存到本机：${task.title}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "保存文件失败");
+    } finally {
+      setSavingTaskFileId(null);
     }
   }
 
@@ -3932,7 +3952,20 @@ export default function App() {
                       <div className="download-task-meta">
                         {task.status === "done" ? <span>时长 {task.downloadedDuration ?? "--"} · 大小 {formatFileSize(task.fileSizeBytes)}</span> : null}
                         {task.error ? <span className="queue-error">{task.error}</span> : null}
-                        <span>{task.outputPath ?? "等待写入产物"}</span>
+                        <span>{task.outputPath ? `服务器文件：${task.outputPath}` : "等待写入产物"}</span>
+                      </div>
+                      <div className="download-task-action">
+                        {task.status === "done" ? (
+                          <button
+                            type="button"
+                            className="secondary-button compact"
+                            disabled={savingTaskFileId === task.id}
+                            onClick={() => void handleSaveTaskFile(task)}
+                          >
+                            <DownloadIcon />
+                            {savingTaskFileId === task.id ? "保存中" : "保存到本机"}
+                          </button>
+                        ) : null}
                       </div>
                     </article>
                   ))

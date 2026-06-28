@@ -692,6 +692,31 @@ export async function getAllTasks(): Promise<DownloadTask[]> {
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
+export async function getTaskFileForDownload(taskId: string): Promise<{ task: DownloadTask; filePath: string; filename: string } | null> {
+  await initializeTaskStore();
+  const userKey = await getCurrentUserKey();
+  const task = tasks.get(taskId);
+
+  if (!task || (taskOwners.get(taskId) ?? "guest:default") !== userKey || task.status !== "done" || !task.outputPath) {
+    return null;
+  }
+
+  try {
+    const stat = await fsPromises.stat(task.outputPath);
+    if (!stat.isFile()) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
+  return {
+    task,
+    filePath: task.outputPath,
+    filename: path.basename(task.outputPath)
+  };
+}
+
 export async function createTask(song: Song, level: DownloadQualityLevel): Promise<DownloadTask> {
   await initializeTaskStore();
   const userKey = await getCurrentUserKey();

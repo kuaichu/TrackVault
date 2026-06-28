@@ -1455,7 +1455,7 @@ input[type="range"] {
 
 .download-task-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) 88px minmax(180px, 0.8fr);
+  grid-template-columns: minmax(0, 1.2fr) 88px minmax(180px, 0.8fr) 126px;
   gap: 14px;
   align-items: center;
   padding: 14px;
@@ -1496,6 +1496,26 @@ input[type="range"] {
   gap: 8px;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.download-task-action {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.download-task-action .secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  white-space: nowrap;
+}
+
+.download-task-action .action-svg {
+  width: 16px;
+  height: 16px;
 }
 
 .playlist-manager {

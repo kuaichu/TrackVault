@@ -118,6 +118,39 @@ export async function getTasks(): Promise<DownloadTask[]> {
   return (await response.json()) as DownloadTask[];
 }
 
+function getFilenameFromContentDisposition(contentDisposition: string | null) {
+  if (!contentDisposition) {
+    return "";
+  }
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1].trim());
+  }
+
+  const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+  return filenameMatch?.[1]?.trim() ?? "";
+}
+
+export async function downloadTaskFile(task: DownloadTask): Promise<void> {
+  const response = await apiFetch(`/api/tasks/${encodeURIComponent(task.id)}/file`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "保存文件失败");
+  }
+
+  const blob = await response.blob();
+  const filename = getFilenameFromContentDisposition(response.headers.get("content-disposition")) || `${task.title}-${task.artist}.mp3`;
+  const objectUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(objectUrl);
+}
+
 export async function getPlaylists(): Promise<UserPlaylist[]> {
   const response = await apiFetch("/api/playlists");
   if (!response.ok) {

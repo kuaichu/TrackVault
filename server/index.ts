@@ -17,7 +17,7 @@ import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./settings-store.js";
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
-import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, resolveSongStream } from "./task-store.js";
+import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, getTaskFileForDownload, resolveSongStream } from "./task-store.js";
 import { checkNeteaseQrLogin, loginWithNeteaseCellphone, sendNeteaseCaptcha, startNeteaseQrLogin } from "./netease-auth.js";
 import { formatTransferExport } from "./playlist-transfer/export-formatters.js";
 import { buildNeteaseImportedPlaylistAudit } from "./playlist-transfer/netease-import-audit.js";
@@ -70,6 +70,23 @@ app.get("/api/discover/songs", async (_request, response) => {
 
 app.get("/api/tasks", async (_request, response) => {
   response.json(await getAllTasks());
+});
+
+app.get("/api/tasks/:taskId/file", async (request, response) => {
+  const file = await getTaskFileForDownload(request.params.taskId);
+
+  if (!file) {
+    response.status(404).json({ message: "下载文件不存在或无权访问" });
+    return;
+  }
+
+  response.download(file.filePath, file.filename, (error) => {
+    if (!error || response.headersSent) {
+      return;
+    }
+
+    response.status(500).json({ message: "读取下载文件失败" });
+  });
 });
 
 app.get("/api/history/search", async (_request, response) => {
