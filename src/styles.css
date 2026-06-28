@@ -906,7 +906,7 @@ input[type="range"] {
 .results-head,
 .result-row {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1.1fr) minmax(0, 1.2fr) 72px 118px 100px;
+  grid-template-columns: 24px minmax(180px, 1.1fr) minmax(190px, 1.2fr) 72px 118px 100px;
   gap: 14px;
   align-items: center;
 }
@@ -1032,6 +1032,8 @@ input[type="range"] {
 
 .result-copy,
 .result-meta,
+.result-track,
+.row-actions,
 .dock-copy {
   min-width: 0;
 }
@@ -1148,6 +1150,7 @@ input[type="range"] {
   display: flex;
   justify-content: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .row-icon-button {
@@ -2948,7 +2951,16 @@ input[type="range"] {
 
   .results-head,
   .result-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 68px 108px 100px;
+    grid-template-columns: 24px minmax(150px, 1.05fr) minmax(170px, 1fr) 64px 108px 92px;
+    gap: 12px;
+  }
+
+  .quality-select {
+    width: 108px;
+  }
+
+  .row-actions {
+    gap: 6px;
   }
 }
 
@@ -2979,6 +2991,21 @@ input[type="range"] {
   .player-dock {
     grid-template-columns: 1fr;
     max-width: calc(100vw - 32px);
+  }
+
+  .results-head,
+  .result-row {
+    grid-template-columns: 24px minmax(140px, 1.1fr) minmax(150px, 1fr) 58px 102px 92px;
+    gap: 10px;
+  }
+
+  .results-panel {
+    --results-body-x: 14px;
+    --results-row-x: 14px;
+  }
+
+  .quality-select {
+    width: 102px;
   }
 
   .dock-controls,
