@@ -124,8 +124,8 @@ const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
 const QR_LOGIN_DEFAULT_MESSAGE = "打开网易云音乐 App 扫码登录。";
 const CELLPHONE_LOGIN_DEFAULT_MESSAGE = "请输入手机号并发送验证码登录。";
 const COOKIE_LOGIN_DEFAULT_MESSAGE = "粘贴网页登录后的 MUSIC_U Cookie。";
-const COOKIE_LOGIN_GUIDE = "Chrome/Edge：登录 music.163.com 后按 F12，进入 Application / 应用 -> Cookies -> https://music.163.com，复制 MUSIC_U 的 Value。";
-const COOKIE_LOGIN_CONSOLE_COMMAND = `(() => { const cookie = document.cookie.split("; ").find((item) => item.startsWith("MUSIC_U=")); if (!cookie) { console.warn("未找到 MUSIC_U。请在 Application / 应用 -> Cookies -> https://music.163.com 里复制 MUSIC_U 的 Value。"); return; } if (typeof copy === "function") { copy(cookie); console.log("已复制 MUSIC_U Cookie。"); } else if (navigator.clipboard) { navigator.clipboard.writeText(cookie); console.log("已请求复制 MUSIC_U Cookie。"); } else { console.log(cookie); } console.log(cookie); })();`;
+const COOKIE_LOGIN_GUIDE = "Firefox：登录 music.163.com 后按 F12，进入 存储 -> Cookies -> https://music.163.com，点 MUSIC_U，复制值。Chrome/Edge：Application / 应用 -> Cookies -> https://music.163.com，复制 MUSIC_U 的 Value。";
+const COOKIE_LOGIN_CONSOLE_COMMAND = `(() => { const cookie = document.cookie.split("; ").find((item) => item.startsWith("MUSIC_U=")); if (!cookie) { console.warn("未找到 MUSIC_U。Firefox/部分浏览器会把 MUSIC_U 设为 HttpOnly，控制台读不到。请到 存储/Application -> Cookies -> https://music.163.com，复制 MUSIC_U 的 Value。"); return; } if (typeof copy === "function") { copy(cookie); console.log("已复制 MUSIC_U Cookie。"); } else if (navigator.clipboard) { navigator.clipboard.writeText(cookie); console.log("已请求复制 MUSIC_U Cookie。"); } else { console.log(cookie); } console.log(cookie); })();`;
 
 type SongCachePayload = {
   savedAt: number;
@@ -4464,6 +4464,7 @@ export default function App() {
                   </button>
                 </div>
                 <p className="cookie-login-guide">{COOKIE_LOGIN_GUIDE}</p>
+                <p className="cookie-login-warning">控制台提示未找到时，直接去“存储”面板复制 MUSIC_U；那是浏览器保护登录 Cookie，不是登录失败。</p>
                 <code className="cookie-login-command">{COOKIE_LOGIN_CONSOLE_COMMAND}</code>
                 <label>
                   <span>MUSIC_U Cookie</span>

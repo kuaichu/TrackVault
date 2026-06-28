@@ -553,6 +553,17 @@ input[type="range"] {
   line-height: 1.55;
 }
 
+.cookie-login-warning {
+  margin: 0;
+  border: 1px solid rgba(255, 180, 93, 0.24);
+  border-radius: 12px;
+  background: rgba(255, 180, 93, 0.08);
+  color: #ffd7a4;
+  padding: 9px 11px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .cookie-login-command {
   display: block;
   max-height: 76px;
