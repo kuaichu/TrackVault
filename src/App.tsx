@@ -73,7 +73,7 @@ type MainTab = "search" | "account" | "settings";
 type NavKey = "discover" | "search" | "daily" | "playlists" | "transfer" | "cloud" | "downloads" | "history" | "artist" | "album";
 type RightPanelTab = "queue" | "lyrics";
 type ResultSource = "search" | "playlist" | "cloud" | "daily" | "discover" | "artist" | "album";
-type NeteaseLoginMode = "qr" | "cellphone";
+type NeteaseLoginMode = "qr" | "cellphone" | "cookie";
 type ViewSnapshot = {
   results: Song[];
   playQueue: Song[];
@@ -123,6 +123,7 @@ const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
 };
 const QR_LOGIN_DEFAULT_MESSAGE = "打开网易云音乐 App 扫码登录。";
 const CELLPHONE_LOGIN_DEFAULT_MESSAGE = "请输入手机号并发送验证码登录。";
+const COOKIE_LOGIN_DEFAULT_MESSAGE = "粘贴网页登录后的 MUSIC_U Cookie。";
 
 type SongCachePayload = {
   savedAt: number;
@@ -551,6 +552,8 @@ export default function App() {
     phone: "",
     captcha: ""
   });
+  const [cookieLoginInput, setCookieLoginInput] = useState("");
+  const [importingCookie, setImportingCookie] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSeconds, setPlaybackSeconds] = useState(initialPlayerState.playbackSeconds);
   const [playbackDuration, setPlaybackDuration] = useState(0);
@@ -1791,6 +1794,50 @@ export default function App() {
     setMessage(successMessage);
   }
 
+  function normalizeNeteaseCookieInput(input: string) {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      return "";
+    }
+
+    return trimmed.includes("=") ? trimmed : `MUSIC_U=${trimmed}`;
+  }
+
+  async function handleCookieLoginSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (importingCookie) {
+      return;
+    }
+
+    const cookie = normalizeNeteaseCookieInput(cookieLoginInput);
+    if (!cookie) {
+      setQrLoginMessage("请输入 MUSIC_U Cookie。");
+      return;
+    }
+
+    try {
+      setImportingCookie(true);
+      const checkResult = await checkNeteaseCookie(cookie);
+      if (!checkResult.ok) {
+        setQrLoginMessage(checkResult.message);
+        return;
+      }
+
+      await saveSettings({
+        ...settings,
+        providerMode: "netease",
+        neteaseCookie: cookie
+      });
+      await handleNeteaseLoginSuccess(null, `网页登录 Cookie 已导入：${checkResult.accountName ?? "网易云账号"}`);
+      setCookieLoginInput("");
+      closeQrLogin();
+    } catch (error) {
+      setQrLoginMessage(error instanceof Error ? error.message : "Cookie 导入失败");
+    } finally {
+      setImportingCookie(false);
+    }
+  }
+
   async function handleSendCaptcha() {
     if (sendingCaptcha) {
       return;
@@ -1848,6 +1895,7 @@ export default function App() {
     setQrLoginMessage(QR_LOGIN_DEFAULT_MESSAGE);
     setQrLoginExpiresIn(0);
     setNeteaseLoginMode("qr");
+    setCookieLoginInput("");
   }
 
   function handleSwitchNeteaseLoginMode(mode: NeteaseLoginMode) {
@@ -1857,7 +1905,9 @@ export default function App() {
         ? qrLoginKey && qrLoginImage
           ? "打开网易云音乐 App，扫码后在手机上确认登录。"
           : QR_LOGIN_DEFAULT_MESSAGE
-        : CELLPHONE_LOGIN_DEFAULT_MESSAGE
+        : mode === "cellphone"
+          ? CELLPHONE_LOGIN_DEFAULT_MESSAGE
+          : COOKIE_LOGIN_DEFAULT_MESSAGE
     );
   }
 
@@ -4315,6 +4365,7 @@ export default function App() {
             <div className="qr-mode-switch" role="tablist" aria-label="网易云登录方式">
                 <button type="button" className={neteaseLoginMode === "qr" ? "qr-mode-button active" : "qr-mode-button"} onClick={() => handleSwitchNeteaseLoginMode("qr")}>扫码登录</button>
                 <button type="button" className={neteaseLoginMode === "cellphone" ? "qr-mode-button active" : "qr-mode-button"} onClick={() => handleSwitchNeteaseLoginMode("cellphone")}>验证码登录</button>
+                <button type="button" className={neteaseLoginMode === "cookie" ? "qr-mode-button active" : "qr-mode-button"} onClick={() => handleSwitchNeteaseLoginMode("cookie")}>Cookie 导入</button>
             </div>
 
             {neteaseLoginMode === "qr" ? (
@@ -4332,7 +4383,7 @@ export default function App() {
                   <strong>{formatPlaybackTime(qrLoginExpiresIn)}</strong>
                 </div>
               </>
-            ) : (
+            ) : neteaseLoginMode === "cellphone" ? (
               <form className="cellphone-login-form" onSubmit={handleCellphoneLoginSubmit}>
                 <div className="cellphone-login-row">
                   <label>
@@ -4371,6 +4422,22 @@ export default function App() {
                   {loggingCellphoneIn ? "登录中" : "验证码登录"}
                 </button>
               </form>
+            ) : (
+              <form className="cellphone-login-form" onSubmit={handleCookieLoginSubmit}>
+                <label>
+                  <span>MUSIC_U Cookie</span>
+                  <textarea
+                    className="cookie-login-input"
+                    value={cookieLoginInput}
+                    onChange={(event) => setCookieLoginInput(event.target.value)}
+                    placeholder="MUSIC_U=..."
+                    spellCheck={false}
+                  />
+                </label>
+                <button type="submit" className="primary-button wide" disabled={importingCookie}>
+                  {importingCookie ? "导入中" : "导入 Cookie"}
+                </button>
+              </form>
             )}
             <p className="qr-message">{qrLoginMessage}</p>
             <div className="qr-actions">
@@ -4378,8 +4445,12 @@ export default function App() {
                 <button type="button" className="secondary-button" disabled={startingQrLogin} onClick={() => void handleStartQrLogin()}>
                   重新生成
                 </button>
-              ) : (
+              ) : neteaseLoginMode === "cellphone" ? (
                 <button type="button" className="secondary-button" onClick={() => setCellphoneLoginForm({ countryCode: "86", phone: "", captcha: "" })}>
+                  清空
+                </button>
+              ) : (
+                <button type="button" className="secondary-button" onClick={() => setCookieLoginInput("")}>
                   清空
                 </button>
               )}
