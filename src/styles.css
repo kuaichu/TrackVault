@@ -5461,3 +5461,360 @@ body {
     height: 56px;
   }
 }
+
+/* Reference-aligned center workspace: flatter, table-first, less boxed-in. */
+.content-panel {
+  padding: 24px 28px 24px;
+}
+
+.content-header {
+  padding: 0 0 22px;
+  align-items: flex-start;
+}
+
+.content-titlebar {
+  align-items: center;
+}
+
+.content-header h1,
+.form-head h1 {
+  font-size: 1.28rem;
+  font-weight: 760;
+}
+
+.content-actions {
+  margin-top: 0;
+  align-items: center;
+}
+
+.content-summary {
+  gap: 2px;
+}
+
+.content-summary strong {
+  color: #f5f7fb;
+  font-size: 1rem;
+}
+
+.content-summary span {
+  color: #8f9dad;
+}
+
+.results-panel {
+  --results-body-x: 0;
+  --results-row-x: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.playlist-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 0 16px;
+  margin: 0 0 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
+}
+
+.playlist-toolbar-pagination {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.playlist-toolbar-pagination span {
+  color: #dce4ef;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.playlist-toolbar .secondary-button,
+.playlist-filter-form .secondary-button {
+  min-height: 42px;
+  border-radius: 14px;
+  background: rgba(19, 28, 42, 0.74);
+}
+
+.playlist-filter-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 350px) auto;
+  gap: 10px;
+  align-items: center;
+  margin-left: auto;
+}
+
+.playlist-filter-form input {
+  height: 42px;
+  border-radius: 14px;
+  background: rgba(13, 20, 31, 0.88);
+}
+
+.results-head {
+  margin: 0;
+  padding: 14px var(--results-row-x) 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: transparent;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.results-body {
+  gap: 0;
+  padding: 0;
+}
+
+.result-row {
+  min-height: 84px;
+  padding: 14px var(--results-row-x);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.055);
+}
+
+.result-row:hover {
+  background: rgba(255, 255, 255, 0.028);
+  border-color: transparent;
+  transform: none;
+}
+
+.result-row.active {
+  min-height: 88px;
+  margin: 8px 0;
+  border: 1px solid rgba(255, 180, 93, 0.24);
+  border-radius: 10px;
+  background:
+    linear-gradient(90deg, rgba(255, 180, 93, 0.19), rgba(255, 180, 93, 0.075) 46%, rgba(255, 255, 255, 0.02)),
+    rgba(38, 29, 22, 0.72);
+  box-shadow:
+    inset 4px 0 0 var(--accent),
+    0 14px 32px rgba(0, 0, 0, 0.18);
+}
+
+.result-row.active::before {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  width: 16px;
+  height: 18px;
+  content: "";
+  transform: translateY(-50%);
+  background:
+    linear-gradient(var(--accent), var(--accent)) 0 60% / 3px 8px no-repeat,
+    linear-gradient(var(--accent), var(--accent)) 6px 35% / 3px 14px no-repeat,
+    linear-gradient(var(--accent), var(--accent)) 12px 50% / 3px 10px no-repeat;
+  opacity: 0.95;
+}
+
+.result-row.active .result-check-cell {
+  opacity: 0.45;
+}
+
+.result-cover {
+  width: 48px;
+  height: 48px;
+}
+
+.quality-trigger {
+  min-height: 44px;
+  border-radius: 13px;
+}
+
+.row-icon-button {
+  width: 42px;
+  height: 42px;
+}
+
+@media (max-width: 1360px) {
+  .content-panel {
+    padding: 22px 24px;
+  }
+
+  .playlist-toolbar {
+    gap: 14px;
+  }
+
+  .playlist-filter-form {
+    grid-template-columns: minmax(180px, 1fr) auto;
+  }
+}
+
+@media (max-width: 1120px) {
+  .playlist-toolbar {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .playlist-filter-form {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .content-panel {
+    padding: 14px;
+  }
+
+  .content-header {
+    padding-bottom: 16px;
+  }
+
+  .playlist-filter-form {
+    grid-template-columns: 1fr;
+  }
+
+  .result-row.active::before {
+    display: none;
+  }
+}
+
+/* Final table pass: keep the music workspace calm and prevent cramped mid-size windows. */
+.results-head,
+.result-row {
+  grid-template-columns: 24px minmax(210px, 1.18fr) minmax(220px, 1.12fr) 64px 108px 92px;
+  gap: 12px;
+}
+
+.results-head {
+  padding-top: 12px;
+  font-size: 12px;
+  color: rgba(186, 198, 214, 0.72);
+}
+
+.result-row {
+  min-height: 76px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.result-row.active {
+  min-height: 78px;
+  margin: 6px 0;
+  border-radius: 8px;
+}
+
+.result-cover {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+
+.result-copy strong,
+.result-meta strong {
+  font-size: 0.96rem;
+}
+
+.result-copy span,
+.result-meta span {
+  margin-top: 3px;
+  font-size: 0.86rem;
+}
+
+.quality-select {
+  width: 108px;
+}
+
+.quality-trigger {
+  min-height: 40px;
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+
+.row-icon-button {
+  width: 38px;
+  height: 38px;
+}
+
+.row-actions {
+  gap: 7px;
+}
+
+@media (max-width: 1320px) {
+  .app-layout {
+    grid-template-columns: 204px minmax(0, 1fr);
+  }
+
+  .utility-panel {
+    display: none;
+  }
+
+  .results-head,
+  .result-row {
+    grid-template-columns: 24px minmax(220px, 1.18fr) minmax(230px, 1.1fr) 64px 108px 92px;
+  }
+}
+
+@media (max-width: 1120px) {
+  .app-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .utility-panel {
+    display: flex;
+  }
+
+  .results-head,
+  .result-row {
+    grid-template-columns: 24px minmax(180px, 1.14fr) minmax(190px, 1fr) 60px 104px 88px;
+    gap: 10px;
+  }
+}
+
+@media (max-width: 860px) {
+  .results-head,
+  .result-row {
+    grid-template-columns: 22px minmax(0, 1.15fr) minmax(0, 0.95fr) 52px 96px 82px;
+  }
+
+  .result-cover {
+    width: 40px;
+    height: 40px;
+  }
+
+  .quality-select {
+    width: 96px;
+  }
+
+  .row-icon-button {
+    width: 36px;
+    height: 36px;
+  }
+}
+
+@media (max-width: 760px) {
+  .results-head {
+    display: none;
+  }
+
+  .result-row {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 14px;
+    border-radius: 12px;
+  }
+
+  .result-row.active {
+    border-radius: 12px;
+  }
+
+  .result-check-cell {
+    justify-content: flex-start;
+  }
+
+  .row-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .row-actions .row-icon-button,
+  .quality-select,
+  .quality-trigger {
+    width: 100%;
+  }
+}
