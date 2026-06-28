@@ -6,6 +6,20 @@ import type { AuthSession } from "./types.js";
 const require = createRequire(import.meta.url);
 const { captcha_sent, login_cellphone, login_qr_check, login_qr_create, login_qr_key } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
 
+type NeteaseApiParams = Record<string, unknown>;
+
+type NeteaseApiErrorBody = {
+  code?: number;
+  message?: string;
+  msg?: string;
+};
+
+type NeteaseApiErrorLike = {
+  status?: number;
+  body?: NeteaseApiErrorBody;
+  message?: string;
+};
+
 export type NeteaseQrStartResult = {
   key: string;
   qrImage: string;
@@ -62,6 +76,56 @@ type CellphoneLoginBody = {
   cookie?: string;
 };
 
+function withNeteaseRequestOptions(params: NeteaseApiParams = {}) {
+  const realIP = process.env.NETEASE_REAL_IP?.trim();
+  return {
+    ...params,
+    ...(realIP ? { realIP } : {}),
+    timestamp: Date.now()
+  };
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function getNeteaseApiError(error: unknown): NeteaseApiErrorLike {
+  if (!isObject(error)) {
+    return {};
+  }
+
+  return {
+    status: typeof error.status === "number" ? error.status : undefined,
+    message: typeof error.message === "string" ? error.message : undefined,
+    body: isObject(error.body)
+      ? {
+          code: typeof error.body.code === "number" ? error.body.code : undefined,
+          message: typeof error.body.message === "string" ? error.body.message : undefined,
+          msg: typeof error.body.msg === "string" ? error.body.msg : undefined
+        }
+      : undefined
+  };
+}
+
+function getNeteaseApiErrorCode(error: unknown) {
+  const apiError = getNeteaseApiError(error);
+  return apiError.body?.code ?? apiError.status ?? 0;
+}
+
+function getNeteaseApiErrorMessage(error: unknown, fallback: string) {
+  const apiError = getNeteaseApiError(error);
+  const message = apiError.body?.message ?? apiError.body?.msg ?? apiError.message;
+  if (!message) {
+    return fallback;
+  }
+
+  if (apiError.body?.code === 10004) {
+    return `${message}。网易云已触发登录风控，请稍后再试；如果仍失败，可在服务端配置 NETEASE_REAL_IP 后重启。`;
+  }
+
+  return message;
+}
+
 async function persistNeteaseCookie(cookie: string) {
   const settings = await getSettings();
   await saveSettings({
@@ -74,7 +138,13 @@ async function persistNeteaseCookie(cookie: string) {
 }
 
 export async function startNeteaseQrLogin(): Promise<NeteaseQrStartResult> {
-  const keyResponse = await login_qr_key({ timestamp: Date.now() } as any);
+  let keyResponse;
+  try {
+    keyResponse = await login_qr_key(withNeteaseRequestOptions() as any);
+  } catch (error) {
+    throw new Error(getNeteaseApiErrorMessage(error, "二维码登录初始化失败，未获取到登录 key。"));
+  }
+
   const keyBody = keyResponse.body as QrKeyBody;
   const key = keyBody.data?.unikey;
 
@@ -82,11 +152,17 @@ export async function startNeteaseQrLogin(): Promise<NeteaseQrStartResult> {
     throw new Error("二维码登录初始化失败，未获取到登录 key。");
   }
 
-  const qrResponse = await login_qr_create({
-    key,
-    qrimg: true,
-    timestamp: Date.now()
-  } as any);
+  let qrResponse;
+  try {
+    qrResponse = await login_qr_create({
+      ...withNeteaseRequestOptions({ key }),
+      platform: "web",
+      qrimg: true
+    } as any);
+  } catch (error) {
+    throw new Error(getNeteaseApiErrorMessage(error, "二维码生成失败，请稍后重试。"));
+  }
+
   const qrBody = qrResponse.body as QrCreateBody;
   const qrImage = qrBody.data?.qrimg;
   const qrUrl = qrBody.data?.qrurl;
@@ -108,10 +184,20 @@ export async function checkNeteaseQrLogin(key: string): Promise<NeteaseQrCheckRe
     throw new Error("缺少二维码登录 key。");
   }
 
-  const response = await login_qr_check({
-    key: trimmedKey,
-    timestamp: Date.now()
-  } as any);
+  let response;
+  try {
+    response = await login_qr_check({
+      ...withNeteaseRequestOptions({ key: trimmedKey }),
+      noCookie: true
+    } as any);
+  } catch (error) {
+    const code = getNeteaseApiErrorCode(error);
+    return {
+      code,
+      message: getNeteaseApiErrorMessage(error, "二维码登录状态检查失败。")
+    };
+  }
+
   const body = response.body as QrCheckBody;
   const code = body.code ?? 0;
   const message = body.message ?? getQrMessage(code);
@@ -136,11 +222,23 @@ export async function sendNeteaseCaptcha(phone: string, countryCode = "86"): Pro
     throw new Error("请输入手机号。");
   }
 
-  const response = await captcha_sent({
-    phone: trimmedPhone,
-    ctcode: trimmedCountryCode,
-    timestamp: Date.now()
-  } as any);
+  let response;
+  try {
+    response = await captcha_sent(
+      withNeteaseRequestOptions({
+        phone: trimmedPhone,
+        ctcode: trimmedCountryCode
+      }) as any
+    );
+  } catch (error) {
+    const code = getNeteaseApiErrorCode(error);
+    return {
+      code,
+      sent: false,
+      message: getNeteaseApiErrorMessage(error, "验证码发送失败。")
+    };
+  }
+
   const body = response.body as CaptchaBody;
   const code = body.code ?? 0;
 
@@ -164,12 +262,23 @@ export async function loginWithNeteaseCellphone(phone: string, captcha: string, 
     throw new Error("请输入短信验证码。");
   }
 
-  const response = await login_cellphone({
-    phone: trimmedPhone,
-    captcha: trimmedCaptcha,
-    countrycode: trimmedCountryCode,
-    timestamp: Date.now()
-  } as any);
+  let response;
+  try {
+    response = await login_cellphone(
+      withNeteaseRequestOptions({
+        phone: trimmedPhone,
+        captcha: trimmedCaptcha,
+        countrycode: trimmedCountryCode
+      }) as any
+    );
+  } catch (error) {
+    const code = getNeteaseApiErrorCode(error);
+    return {
+      code,
+      message: getNeteaseApiErrorMessage(error, "手机号验证码登录失败。")
+    };
+  }
+
   const body = response.body as CellphoneLoginBody;
   const code = body.code ?? 0;
   const cookie = body.cookie;
