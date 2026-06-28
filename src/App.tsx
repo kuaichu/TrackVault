@@ -2793,16 +2793,11 @@ export default function App() {
           ? { title: "专辑", subtitle: activeAlbum.name }
         : activeMeta;
   const currentQualityLabel = currentTrack ? getSelectedLabel(currentTrack) : "128K";
-  const cloudUsagePercent = cloudMeta.maxSize > 0 ? Math.min(100, Math.round((cloudMeta.size / cloudMeta.maxSize) * 100)) : 0;
-  const dailyRecommendDateLabel = getDailyRecommendDateLabel();
+  const isDiscoverListView = mainTab === "search" && navKey === "discover" && resultSource === "discover";
   const listHeaderMeta =
-    navKey === "discover"
+    isDiscoverListView
       ? { count: `推荐新歌 · ${results.length} 首`, note: "来自网易云推荐新歌", action: loadingDiscoverSongs ? "加载中" : "刷新推荐", disabled: loadingDiscoverSongs, onClick: loadDiscoverSongs }
-      : navKey === "cloud"
-      ? { count: `云盘音乐 · ${cloudMeta.count || results.length} 首`, note: `空间使用 ${cloudUsagePercent}%`, action: loadingCloudSongs ? "读取中" : "刷新云盘", disabled: loadingCloudSongs, onClick: loadCloudSongs }
-      : navKey === "daily"
-        ? { count: `${dailyRecommendDateLabel}日推 · ${results.length} 首`, note: "网易云每日 06:00 刷新", action: loadingDailySongs ? "读取中" : "刷新日推", disabled: loadingDailySongs, onClick: loadDailySongs }
-        : null;
+      : null;
   const accountProfile = session.profile;
   const accountDisplayName = accountProfile?.displayName ?? settings.accountName;
   const accountAvatarUrl = accountProfile?.avatarUrl;
