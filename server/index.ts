@@ -29,7 +29,7 @@ import { checkNeteaseProviderTrackAvailability, createNeteasePlaylistFromTrackId
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
 import { createPlaylistTransferJob, getNeteaseImportTrackIds } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
-import type { AdminConfigUpdate, AppSettings, DownloadQualityLevel, DownloadRequest } from "./types.js";
+import type { AdminConfigUpdate, AppSettings, DownloadQualityLevel, DownloadRequest, Song } from "./types.js";
 import type { PlaylistCompareResult, PlaylistCompareStatus } from "./playlist-transfer/playlist-compare.js";
 import type { MatchCandidate, TransferImportRequest, TransferTargetProvider, TransferTrack } from "./playlist-transfer/types.js";
 
@@ -273,8 +273,13 @@ app.get("/api/stream", async (request, response) => {
   }
 });
 
-app.get("/api/download/direct", async (request, response) => {
-  const song = {
+function buildContentDisposition(filename: string) {
+  const fallback = filename.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "_");
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
+function getDownloadSongFromQuery(request: express.Request): Song {
+  return {
     id: typeof request.query.id === "string" ? request.query.id : "",
     title: typeof request.query.title === "string" ? request.query.title : "",
     artist: typeof request.query.artist === "string" ? request.query.artist : "",
@@ -284,6 +289,10 @@ app.get("/api/download/direct", async (request, response) => {
     availableQualities: [],
     source: "netease"
   };
+}
+
+app.get("/api/download/direct", async (request, response) => {
+  const song = getDownloadSongFromQuery(request);
   const level = typeof request.query.level === "string" ? request.query.level : "standard";
   const userCookieOverride = typeof request.headers["x-user-cookie"] === "string" ? request.headers["x-user-cookie"] : undefined;
 
@@ -298,6 +307,52 @@ app.get("/api/download/direct", async (request, response) => {
   } catch (error) {
     response.status(error instanceof MediaAccessError ? error.status : 502).json({
       message: error instanceof Error ? error.message : "获取直连下载地址失败"
+    });
+  }
+});
+
+app.get("/api/download/proxy", async (request, response) => {
+  const song = getDownloadSongFromQuery(request);
+  const level = typeof request.query.level === "string" ? request.query.level : "standard";
+  const userCookieOverride = typeof request.headers["x-user-cookie"] === "string" ? request.headers["x-user-cookie"] : undefined;
+
+  if (!song.id || !song.title || !song.artist) {
+    response.status(400).json({ message: "缺少歌曲信息" });
+    return;
+  }
+
+  try {
+    const directDownload = await resolveDirectDownload(song, level as DownloadQualityLevel, userCookieOverride);
+    const upstream = await fetch(directDownload.url, {
+      headers: request.headers.range ? { Range: request.headers.range } : undefined
+    });
+
+    if (!upstream.ok || !upstream.body) {
+      response.status(upstream.status || 502).json({ message: "备用下载拉取失败" });
+      return;
+    }
+
+    const contentType = upstream.headers.get("content-type") ?? "application/octet-stream";
+    const contentLength = upstream.headers.get("content-length");
+    const contentRange = upstream.headers.get("content-range");
+
+    response.setHeader("Content-Type", contentType);
+    response.setHeader("Content-Disposition", buildContentDisposition(directDownload.filename));
+    response.setHeader("Access-Control-Allow-Origin", "*");
+
+    if (contentLength) {
+      response.setHeader("Content-Length", contentLength);
+    }
+
+    if (contentRange) {
+      response.setHeader("Content-Range", contentRange);
+      response.status(206);
+    }
+
+    Readable.fromWeb(upstream.body as any).pipe(response);
+  } catch (error) {
+    response.status(error instanceof MediaAccessError ? error.status : 502).json({
+      message: error instanceof Error ? error.message : "备用下载失败"
     });
   }
 });

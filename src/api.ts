@@ -80,6 +80,17 @@ type DirectDownloadInfo = {
   time?: number | null;
 };
 
+export class DirectDownloadBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DirectDownloadBlockedError";
+  }
+}
+
+export function isDirectDownloadBlockedError(error: unknown) {
+  return error instanceof DirectDownloadBlockedError;
+}
+
 export function getDirectDownloadUrl(song: Song, level: DownloadQualityLevel) {
   const params = new URLSearchParams({
     id: song.id,
@@ -92,6 +103,20 @@ export function getDirectDownloadUrl(song: Song, level: DownloadQualityLevel) {
   });
 
   return `/api/download/direct?${params.toString()}`;
+}
+
+export function getServerDownloadUrl(song: Song, level: DownloadQualityLevel) {
+  const params = new URLSearchParams({
+    id: song.id,
+    title: song.title,
+    artist: song.artist,
+    album: song.album,
+    duration: song.duration,
+    level,
+    sid: getClientSessionId()
+  });
+
+  return `/api/download/proxy?${params.toString()}`;
 }
 
 function saveBlob(blob: Blob, filename: string) {
@@ -117,7 +142,7 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
     credentials: "omit",
     mode: "cors"
   }).catch(() => {
-    throw new Error("浏览器被网易云 CDN 跨域策略拦截，无法无中转保存到本机。");
+    throw new DirectDownloadBlockedError("浏览器被网易云 CDN 跨域策略拦截，无法无中转保存到本机。");
   });
 
   if (!mediaResponse.ok) {
@@ -150,6 +175,15 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
 
   saveBlob(new Blob(chunks, { type: mediaResponse.headers.get("content-type") ?? "application/octet-stream" }), directDownload.filename);
   onProgress?.(100);
+}
+
+export function startServerSongDownload(song: Song, level: DownloadQualityLevel) {
+  const link = document.createElement("a");
+  link.href = getServerDownloadUrl(song, level);
+  link.download = "";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 export async function searchSongs(query: string): Promise<Song[]> {

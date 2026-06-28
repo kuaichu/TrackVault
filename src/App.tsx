@@ -30,6 +30,7 @@ import {
   getStreamUrl,
   getTasks,
   checkNeteaseQrLogin,
+  isDirectDownloadBlockedError,
   removeSearchHistory as removeSearchHistoryRemote,
   resolveArtistByName,
   loginAccount,
@@ -43,6 +44,7 @@ import {
   saveSettings,
   startNeteaseQrLogin,
   startDirectSongDownload,
+  startServerSongDownload,
   startNeteaseImportAuditJob,
   startPlaylistCompareJob,
   startPlaylistTransferRunJob,
@@ -1587,17 +1589,30 @@ export default function App() {
     }
 
     setDirectDownloadingSongId(song.id);
+    const level = getDownloadLevel(song);
+    const selected = song.availableQualities.find((item) => item.level === level);
 
     try {
-      const level = getDownloadLevel(song);
-      const selected = song.availableQualities.find((item) => item.level === level);
       setMessage(`正在从网易云直连下载：${song.title} · ${selected?.label ?? "128K"}`);
       await startDirectSongDownload(song, level, (progress) => {
         setMessage(`正在从网易云直连下载：${song.title} · ${progress}%`);
       });
       setMessage(`已保存到本机下载：${song.title}`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "启动下载失败");
+      const errorMessage = error instanceof Error ? error.message : "启动下载失败";
+
+      if (isDirectDownloadBlockedError(error)) {
+        const useServerFallback = window.confirm(`${errorMessage}\n\n可以改用备用下载，但会消耗服务器带宽。要现在用备用下载吗？`);
+
+        if (useServerFallback) {
+          startServerSongDownload(song, level);
+          setMessage(`已启动备用下载：${song.title}`);
+        } else {
+          setMessage("直连下载被浏览器拦截，未使用服务器备用下载。");
+        }
+      } else {
+        setMessage(errorMessage);
+      }
     } finally {
       setDirectDownloadingSongId(null);
     }
@@ -1653,7 +1668,13 @@ export default function App() {
         } catch (error) {
           failedCount += 1;
           if (!firstFailureMessage) {
-            firstFailureMessage = error instanceof Error ? error.message : "启动下载失败";
+            firstFailureMessage = isDirectDownloadBlockedError(error)
+              ? "浏览器拦截网易云 CDN 跨域直连。批量下载已停止，请单首下载并选择备用下载。"
+              : error instanceof Error ? error.message : "启动下载失败";
+          }
+
+          if (isDirectDownloadBlockedError(error)) {
+            break;
           }
         }
       }
