@@ -533,7 +533,7 @@ input[type="range"] {
 
 .cookie-login-tools {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -562,21 +562,6 @@ input[type="range"] {
   padding: 9px 11px;
   font-size: 13px;
   line-height: 1.5;
-}
-
-.cookie-login-command {
-  display: block;
-  max-height: 76px;
-  overflow: auto;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #ffd7a4;
-  padding: 10px 12px;
-  font-size: 12px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-all;
 }
 
 .cellphone-login-row {
