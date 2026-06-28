@@ -54,6 +54,19 @@ import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, Art
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
+const settingsQualityOptions: Array<{ level: DownloadQualityLevel; label: string }> = [
+  { level: "hires", label: "Hi-Res" },
+  { level: "lossless", label: "FLAC" },
+  { level: "exhigh", label: "320K" },
+  { level: "standard", label: "128K" }
+];
+
+const playbackQualityOptions: Array<{ level: DownloadQualityLevel; label: string }> = [
+  { level: "standard", label: "128K" },
+  { level: "exhigh", label: "320K" },
+  { level: "lossless", label: "FLAC" },
+  { level: "hires", label: "Hi-Res" }
+];
 const defaultSettings: AppSettings = {
   accountName: "本地账号",
   vipEnabled: false,
@@ -534,6 +547,7 @@ export default function App() {
   const [qualitySelections, setQualitySelections] = useState<Record<string, DownloadQualityLevel>>({});
   const [qualitySelectionTouched, setQualitySelectionTouched] = useState<Record<string, true>>({});
   const [openQualityMenuId, setOpenQualityMenuId] = useState<string | null>(null);
+  const [openSettingsQualityMenu, setOpenSettingsQualityMenu] = useState<"playback" | "download" | null>(null);
   const [mainTab, setMainTab] = useState<MainTab>("search");
   const [navKey, setNavKey] = useState<NavKey>("discover");
   const [viewHistory, setViewHistory] = useState<ViewState[]>([]);
@@ -4243,40 +4257,78 @@ export default function App() {
                   <input value={settings.downloadDirectory} onChange={(event) => setSettings((current) => ({ ...current, downloadDirectory: event.target.value }))} placeholder="downloads" />
                 </label>
 
-                <label className="settings-card">
+                <div className="settings-card">
                   <span>默认播放音质</span>
                   <p>用于试听、双击播放和底部播放器，默认按 128K 启动，手动改过的歌曲仍以手动选择为准。</p>
-                  <select
-                    value={settings.defaultPlaybackQuality}
-                    onChange={(event) => {
-                      const nextQuality = event.target.value as DownloadQualityLevel;
-                      setSettings((current) => ({ ...current, defaultPlaybackQuality: nextQuality }));
-                      applyQualityDefaults(results, nextQuality);
-                    }}
-                  >
-                    <option value="standard">128K</option>
-                    <option value="exhigh">320K</option>
-                    <option value="lossless">FLAC</option>
-                    <option value="hires">Hi-Res</option>
-                  </select>
-                </label>
+                  <div className="settings-quality-select">
+                    <button
+                      type="button"
+                      className="quality-trigger settings-quality-trigger"
+                      aria-expanded={openSettingsQualityMenu === "playback"}
+                      onClick={() => setOpenSettingsQualityMenu((current) => (current === "playback" ? null : "playback"))}
+                    >
+                      <span>{playbackQualityOptions.find((option) => option.level === settings.defaultPlaybackQuality)?.label ?? "128K"}</span>
+                      <span className={openSettingsQualityMenu === "playback" ? "quality-caret open" : "quality-caret"}>
+                        <ChevronIcon />
+                      </span>
+                    </button>
 
-                <label className="settings-card">
+                    {openSettingsQualityMenu === "playback" ? (
+                      <div className="quality-menu settings-quality-menu">
+                        {playbackQualityOptions.map((option) => (
+                          <button
+                            key={option.level}
+                            type="button"
+                            className={settings.defaultPlaybackQuality === option.level ? "quality-option active" : "quality-option"}
+                            onClick={() => {
+                              setSettings((current) => ({ ...current, defaultPlaybackQuality: option.level }));
+                              applyQualityDefaults(results, option.level);
+                              setOpenSettingsQualityMenu(null);
+                            }}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="settings-card">
                   <span>默认下载音质</span>
                   <p>直连下载和服务器下载任务都会优先使用该音质；如果你手动改过某首歌的音质，会优先按手动选择下载。</p>
-                  <select
-                    value={settings.defaultDownloadQuality}
-                    onChange={(event) => {
-                      const nextQuality = event.target.value as DownloadQualityLevel;
-                      setSettings((current) => ({ ...current, defaultDownloadQuality: nextQuality }));
-                    }}
-                  >
-                    <option value="hires">Hi-Res</option>
-                    <option value="lossless">FLAC</option>
-                    <option value="exhigh">320K</option>
-                    <option value="standard">128K</option>
-                  </select>
-                </label>
+                  <div className="settings-quality-select">
+                    <button
+                      type="button"
+                      className="quality-trigger settings-quality-trigger"
+                      aria-expanded={openSettingsQualityMenu === "download"}
+                      onClick={() => setOpenSettingsQualityMenu((current) => (current === "download" ? null : "download"))}
+                    >
+                      <span>{settingsQualityOptions.find((option) => option.level === settings.defaultDownloadQuality)?.label ?? "Hi-Res"}</span>
+                      <span className={openSettingsQualityMenu === "download" ? "quality-caret open" : "quality-caret"}>
+                        <ChevronIcon />
+                      </span>
+                    </button>
+
+                    {openSettingsQualityMenu === "download" ? (
+                      <div className="quality-menu settings-quality-menu">
+                        {settingsQualityOptions.map((option) => (
+                          <button
+                            key={option.level}
+                            type="button"
+                            className={settings.defaultDownloadQuality === option.level ? "quality-option active" : "quality-option"}
+                            onClick={() => {
+                              setSettings((current) => ({ ...current, defaultDownloadQuality: option.level }));
+                              setOpenSettingsQualityMenu(null);
+                            }}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
 
                 <label className="settings-card">
                   <span>同时下载任务数限制</span>
