@@ -5818,3 +5818,59 @@ body {
     width: 100%;
   }
 }
+
+/* Dock quality selector: compact, upward-opening, and tied to the current track. */
+.player-dock {
+  overflow: visible;
+}
+
+.dock-volume {
+  grid-template-columns: 36px 94px 22px minmax(54px, 1fr) 34px 36px;
+}
+
+.dock-quality-select {
+  width: 94px;
+  justify-self: stretch;
+}
+
+.dock-quality-trigger {
+  min-height: 36px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.88rem;
+}
+
+.dock-quality-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.dock-quality-select .quality-caret {
+  width: 18px;
+  height: 18px;
+}
+
+.dock-quality-select .quality-menu {
+  top: auto;
+  right: 0;
+  bottom: calc(100% + 10px);
+  left: auto;
+  min-width: 126px;
+}
+
+@media (max-width: 1120px) {
+  .dock-volume {
+    grid-template-columns: 36px 94px 22px minmax(80px, 1fr) 34px 36px;
+  }
+}
+
+@media (max-width: 760px) {
+  .dock-volume {
+    grid-template-columns: 36px minmax(86px, 104px) 22px minmax(0, 1fr) 34px 36px;
+  }
+
+  .dock-quality-select {
+    width: 100%;
+  }
+}

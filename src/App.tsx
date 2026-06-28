@@ -2856,6 +2856,71 @@ export default function App() {
     </button>
   );
 
+  function handleSelectQuality(song: Song, level: DownloadQualityLevel) {
+    setQualitySelections((current) => ({
+      ...current,
+      [song.id]: level
+    }));
+    setQualitySelectionTouched((current) => ({
+      ...current,
+      [song.id]: true
+    }));
+    setOpenQualityMenuId(null);
+
+    if (currentTrack?.id === song.id && isPlaying) {
+      window.setTimeout(() => {
+        syncAudioForSong(song, true);
+      }, 0);
+    }
+  }
+
+  function renderQualitySelect(
+    song: Song,
+    options: { menuKey?: string; className?: string; triggerClassName?: string; ariaLabel?: string } = {}
+  ) {
+    const menuKey = options.menuKey ?? song.id;
+    const isOpen = openQualityMenuId === menuKey;
+
+    return (
+      <div className={["quality-select", options.className].filter(Boolean).join(" ")} onClick={(event) => event.stopPropagation()}>
+        <button
+          type="button"
+          className={["quality-trigger", options.triggerClassName].filter(Boolean).join(" ")}
+          aria-expanded={isOpen}
+          aria-label={options.ariaLabel ?? `选择 ${song.title} 的音质`}
+          onClick={(event) => {
+            event.stopPropagation();
+            setOpenQualityMenuId((current) => (current === menuKey ? null : menuKey));
+          }}
+        >
+          <span>{getSelectedLabel(song)}</span>
+          <span className={isOpen ? "quality-caret open" : "quality-caret"}>
+            <ChevronIcon />
+          </span>
+        </button>
+
+        {isOpen ? (
+          <div className="quality-menu" onClick={(event) => event.stopPropagation()}>
+            {song.availableQualities.map((quality) => {
+              const isActive = quality.level === getSelectedLevel(song);
+
+              return (
+                <button
+                  key={quality.level}
+                  type="button"
+                  className={isActive ? "quality-option active" : "quality-option"}
+                  onClick={() => handleSelectQuality(song, quality.level)}
+                >
+                  {quality.label}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   const renderPlaylistCard = (playlist: UserPlaylist) => (
     <article key={playlist.id} className={selectedPlaylistId === playlist.id ? "playlist-card active" : "playlist-card"}>
       <CoverArt
@@ -3854,56 +3919,7 @@ export default function App() {
                     </div>
                     <span className="result-time">{song.duration}</span>
 
-                    <div className="quality-select" onClick={(event) => event.stopPropagation()}>
-                      <button
-                        type="button"
-                        className="quality-trigger"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setOpenQualityMenuId((current) => (current === song.id ? null : song.id));
-                        }}
-                      >
-                        <span>{getSelectedLabel(song)}</span>
-                        <span className={openQualityMenuId === song.id ? "quality-caret open" : "quality-caret"}>
-                          <ChevronIcon />
-                        </span>
-                      </button>
-
-                      {openQualityMenuId === song.id ? (
-                        <div className="quality-menu" onClick={(event) => event.stopPropagation()}>
-                          {song.availableQualities.map((quality) => {
-                            const isActive = quality.level === getSelectedLevel(song);
-
-                            return (
-                              <button
-                                key={quality.level}
-                                type="button"
-                                className={isActive ? "quality-option active" : "quality-option"}
-                                onClick={() => {
-                                  setQualitySelections((current) => ({
-                                    ...current,
-                                    [song.id]: quality.level
-                                  }));
-                                  setQualitySelectionTouched((current) => ({
-                                    ...current,
-                                    [song.id]: true
-                                  }));
-                                  setOpenQualityMenuId(null);
-
-                                  if (currentTrack?.id === song.id && isPlaying) {
-                                    window.setTimeout(() => {
-                                      syncAudioForSong(song, true);
-                                    }, 0);
-                                  }
-                                }}
-                              >
-                                {quality.label}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      ) : null}
-                    </div>
+                    {renderQualitySelect(song)}
                     <div className="row-actions">
                       <button type="button" className="row-icon-button" aria-label={`试听 ${song.title}`} title="试听" onClick={(event) => { event.stopPropagation(); handlePreview(song); }}>
                         <PreviewIcon />
@@ -4093,56 +4109,7 @@ export default function App() {
 
                       <span className="result-time">{song.duration}</span>
 
-                      <div className="quality-select" onClick={(event) => event.stopPropagation()}>
-                        <button
-                          type="button"
-                          className="quality-trigger"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setOpenQualityMenuId((current) => (current === song.id ? null : song.id));
-                          }}
-                        >
-                          <span>{getSelectedLabel(song)}</span>
-                          <span className={openQualityMenuId === song.id ? "quality-caret open" : "quality-caret"}>
-                            <ChevronIcon />
-                          </span>
-                        </button>
-
-                        {openQualityMenuId === song.id ? (
-                          <div className="quality-menu" onClick={(event) => event.stopPropagation()}>
-                            {song.availableQualities.map((quality) => {
-                              const isActive = quality.level === getSelectedLevel(song);
-
-                              return (
-                                <button
-                                  key={quality.level}
-                                  type="button"
-                                  className={isActive ? "quality-option active" : "quality-option"}
-                                  onClick={() => {
-                                    setQualitySelections((current) => ({
-                                      ...current,
-                                      [song.id]: quality.level
-                                    }));
-                                    setQualitySelectionTouched((current) => ({
-                                      ...current,
-                                      [song.id]: true
-                                    }));
-                                    setOpenQualityMenuId(null);
-
-                                    if (currentTrack?.id === song.id && isPlaying) {
-                                      window.setTimeout(() => {
-                                        syncAudioForSong(song, true);
-                                      }, 0);
-                                    }
-                                  }}
-                                >
-                                  {quality.label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-                      </div>
+                      {renderQualitySelect(song)}
 
                       <div className="row-actions" onClick={(event) => event.stopPropagation()}>
                         <button type="button" className="row-icon-button" aria-label={`试听 ${song.title}`} title="试听" onClick={() => handlePreview(song)}>
@@ -4778,6 +4745,23 @@ export default function App() {
 
         <div className="dock-volume">
           <button type="button" className="dock-queue-button" onClick={() => setIsPlayerExpanded(true)} aria-label="打开全屏播放器"><PlayerIcon name="queue" /></button>
+          {currentTrack ? (
+            renderQualitySelect(currentTrack, {
+              menuKey: `dock:${currentTrack.id}`,
+              className: "dock-quality-select",
+              triggerClassName: "dock-quality-trigger",
+              ariaLabel: `选择当前播放音质，当前 ${currentQualityLabel}`
+            })
+          ) : (
+            <div className="quality-select dock-quality-select">
+              <button type="button" className="quality-trigger dock-quality-trigger" disabled aria-label="未选择歌曲，无法选择音质">
+                <span>--</span>
+                <span className="quality-caret">
+                  <ChevronIcon />
+                </span>
+              </button>
+            </div>
+          )}
           <PlayerIcon name="volume" />
           <input className="range-progress" style={volumeRangeStyle} type="range" min="0" max="100" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
           <strong>{volume}</strong>
