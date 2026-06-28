@@ -125,6 +125,7 @@ const QR_LOGIN_DEFAULT_MESSAGE = "打开网易云音乐 App 扫码登录。";
 const CELLPHONE_LOGIN_DEFAULT_MESSAGE = "请输入手机号并发送验证码登录。";
 const COOKIE_LOGIN_DEFAULT_MESSAGE = "粘贴网页登录后的 MUSIC_U Cookie。";
 const COOKIE_LOGIN_GUIDE = "Chrome/Edge：登录 music.163.com 后按 F12，进入 Application / 应用 -> Cookies -> https://music.163.com，复制 MUSIC_U 的 Value。";
+const COOKIE_LOGIN_CONSOLE_COMMAND = `(() => { const cookie = document.cookie.split("; ").find((item) => item.startsWith("MUSIC_U=")); if (!cookie) { console.warn("未找到 MUSIC_U。请在 Application / 应用 -> Cookies -> https://music.163.com 里复制 MUSIC_U 的 Value。"); return; } if (typeof copy === "function") { copy(cookie); console.log("已复制 MUSIC_U Cookie。"); } else if (navigator.clipboard) { navigator.clipboard.writeText(cookie); console.log("已请求复制 MUSIC_U Cookie。"); } else { console.log(cookie); } console.log(cookie); })();`;
 
 type SongCachePayload = {
   savedAt: number;
@@ -556,6 +557,7 @@ export default function App() {
   const [cookieLoginInput, setCookieLoginInput] = useState("");
   const [importingCookie, setImportingCookie] = useState(false);
   const [copyingCookieGuide, setCopyingCookieGuide] = useState(false);
+  const [copyingCookieCommand, setCopyingCookieCommand] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSeconds, setPlaybackSeconds] = useState(initialPlayerState.playbackSeconds);
   const [playbackDuration, setPlaybackDuration] = useState(0);
@@ -1849,6 +1851,18 @@ export default function App() {
       setQrLoginMessage(COOKIE_LOGIN_GUIDE);
     } finally {
       window.setTimeout(() => setCopyingCookieGuide(false), 900);
+    }
+  }
+
+  async function handleCopyCookieCommand() {
+    try {
+      setCopyingCookieCommand(true);
+      await navigator.clipboard.writeText(COOKIE_LOGIN_CONSOLE_COMMAND);
+      setQrLoginMessage("已复制控制台指令。到网易云网页控制台粘贴回车即可。");
+    } catch {
+      setQrLoginMessage(COOKIE_LOGIN_CONSOLE_COMMAND);
+    } finally {
+      window.setTimeout(() => setCopyingCookieCommand(false), 900);
     }
   }
 
@@ -4442,11 +4456,15 @@ export default function App() {
                   <a className="secondary-button" href="https://music.163.com/" target="_blank" rel="noreferrer">
                     打开网易云网页登录
                   </a>
+                  <button type="button" className="secondary-button" onClick={() => void handleCopyCookieCommand()}>
+                    {copyingCookieCommand ? "已复制" : "复制控制台指令"}
+                  </button>
                   <button type="button" className="secondary-button" onClick={() => void handleCopyCookieGuide()}>
                     {copyingCookieGuide ? "已复制" : "复制获取提示"}
                   </button>
                 </div>
                 <p className="cookie-login-guide">{COOKIE_LOGIN_GUIDE}</p>
+                <code className="cookie-login-command">{COOKIE_LOGIN_CONSOLE_COMMAND}</code>
                 <label>
                   <span>MUSIC_U Cookie</span>
                   <textarea
