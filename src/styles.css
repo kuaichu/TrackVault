@@ -1058,6 +1058,11 @@ input[type="range"] {
   margin-top: 4px;
 }
 
+.result-meta .artist-link-button,
+.result-meta .album-link-button {
+  min-width: 0;
+}
+
 .result-time {
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
@@ -4979,9 +4984,12 @@ input[type="range"] {
 
 .artist-link-group {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 0;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .artist-link-group .artist-link-button:not(:last-child)::after {
@@ -4991,7 +4999,7 @@ input[type="range"] {
 
 .artist-link-button {
   display: inline-block;
-  width: auto;
+  max-width: 100%;
   border: 0;
   padding: 0;
   background: transparent;
@@ -5004,6 +5012,12 @@ input[type="range"] {
   overflow: hidden;
   text-overflow: ellipsis;
   pointer-events: auto;
+  vertical-align: bottom;
+}
+
+.artist-link-group .artist-link-button {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .artist-link-button:hover {
@@ -5011,8 +5025,9 @@ input[type="range"] {
 }
 
 .album-link-button {
-  display: inline-block;
-  width: auto;
+  display: block;
+  width: 100%;
+  max-width: 100%;
   border: 0;
   padding: 0;
   background: transparent;
