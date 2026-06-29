@@ -673,6 +673,7 @@ export default function App() {
   const [likedSongIds, setLikedSongIds] = useState<string[]>([]);
   const [togglingLike, setTogglingLike] = useState(false);
   const [playlistPickerSong, setPlaylistPickerSong] = useState<Song | null>(null);
+  const [playlistPickerSourcePlaylistId, setPlaylistPickerSourcePlaylistId] = useState<string | null>(null);
   const [songContextMenu, setSongContextMenu] = useState<SongContextMenuState | null>(null);
   const [playlistPickerLoading, setPlaylistPickerLoading] = useState(false);
   const [playlistPickerError, setPlaylistPickerError] = useState("");
@@ -2325,6 +2326,7 @@ export default function App() {
     }
 
     setPlaylistPickerSong(song);
+    setPlaylistPickerSourcePlaylistId(resultSource === "playlist" ? activePlaylist?.id ?? null : null);
     setPlaylistPickerError("");
 
     if (playlists.length > 0) {
@@ -2370,6 +2372,7 @@ export default function App() {
       );
       setMessage(`已收藏到「${result.playlistName}」：${playlistPickerSong.title}`);
       setPlaylistPickerSong(null);
+      setPlaylistPickerSourcePlaylistId(null);
     } catch (error) {
       setPlaylistPickerError(error instanceof Error ? error.message : "添加到歌单失败");
     } finally {
@@ -3331,6 +3334,10 @@ export default function App() {
   );
   const allVisibleSelected = visibleSongs.length > 0 && selectedVisibleSongs.length === visibleSongs.length;
   const createdPlaylists = useMemo(() => playlists.filter((playlist) => playlist.owned), [playlists]);
+  const availablePlaylistPickerPlaylists = useMemo(
+    () => createdPlaylists.filter((playlist) => playlist.id !== playlistPickerSourcePlaylistId),
+    [createdPlaylists, playlistPickerSourcePlaylistId]
+  );
   const collectedPlaylists = useMemo(() => playlists.filter((playlist) => !playlist.owned), [playlists]);
   const playlistTotalPages = useMemo(
     () => {
@@ -5389,14 +5396,14 @@ export default function App() {
       ) : null}
 
       {playlistPickerSong ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="收藏到歌单" onClick={() => setPlaylistPickerSong(null)}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="收藏到歌单" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSourcePlaylistId(null); }}>
           <section className="playlist-picker-card" onClick={(event) => event.stopPropagation()}>
             <header>
               <div>
                 <p className="eyebrow">Add To Playlist</p>
                 <h2>收藏到我的歌单</h2>
               </div>
-              <button type="button" className="modal-close" onClick={() => setPlaylistPickerSong(null)} aria-label="关闭收藏到歌单">
+              <button type="button" className="modal-close" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSourcePlaylistId(null); }} aria-label="关闭收藏到歌单">
                 ×
               </button>
             </header>
@@ -5413,9 +5420,9 @@ export default function App() {
 
             {playlistPickerLoading ? (
               <div className="empty-box">正在读取我的歌单...</div>
-            ) : createdPlaylists.length > 0 ? (
+            ) : availablePlaylistPickerPlaylists.length > 0 ? (
               <div className="playlist-picker-list">
-                {createdPlaylists.map((playlist) => (
+                {availablePlaylistPickerPlaylists.map((playlist) => (
                   <button
                     key={playlist.id}
                     type="button"
@@ -5446,14 +5453,18 @@ export default function App() {
                 ))}
               </div>
             ) : (
-              <div className="empty-box">当前账号没有可编辑的自建歌单。</div>
+              <div className="empty-box">
+                {createdPlaylists.length > 0 && playlistPickerSourcePlaylistId
+                  ? "已排除当前歌曲所在歌单，没有其它可添加的自建歌单。"
+                  : "当前账号没有可编辑的自建歌单。"}
+              </div>
             )}
 
             <div className="qr-actions">
-              <button type="button" className="secondary-button" onClick={() => setPlaylistPickerSong(null)}>
+              <button type="button" className="secondary-button" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSourcePlaylistId(null); }}>
                 取消
               </button>
-              <button type="button" className="primary-button" onClick={() => { setPlaylistPickerSong(null); navigateTo("playlists"); }}>
+              <button type="button" className="primary-button" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSourcePlaylistId(null); navigateTo("playlists"); }}>
                 查看歌单
               </button>
             </div>
