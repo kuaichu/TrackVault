@@ -5532,7 +5532,7 @@ export default function App() {
                               <strong>{playlist.name}</strong>
                               <span>{playlist.trackCount} 首 · 播放 {formatCompactCount(playlist.playCount)}</span>
                             </div>
-                            <em>{playlist.owned ? "创建" : "收藏"}</em>
+                            <em className={playlist.owned ? "owned" : "collected"}>{playlist.owned ? "创建" : "收藏"}</em>
                           </div>
                         ))}
                       </div>
