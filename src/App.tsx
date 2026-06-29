@@ -3049,6 +3049,7 @@ export default function App() {
         : activeMeta;
   const currentQualityLabel = currentTrack ? getSelectedLabel(currentTrack) : "128K";
   const isDiscoverListView = mainTab === "search" && navKey === "discover" && resultSource === "discover";
+  const isPlaylistSongsView = mainTab === "search" && navKey === "playlists" && resultSource === "playlist" && Boolean(activePlaylist);
   const showAdminFallbackControls = false;
   const listHeaderMeta =
     isDiscoverListView
@@ -3448,8 +3449,8 @@ export default function App() {
         <section className="content-panel">
           <header className="content-header">
             <div className="content-titlebar">
-              {viewHistory.length > 0 ? (
-                <button type="button" className="back-button" onClick={goBackView} aria-label="返回上一个界面">
+              {viewHistory.length > 0 || isPlaylistSongsView ? (
+                <button type="button" className="back-button" onClick={isPlaylistSongsView ? openPlaylistsPage : goBackView} aria-label={isPlaylistSongsView ? "返回我的歌单" : "返回上一个界面"}>
                   <svg aria-hidden="true" viewBox="0 0 24 24">
                     <path d="M14.8 6.4 9.2 12l5.6 5.6" />
                   </svg>
@@ -3989,7 +3990,7 @@ export default function App() {
                 ) : null}
               </div>
             </section>
-          ) : mainTab === "search" && navKey === "playlists" && !(resultSource === "playlist" && activePlaylist) ? (
+          ) : mainTab === "search" && navKey === "playlists" && !isPlaylistSongsView ? (
             <section className="playlist-manager">
               <header className="playlist-manager-head">
                 <div>
@@ -4035,7 +4036,7 @@ export default function App() {
                 )}
               </div>
             </section>
-          ) : mainTab === "search" && (navKey === "discover" || navKey === "cloud" || navKey === "daily" || navKey === "artist" || navKey === "album" || (navKey === "playlists" && resultSource === "playlist")) ? (
+          ) : mainTab === "search" && (navKey === "discover" || navKey === "cloud" || navKey === "daily" || navKey === "artist" || navKey === "album" || isPlaylistSongsView) ? (
             <section className="results-panel">
               {navKey === "artist" && activeArtist ? (
                 <div className="artist-hero">
