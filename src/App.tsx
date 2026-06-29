@@ -2354,7 +2354,7 @@ export default function App() {
       return;
     }
 
-    await runDirectDownload(song, getDownloadLevel(song));
+    await runDirectDownload(song, getSelectedLevel(song));
   }
 
   async function handleDownloadStandardFromIssue() {
