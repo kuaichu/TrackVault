@@ -12,7 +12,10 @@ import { getSettings } from "./settings-store.js";
 import type { DownloadQualityLevel, DownloadTask, NeteaseCookieCheckResult, Song } from "./types.js";
 
 const require = createRequire(import.meta.url);
-const { login_status, song_url_v1 } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
+const neteaseApi = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi") & {
+  song_download_url_v1: (params: { id: string | number; level: SoundQualityType; cookie?: string }) => Promise<{ body: unknown }>;
+};
+const { login_status, song_download_url_v1, song_url_v1 } = neteaseApi;
 
 const dataDir = path.resolve(process.cwd(), "data");
 const tasksPath = path.join(dataDir, "download-tasks.json");
@@ -28,6 +31,8 @@ let initialized = false;
 type SongUrlItem = {
   url?: string | null;
   type?: string | null;
+  br?: number | string | null;
+  level?: string | null;
   time?: number | null;
   freeTrialInfo?: {
     start?: number;
@@ -38,6 +43,8 @@ type SongUrlItem = {
 export type ResolvedSongStream = {
   url: string;
   type?: string | null;
+  br?: number | string | null;
+  level?: string | null;
   time?: number | null;
   freeTrialInfo?: {
     start?: number;
@@ -344,6 +351,63 @@ function getQualityLabel(level: DownloadQualityLevel) {
   }
 }
 
+function getMinimumBitrateForLevel(level: DownloadQualityLevel) {
+  switch (level) {
+    case "exhigh":
+      return 300000;
+    case "lossless":
+      return 700000;
+    case "hires":
+      return 900000;
+    case "jyeffect":
+    case "jymaster":
+    case "sky":
+      return 300000;
+    default:
+      return 0;
+  }
+}
+
+function getActualQualityLabel(match: SongUrlItem) {
+  const type = match.type?.replace(/^\./, "").toUpperCase();
+  const bitrate = Number(match.br ?? 0);
+  const bitrateLabel = bitrate > 0 ? `${Math.round(bitrate / 1000)}K` : "";
+
+  if (type && bitrateLabel) {
+    return `${type} ${bitrateLabel}`;
+  }
+
+  return type || bitrateLabel || "未知音质";
+}
+
+function assertResolvedQualityMatchesRequest(song: Song, requestedLevel: DownloadQualityLevel, match: SongUrlItem) {
+  const requestedLabel = getQualityLabel(requestedLevel);
+  const actualBitrate = Number(match.br ?? 0);
+  const actualType = match.type?.replace(/^\./, "").toLowerCase() ?? "";
+  const actualLevel = match.level?.toLowerCase() ?? "";
+  const minimumBitrate = getMinimumBitrateForLevel(requestedLevel);
+  const isLosslessRequest = requestedLevel === "lossless" || requestedLevel === "hires";
+  const hasLosslessContainer = actualType === "flac" || actualType === "wav";
+  const hasMatchingLevel = actualLevel === requestedLevel.toLowerCase();
+
+  if (requestedLevel === "standard") {
+    return;
+  }
+
+  if (isLosslessRequest && (hasLosslessContainer || hasMatchingLevel || (actualBitrate > 0 && actualBitrate >= minimumBitrate))) {
+    return;
+  }
+
+  if (!isLosslessRequest && (hasMatchingLevel || !actualBitrate || actualBitrate >= minimumBitrate)) {
+    return;
+  }
+
+  throw new Error(
+    `网易云返回的实际文件是 ${getActualQualityLabel(match)}，低于你选择的 ${requestedLabel}。` +
+      `如果这首歌在云盘里只有低码率版本，网易云会优先返回云盘文件；已尝试绕开，仍拿不到更高音质。歌曲：${song.title}`
+  );
+}
+
 function parseDurationToMs(duration: string) {
   const [minutesText, secondsText] = duration.split(":");
   const minutes = Number(minutesText);
@@ -409,15 +473,24 @@ function getFileExtension(downloadUrl: string, contentType: string | null, fallb
   return "mp3";
 }
 
-async function resolveSongAudio(songId: string, level: DownloadQualityLevel, cookie: string): Promise<ResolvedSongStream> {
-  const response = await song_url_v1({
+function extractSongUrlItem(body: unknown): SongUrlItem | undefined {
+  const data = (body as { data?: SongUrlItem[] | SongUrlItem }).data;
+
+  if (Array.isArray(data)) {
+    return data[0];
+  }
+
+  return data;
+}
+
+async function resolveSongAudio(songId: string, level: DownloadQualityLevel, cookie: string, preferDownloadUrl = false): Promise<ResolvedSongStream> {
+  const params = {
     id: songId,
     level: resolveQualityLevel(level),
     cookie: cookie || undefined
-  });
-
-  const data = (response.body as { data?: SongUrlItem[] }).data ?? [];
-  const match = data[0];
+  };
+  const response = preferDownloadUrl ? await song_download_url_v1(params) : await song_url_v1(params);
+  const match = extractSongUrlItem(response.body);
 
   if (!match?.url) {
     throw new Error("当前歌曲没有返回可下载地址，可能需要登录态或该资源暂不可用。");
@@ -473,7 +546,8 @@ async function resolveSongDownloadWithPlan(song: Song, level: DownloadQualityLev
 
   if (plan.primaryCookie) {
     try {
-      const match = await resolveSongAudio(song.id, level, plan.primaryCookie);
+      const match = await resolveSongAudio(song.id, level, plan.primaryCookie, true);
+      assertResolvedQualityMatchesRequest(song, level, match);
       if (isTrialClip(song, match)) {
         throw new Error("当前返回的是试听片段，不是完整版。请先在设置页填入网易云登录态 Cookie 后再重试。");
       }
@@ -487,7 +561,8 @@ async function resolveSongDownloadWithPlan(song: Song, level: DownloadQualityLev
   }
 
   if (plan.fallbackCookie) {
-    const match = await resolveSongAudio(song.id, level, plan.fallbackCookie);
+    const match = await resolveSongAudio(song.id, level, plan.fallbackCookie, true);
+    assertResolvedQualityMatchesRequest(song, level, match);
     if (isTrialClip(song, match)) {
       throw new Error("全局保底凭证返回的仍是试听片段，当前资源不可用。");
     }
