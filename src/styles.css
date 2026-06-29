@@ -550,6 +550,78 @@ input[type="range"] {
   line-height: 1.65;
 }
 
+.user-profile-skeleton {
+  display: grid;
+  gap: 13px;
+  padding: 2px 0;
+}
+
+.profile-skeleton-line,
+.profile-skeleton-stats span,
+.profile-skeleton-tags span,
+.profile-skeleton-list span {
+  position: relative;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.profile-skeleton-line::after,
+.profile-skeleton-stats span::after,
+.profile-skeleton-tags span::after,
+.profile-skeleton-list span::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 211, 156, 0.13), transparent);
+  animation: profile-skeleton-sweep 1.45s ease-in-out infinite;
+}
+
+.profile-skeleton-line {
+  height: 15px;
+}
+
+.profile-skeleton-line.wide {
+  width: min(78%, 410px);
+}
+
+.profile-skeleton-line.medium {
+  width: min(52%, 280px);
+}
+
+.profile-skeleton-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.profile-skeleton-stats span {
+  height: 62px;
+  border-radius: 15px;
+}
+
+.profile-skeleton-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.profile-skeleton-tags span {
+  width: 76px;
+  height: 28px;
+}
+
+.profile-skeleton-list {
+  display: grid;
+  gap: 8px;
+}
+
+.profile-skeleton-list span {
+  height: 66px;
+  border-radius: 15px;
+}
+
 .user-profile-stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3006,9 +3078,19 @@ input[type="range"] {
   }
 }
 
+@keyframes profile-skeleton-sweep {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .lyric-line,
-  .lyric-line.active {
+  .lyric-line.active,
+  .profile-skeleton-line::after,
+  .profile-skeleton-stats span::after,
+  .profile-skeleton-tags span::after,
+  .profile-skeleton-list span::after {
     animation: none;
     transition: none;
     transform: none;

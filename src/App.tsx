@@ -177,6 +177,7 @@ const DISCOVER_CACHE_STORAGE_KEY = "net-music-down:discover-cache";
 const PLAY_HISTORY_STORAGE_KEY = "net-music-down:play-history";
 const PLAYER_STATE_STORAGE_KEY = "net-music-down:player-state";
 const DISCOVER_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const USER_PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
   currentTrack: null,
   playQueue: [],
@@ -573,6 +574,7 @@ export default function App() {
   const transferRunJobIdRef = useRef("");
   const neteaseAuditJobIdRef = useRef("");
   const playlistCompareJobIdRef = useRef("");
+  const userProfileCacheRef = useRef<Record<string, { profile: UserProfile; cachedAt: number }>>({});
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Song[]>([]);
   const [searchHistory, setSearchHistory] = useState<string[]>(loadSearchHistory);
@@ -1811,15 +1813,21 @@ export default function App() {
       return;
     }
 
+    const safeUserId = target.id.trim();
+    const cachedProfile = userProfileCacheRef.current[safeUserId];
+    const isFreshCachedProfile = cachedProfile && Date.now() - cachedProfile.cachedAt < USER_PROFILE_CACHE_TTL_MS;
+
     setAccountMenuOpen(false);
-    setUserProfileTarget(target);
-    setUserProfile(null);
+    setUserProfileTarget({ ...target, id: safeUserId });
+    setUserProfile(cachedProfile ? cachedProfile.profile : null);
+    setLoadingUserProfile(!isFreshCachedProfile);
     setUserProfileError("");
   }
 
   function closeUserProfile() {
     setUserProfileTarget(null);
     setUserProfile(null);
+    setLoadingUserProfile(false);
     setUserProfileError("");
   }
 
@@ -3146,6 +3154,12 @@ export default function App() {
       return;
     }
 
+    const cachedProfile = userProfileCacheRef.current[userProfileTarget.id];
+    if (cachedProfile && Date.now() - cachedProfile.cachedAt < USER_PROFILE_CACHE_TTL_MS) {
+      setLoadingUserProfile(false);
+      return;
+    }
+
     let cancelled = false;
     setLoadingUserProfile(true);
     setUserProfileError("");
@@ -3153,11 +3167,15 @@ export default function App() {
     getUserProfile(userProfileTarget.id)
       .then((data) => {
         if (!cancelled) {
+          userProfileCacheRef.current[userProfileTarget.id] = {
+            profile: data,
+            cachedAt: Date.now()
+          };
           setUserProfile(data);
         }
       })
       .catch((error) => {
-        if (!cancelled) {
+        if (!cancelled && !userProfileCacheRef.current[userProfileTarget.id]) {
           setUserProfileError(error instanceof Error ? error.message : "获取用户信息失败");
         }
       })
@@ -5501,9 +5519,30 @@ export default function App() {
             </div>
 
             <div className="user-profile-body">
-              {loadingUserProfile ? <div className="empty-box">正在读取用户资料...</div> : null}
-              {!loadingUserProfile && userProfileError ? <div className="empty-box">{userProfileError}</div> : null}
-              {!loadingUserProfile && !userProfileError && userProfileDisplay ? (
+              {loadingUserProfile && !userProfileDisplay ? (
+                <div className="user-profile-skeleton" aria-label="资料加载中">
+                  <div className="profile-skeleton-line wide" />
+                  <div className="profile-skeleton-line medium" />
+                  <div className="profile-skeleton-stats">
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <div className="profile-skeleton-tags">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <div className="profile-skeleton-list">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                </div>
+              ) : null}
+              {!userProfileDisplay && userProfileError ? <div className="empty-box">{userProfileError}</div> : null}
+              {userProfileDisplay ? (
                 <>
                   <p className="user-profile-signature">{userProfileDisplay.signature}</p>
                   <div className="user-profile-stats">
