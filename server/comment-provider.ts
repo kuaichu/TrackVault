@@ -1,8 +1,9 @@
 import { createRequire } from "node:module";
-import type { SongComment, SongCommentsPage } from "./types.js";
+import { getSettings } from "./settings-store.js";
+import type { SongComment, SongCommentRepliesPage, SongCommentsPage } from "./types.js";
 
 const require = createRequire(import.meta.url);
-const { comment_music } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
+const { comment, comment_floor, comment_like, comment_music } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
 
 type RawCommentUser = {
   userId?: number;
@@ -16,11 +17,23 @@ type RawComment = {
   content?: string;
   time?: number;
   timeStr?: string;
+  liked?: boolean;
   likedCount?: number;
+  replyCount?: number;
+  showFloorComment?: {
+    replyCount?: number;
+    comments?: RawComment[];
+  };
   beReplied?: Array<{
     content?: string;
     user?: RawCommentUser;
   }>;
+};
+
+type NeteaseResponseBody = {
+  code?: number;
+  message?: string;
+  msg?: string;
 };
 
 function formatCommentTime(timestamp: number | undefined, fallback: string | undefined) {
@@ -57,9 +70,28 @@ function mapComment(comment: RawComment): SongComment | null {
     avatarUrl: comment.user?.avatarUrl,
     content,
     timeText: formatCommentTime(comment.time, comment.timeStr),
+    time: typeof comment.time === "number" ? comment.time : undefined,
+    liked: Boolean(comment.liked),
     likedCount: Math.max(0, comment.likedCount ?? 0),
+    replyCount: Math.max(0, comment.showFloorComment?.replyCount ?? comment.replyCount ?? comment.showFloorComment?.comments?.length ?? comment.beReplied?.length ?? 0),
     replyContent: reply?.content?.trim()
   };
+}
+
+async function getCookie() {
+  const settings = await getSettings();
+  const cookie = settings.neteaseCookie.trim();
+  if (!cookie) {
+    throw new Error("当前操作需要有效的网易云 Cookie，请先登录或重新导入 MUSIC_U Cookie。");
+  }
+
+  return cookie;
+}
+
+function assertNeteaseOk(body: NeteaseResponseBody, fallbackMessage: string) {
+  if (typeof body.code === "number" && body.code !== 200) {
+    throw new Error(body.message ?? body.msg ?? `${fallbackMessage}：${body.code}`);
+  }
 }
 
 export async function getSongComments(songId: string, page = 1, limit = 20): Promise<SongCommentsPage> {
@@ -86,9 +118,7 @@ export async function getSongComments(songId: string, page = 1, limit = 20): Pro
     msg?: string;
   };
 
-  if (typeof body.code === "number" && body.code !== 200) {
-    throw new Error(body.message ?? body.msg ?? `获取评论失败：${body.code}`);
-  }
+  assertNeteaseOk(body, "获取评论失败");
 
   const comments = (body.comments ?? []).map(mapComment).filter((comment): comment is SongComment => Boolean(comment));
   const hotComments = safePage === 1
@@ -103,5 +133,106 @@ export async function getSongComments(songId: string, page = 1, limit = 20): Pro
     hasMore: Boolean(body.more),
     hotComments,
     comments
+  };
+}
+
+export async function setSongCommentLiked(songId: string, commentId: string, liked: boolean) {
+  const safeSongId = songId.trim();
+  const safeCommentId = commentId.trim();
+  if (!safeSongId || !safeCommentId) {
+    throw new Error("缺少歌曲或评论 ID。");
+  }
+
+  const response = await comment_like({
+    id: safeSongId,
+    type: 0,
+    cid: safeCommentId,
+    t: liked ? 1 : 0,
+    cookie: await getCookie()
+  });
+  assertNeteaseOk(response.body as NeteaseResponseBody, liked ? "点赞评论失败" : "取消点赞失败");
+
+  return { liked };
+}
+
+export async function replyToSongComment(songId: string, commentId: string, content: string) {
+  const safeSongId = songId.trim();
+  const safeCommentId = commentId.trim();
+  const safeContent = content.trim();
+  if (!safeSongId || !safeCommentId) {
+    throw new Error("缺少歌曲或评论 ID。");
+  }
+  if (!safeContent) {
+    throw new Error("回复内容不能为空。");
+  }
+
+  const response = await comment({
+    id: safeSongId,
+    type: 0,
+    t: 2,
+    commentId: safeCommentId,
+    content: safeContent,
+    cookie: await getCookie()
+  });
+  const body = response.body as NeteaseResponseBody & {
+    comment?: RawComment;
+    data?: {
+      comment?: RawComment;
+    };
+  };
+  assertNeteaseOk(body, "回复评论失败");
+
+  return {
+    comment: mapComment(body.comment ?? body.data?.comment ?? {
+      commentId: Date.now(),
+      content: safeContent,
+      time: Date.now(),
+      likedCount: 0
+    })
+  };
+}
+
+export async function getSongCommentReplies(songId: string, parentCommentId: string, time = -1, limit = 20): Promise<SongCommentRepliesPage> {
+  const safeSongId = songId.trim();
+  const safeParentCommentId = parentCommentId.trim();
+  if (!safeSongId || !safeParentCommentId) {
+    throw new Error("缺少歌曲或评论 ID。");
+  }
+
+  const safeLimit = Math.min(50, Math.max(5, Math.floor(limit) || 20));
+  const safeTime = Number.isFinite(time) ? Math.floor(time) : -1;
+  const response = await comment_floor({
+    id: safeSongId,
+    type: 0,
+    parentCommentId: safeParentCommentId,
+    time: safeTime,
+    limit: safeLimit
+  });
+  const body = response.body as NeteaseResponseBody & {
+    data?: {
+      comments?: RawComment[];
+      hasMore?: boolean;
+      time?: number;
+      totalCount?: number;
+      total?: number;
+    };
+    comments?: RawComment[];
+    hasMore?: boolean;
+    time?: number;
+    totalCount?: number;
+    total?: number;
+  };
+  assertNeteaseOk(body, "获取回复失败");
+
+  const data = body.data ?? body;
+  const replies = (data.comments ?? []).map(mapComment).filter((item): item is SongComment => Boolean(item));
+
+  return {
+    songId: safeSongId,
+    parentCommentId: safeParentCommentId,
+    replies,
+    total: Math.max(0, data.totalCount ?? data.total ?? replies.length),
+    hasMore: Boolean(data.hasMore),
+    nextTime: typeof data.time === "number" ? data.time : replies[replies.length - 1]?.time
   };
 }

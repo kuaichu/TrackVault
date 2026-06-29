@@ -79,8 +79,20 @@ export type SongComment = {
   avatarUrl?: string;
   content: string;
   timeText: string;
+  time?: number;
+  liked: boolean;
   likedCount: number;
+  replyCount: number;
   replyContent?: string;
+};
+
+export type SongCommentRepliesPage = {
+  songId: string;
+  parentCommentId: string;
+  replies: SongComment[];
+  total: number;
+  hasMore: boolean;
+  nextTime?: number;
 };
 
 export type SongCommentsPage = {

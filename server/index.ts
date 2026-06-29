@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { getAlbumProfile } from "./album-provider.js";
 import { getCurrentUserKey, getSession, loginSession, logoutSession } from "./account-store.js";
 import { getCloudSongs } from "./cloud-provider.js";
-import { getSongComments } from "./comment-provider.js";
+import { getSongCommentReplies, getSongComments, replyToSongComment, setSongCommentLiked } from "./comment-provider.js";
 import { getDiscoverSongs } from "./discover-provider.js";
 import { getArtistProfile, resolveArtistIdByName } from "./artist-provider.js";
 import { getPlayHistory, getSearchHistory, removeSearchHistory, savePlayHistory, saveSearchHistory } from "./history-store.js";
@@ -200,6 +200,42 @@ app.get("/api/comments/songs/:id", async (request, response) => {
   } catch (error) {
     response.status(502).json({
       message: error instanceof Error ? error.message : "获取评论失败"
+    });
+  }
+});
+
+app.get("/api/comments/songs/:id/:commentId/replies", async (request, response) => {
+  try {
+    const time = Number(request.query.time);
+    const limit = Number(request.query.limit);
+    response.json(await getSongCommentReplies(request.params.id, request.params.commentId, time, limit));
+  } catch (error) {
+    response.status(502).json({
+      message: error instanceof Error ? error.message : "获取评论回复失败"
+    });
+  }
+});
+
+app.post("/api/comments/songs/:id/:commentId/like", async (request, response) => {
+  const liked = Boolean(request.body?.liked);
+
+  try {
+    response.json(await setSongCommentLiked(request.params.id, request.params.commentId, liked));
+  } catch (error) {
+    response.status(401).json({
+      message: error instanceof Error ? error.message : liked ? "点赞评论失败" : "取消点赞失败"
+    });
+  }
+});
+
+app.post("/api/comments/songs/:id/:commentId/replies", async (request, response) => {
+  const content = typeof request.body?.content === "string" ? request.body.content : "";
+
+  try {
+    response.json(await replyToSongComment(request.params.id, request.params.commentId, content));
+  } catch (error) {
+    response.status(401).json({
+      message: error instanceof Error ? error.message : "回复评论失败"
     });
   }
 });

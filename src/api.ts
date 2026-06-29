@@ -27,6 +27,8 @@ import type {
   PlaylistTransferJob,
   PlaylistTransferRunJob,
   Song,
+  SongComment,
+  SongCommentRepliesPage,
   SongCommentsPage,
   SongLyrics,
   TransferExportFormat,
@@ -373,6 +375,54 @@ export async function getSongComments(songId: string, page = 1, limit = 20): Pro
   }
 
   return (await response.json()) as SongCommentsPage;
+}
+
+export async function getSongCommentReplies(songId: string, commentId: string, time = -1, limit = 20): Promise<SongCommentRepliesPage> {
+  const params = new URLSearchParams({
+    time: String(time),
+    limit: String(limit)
+  });
+  const response = await apiFetch(`/api/comments/songs/${encodeURIComponent(songId)}/${encodeURIComponent(commentId)}/replies?${params.toString()}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取评论回复失败");
+  }
+
+  return (await response.json()) as SongCommentRepliesPage;
+}
+
+export async function setSongCommentLiked(songId: string, commentId: string, liked: boolean): Promise<boolean> {
+  const response = await apiFetch(`/api/comments/songs/${encodeURIComponent(songId)}/${encodeURIComponent(commentId)}/like`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ liked })
+  });
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? (liked ? "点赞评论失败" : "取消点赞失败"));
+  }
+
+  const data = (await response.json()) as { liked: boolean };
+  return Boolean(data.liked);
+}
+
+export async function replyToSongComment(songId: string, commentId: string, content: string): Promise<SongComment | null> {
+  const response = await apiFetch(`/api/comments/songs/${encodeURIComponent(songId)}/${encodeURIComponent(commentId)}/replies`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ content })
+  });
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "回复评论失败");
+  }
+
+  const data = (await response.json()) as { comment: SongComment | null };
+  return data.comment;
 }
 
 export async function getUserProfile(userId: string): Promise<UserProfile> {

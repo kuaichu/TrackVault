@@ -25,6 +25,7 @@ import {
   getDiscoverSongs,
   getPlaylistSongs,
   getPlaylists,
+  getSongCommentReplies,
   getSongComments,
   getUserProfile,
   getSearchHistory,
@@ -46,19 +47,22 @@ import {
   saveAdminConfig as saveAdminConfigRemote,
   setSongLiked,
   saveSettings,
+  setSongCommentLiked,
   startNeteaseQrLogin,
   startDirectSongDownload,
   startServerSongDownload,
   startNeteaseImportAuditJob,
   startPlaylistCompareJob,
   startPlaylistTransferRunJob,
+  replyToSongComment,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserPlaylist, UserProfile } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, SongComment, SongCommentRepliesPage, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserPlaylist, UserProfile } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
 const COMMENT_PAGE_SIZE = 20;
+const COMMENT_REPLY_PAGE_SIZE = 20;
 const neteaseEmojiMap: Record<string, string> = {
   "[爱心]": "\u2764\uFE0F",
   "[心碎]": "\uD83D\uDC94",
@@ -860,6 +864,14 @@ export default function App() {
   const [commentRefreshKey, setCommentRefreshKey] = useState(0);
   const [loadingComments, setLoadingComments] = useState(false);
   const [commentsError, setCommentsError] = useState("");
+  const [commentRepliesById, setCommentRepliesById] = useState<Record<string, SongCommentRepliesPage>>({});
+  const [expandedCommentIds, setExpandedCommentIds] = useState<string[]>([]);
+  const [loadingCommentReplyIds, setLoadingCommentReplyIds] = useState<string[]>([]);
+  const [commentLikeActionIds, setCommentLikeActionIds] = useState<string[]>([]);
+  const [replyingCommentId, setReplyingCommentId] = useState<string | null>(null);
+  const [commentReplyDrafts, setCommentReplyDrafts] = useState<Record<string, string>>({});
+  const [postingCommentId, setPostingCommentId] = useState<string | null>(null);
+  const [commentActionError, setCommentActionError] = useState("");
   const [userProfileTarget, setUserProfileTarget] = useState<UserProfileTarget | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loadingUserProfile, setLoadingUserProfile] = useState(false);
@@ -1961,6 +1973,11 @@ export default function App() {
     setCommentTrack(song);
     setCommentPage(1);
     setCommentsError("");
+    setCommentActionError("");
+    setCommentRepliesById({});
+    setExpandedCommentIds([]);
+    setReplyingCommentId(null);
+    setCommentReplyDrafts({});
     setRightPanelTab("comments");
     setMessage(`正在查看评论：${song.title}`);
   }
@@ -1968,6 +1985,185 @@ export default function App() {
   function handleRefreshSongComments() {
     pendingCommentScrollTopRef.current = commentsScrollRef.current?.scrollTop ?? 0;
     setCommentRefreshKey((key) => key + 1);
+  }
+
+  function setCommentIdBusy(setter: (updater: (current: string[]) => string[]) => void, commentId: string, busy: boolean) {
+    setter((current) => (
+      busy
+        ? Array.from(new Set([commentId, ...current]))
+        : current.filter((id) => id !== commentId)
+    ));
+  }
+
+  function updateCommentEverywhere(commentId: string, updater: (comment: SongComment) => SongComment) {
+    const updateList = (items: SongComment[]) => items.map((item) => (item.id === commentId ? updater(item) : item));
+
+    setSongComments((current) => current
+      ? {
+          ...current,
+          hotComments: updateList(current.hotComments),
+          comments: updateList(current.comments)
+        }
+      : current);
+
+    setCommentRepliesById((current) => {
+      let changed = false;
+      const next: Record<string, SongCommentRepliesPage> = {};
+      Object.entries(current).forEach(([id, page]) => {
+        const replies = updateList(page.replies);
+        if (replies !== page.replies) {
+          changed = true;
+        }
+        next[id] = { ...page, replies };
+      });
+      return changed ? next : current;
+    });
+  }
+
+  async function loadCommentReplies(comment: SongComment, append = false) {
+    if (!commentTrack || loadingCommentReplyIds.includes(comment.id)) {
+      return;
+    }
+
+    const existingPage = commentRepliesById[comment.id];
+    const cursor = append ? existingPage?.nextTime ?? -1 : -1;
+    setCommentActionError("");
+    setCommentIdBusy(setLoadingCommentReplyIds, comment.id, true);
+
+    try {
+      const page = await getSongCommentReplies(commentTrack.id, comment.id, cursor, COMMENT_REPLY_PAGE_SIZE);
+      setCommentRepliesById((current) => {
+        const existingReplies = append ? current[comment.id]?.replies ?? [] : [];
+        const existingIds = new Set(existingReplies.map((reply) => reply.id));
+        const mergedReplies = append
+          ? [...existingReplies, ...page.replies.filter((reply) => !existingIds.has(reply.id))]
+          : page.replies;
+        return {
+          ...current,
+          [comment.id]: {
+            ...page,
+            replies: mergedReplies
+          }
+        };
+      });
+      updateCommentEverywhere(comment.id, (item) => ({
+        ...item,
+        replyCount: Math.max(item.replyCount, page.total)
+      }));
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : "获取评论回复失败";
+      setCommentActionError(messageText);
+      setMessage(messageText);
+    } finally {
+      setCommentIdBusy(setLoadingCommentReplyIds, comment.id, false);
+    }
+  }
+
+  function handleToggleCommentReplies(comment: SongComment) {
+    const expanded = expandedCommentIds.includes(comment.id);
+    if (expanded) {
+      setExpandedCommentIds((current) => current.filter((id) => id !== comment.id));
+      return;
+    }
+
+    setExpandedCommentIds((current) => Array.from(new Set([...current, comment.id])));
+    if (!commentRepliesById[comment.id]) {
+      void loadCommentReplies(comment);
+    }
+  }
+
+  async function handleToggleCommentLike(comment: SongComment) {
+    if (!accountIsLoggedIn) {
+      setMessage("登录网易云后才能点赞评论。");
+      return;
+    }
+    if (!commentTrack || commentLikeActionIds.includes(comment.id)) {
+      return;
+    }
+
+    const nextLiked = !comment.liked;
+    const delta = nextLiked ? 1 : -1;
+    setCommentActionError("");
+    setCommentIdBusy(setCommentLikeActionIds, comment.id, true);
+    updateCommentEverywhere(comment.id, (item) => ({
+      ...item,
+      liked: nextLiked,
+      likedCount: Math.max(0, item.likedCount + delta)
+    }));
+
+    try {
+      await setSongCommentLiked(commentTrack.id, comment.id, nextLiked);
+      setMessage(nextLiked ? "已点赞评论。" : "已取消点赞。");
+    } catch (error) {
+      updateCommentEverywhere(comment.id, (item) => ({
+        ...item,
+        liked: !nextLiked,
+        likedCount: Math.max(0, item.likedCount - delta)
+      }));
+      const messageText = error instanceof Error ? error.message : (nextLiked ? "点赞评论失败" : "取消点赞失败");
+      setCommentActionError(messageText);
+      setMessage(messageText);
+    } finally {
+      setCommentIdBusy(setCommentLikeActionIds, comment.id, false);
+    }
+  }
+
+  async function handleSubmitCommentReply(comment: SongComment) {
+    if (!accountIsLoggedIn) {
+      setMessage("登录网易云后才能回复评论。");
+      return;
+    }
+    if (!commentTrack || postingCommentId) {
+      return;
+    }
+
+    const content = commentReplyDrafts[comment.id]?.trim() ?? "";
+    if (!content) {
+      setCommentActionError("回复内容不能为空。");
+      return;
+    }
+
+    setCommentActionError("");
+    setPostingCommentId(comment.id);
+
+    try {
+      const newReply = await replyToSongComment(commentTrack.id, comment.id, content);
+      setCommentReplyDrafts((current) => {
+        const next = { ...current };
+        delete next[comment.id];
+        return next;
+      });
+      setReplyingCommentId(null);
+      updateCommentEverywhere(comment.id, (item) => ({
+        ...item,
+        replyCount: item.replyCount + 1
+      }));
+      if (newReply) {
+        setExpandedCommentIds((current) => Array.from(new Set([...current, comment.id])));
+        setCommentRepliesById((current) => {
+          const existingPage = current[comment.id];
+          const existingReplies = existingPage?.replies ?? [];
+          return {
+            ...current,
+            [comment.id]: {
+              songId: commentTrack.id,
+              parentCommentId: comment.id,
+              replies: [newReply, ...existingReplies.filter((reply) => reply.id !== newReply.id)],
+              total: Math.max(existingPage?.total ?? 0, existingReplies.length + 1),
+              hasMore: Boolean(existingPage?.hasMore),
+              nextTime: existingPage?.nextTime
+            }
+          };
+        });
+      }
+      setMessage("回复已发送。");
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : "回复评论失败";
+      setCommentActionError(messageText);
+      setMessage(messageText);
+    } finally {
+      setPostingCommentId(null);
+    }
   }
 
   function openUserProfile(target: UserProfileTarget) {
@@ -3320,6 +3516,11 @@ export default function App() {
 
     setCommentTrack((track) => (track?.id === currentTrack.id ? track : currentTrack));
     setCommentPage(1);
+    setCommentActionError("");
+    setCommentRepliesById({});
+    setExpandedCommentIds([]);
+    setReplyingCommentId(null);
+    setCommentReplyDrafts({});
   }, [currentTrack?.id]);
 
   useEffect(() => {
@@ -3821,33 +4022,114 @@ export default function App() {
   const userProfileName = userProfileDisplay?.nickname ?? userProfileTarget?.fallbackName ?? "网易云用户";
   const userProfileAvatarUrl = userProfileDisplay?.avatarUrl ?? userProfileTarget?.fallbackAvatarUrl;
 
-  const renderCommentRow = (comment: SongCommentsPage["comments"][number], keyPrefix = "") => (
-    <article key={`${keyPrefix}${comment.id}`} className="comment-row">
-      <button
-        type="button"
-        className="comment-author"
-        onClick={() => openUserProfile({ id: comment.userId, fallbackName: comment.nickname, fallbackAvatarUrl: comment.avatarUrl })}
-        title={`查看 ${comment.nickname} 的资料`}
-      >
-        {comment.avatarUrl ? <img src={comment.avatarUrl} alt="" className="comment-avatar" loading="lazy" /> : <span className="comment-avatar placeholder">{comment.nickname.slice(0, 1)}</span>}
-      </button>
-      <div className="comment-copy">
-        <div className="comment-meta">
-          <button
-            type="button"
-            className="comment-name-button"
-            onClick={() => openUserProfile({ id: comment.userId, fallbackName: comment.nickname, fallbackAvatarUrl: comment.avatarUrl })}
-          >
-            {comment.nickname}
-          </button>
-          <span>{comment.timeText}</span>
+  const renderCommentRow = (comment: SongComment, keyPrefix = "", options: { isReply?: boolean } = {}) => {
+    const isReply = Boolean(options.isReply);
+    const likeBusy = commentLikeActionIds.includes(comment.id);
+    const repliesBusy = loadingCommentReplyIds.includes(comment.id);
+    const isReplying = replyingCommentId === comment.id;
+    const postingReply = postingCommentId === comment.id;
+    const repliesPage = commentRepliesById[comment.id];
+    const isExpanded = expandedCommentIds.includes(comment.id);
+    const replyDraft = commentReplyDrafts[comment.id] ?? "";
+    const visibleReplyCount = Math.max(comment.replyCount, repliesPage?.total ?? 0);
+
+    return (
+      <article key={`${keyPrefix}${comment.id}`} className={isReply ? "comment-row comment-row-reply" : "comment-row"}>
+        <button
+          type="button"
+          className="comment-author"
+          onClick={() => openUserProfile({ id: comment.userId, fallbackName: comment.nickname, fallbackAvatarUrl: comment.avatarUrl })}
+          title={`查看 ${comment.nickname} 的资料`}
+        >
+          {comment.avatarUrl ? <img src={comment.avatarUrl} alt="" className="comment-avatar" loading="lazy" /> : <span className="comment-avatar placeholder">{comment.nickname.slice(0, 1)}</span>}
+        </button>
+        <div className="comment-copy">
+          <div className="comment-meta">
+            <button
+              type="button"
+              className="comment-name-button"
+              onClick={() => openUserProfile({ id: comment.userId, fallbackName: comment.nickname, fallbackAvatarUrl: comment.avatarUrl })}
+            >
+              {comment.nickname}
+            </button>
+            <span>{comment.timeText}</span>
+          </div>
+          <p className="comment-content">{renderCommentContent(comment.content)}</p>
+          {comment.replyContent ? <p className="comment-reply">{renderCommentContent(comment.replyContent)}</p> : null}
+          <div className="comment-actions">
+            <button
+              type="button"
+              className={comment.liked ? "comment-action active" : "comment-action"}
+              disabled={likeBusy || !accountIsLoggedIn}
+              onClick={() => void handleToggleCommentLike(comment)}
+              title={accountIsLoggedIn ? (comment.liked ? "取消点赞" : "点赞评论") : "登录后点赞评论"}
+            >
+              <span>{likeBusy ? "..." : comment.liked ? "已赞" : "赞"}</span>
+              {comment.likedCount > 0 ? <strong>{comment.likedCount}</strong> : null}
+            </button>
+            <button
+              type="button"
+              className={isReplying ? "comment-action active" : "comment-action"}
+              disabled={!accountIsLoggedIn}
+              onClick={() => {
+                setCommentActionError("");
+                setReplyingCommentId(isReplying ? null : comment.id);
+              }}
+              title={accountIsLoggedIn ? "回复评论" : "登录后回复评论"}
+            >
+              回复
+            </button>
+            {!isReply && visibleReplyCount > 0 ? (
+              <button type="button" className="comment-action comment-thread-toggle" disabled={repliesBusy} onClick={() => handleToggleCommentReplies(comment)}>
+                {repliesBusy ? "读取中..." : isExpanded ? "收起回复" : `查看 ${visibleReplyCount} 条回复`}
+              </button>
+            ) : null}
+          </div>
+
+          {isReplying ? (
+            <form
+              className="comment-reply-form"
+              onSubmit={(event: FormEvent<HTMLFormElement>) => {
+                event.preventDefault();
+                void handleSubmitCommentReply(comment);
+              }}
+            >
+              <textarea
+                value={replyDraft}
+                onChange={(event) => setCommentReplyDrafts((current) => ({ ...current, [comment.id]: event.target.value }))}
+                placeholder={`回复 ${comment.nickname}`}
+                maxLength={140}
+              />
+              <div className="comment-reply-footer">
+                <span>{replyDraft.trim().length}/140</span>
+                <div>
+                  <button type="button" disabled={postingReply} onClick={() => setReplyingCommentId(null)}>
+                    取消
+                  </button>
+                  <button type="submit" disabled={postingReply || !replyDraft.trim()}>
+                    {postingReply ? "发送中..." : "发送"}
+                  </button>
+                </div>
+              </div>
+            </form>
+          ) : null}
+
+          {!isReply && isExpanded ? (
+            <div className="comment-thread">
+              {!repliesPage && repliesBusy ? <div className="comment-thread-empty">正在读取回复...</div> : null}
+              {repliesPage && repliesPage.replies.length === 0 ? <div className="comment-thread-empty">暂时没有读取到楼中楼回复。</div> : null}
+              {repliesPage?.replies.map((reply) => renderCommentRow(reply, `reply-${comment.id}-`, { isReply: true }))}
+              {repliesPage?.hasMore ? (
+                <button type="button" className="comment-thread-more" disabled={repliesBusy} onClick={() => void loadCommentReplies(comment, true)}>
+                  {repliesBusy ? "读取中..." : "继续加载回复"}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
-        <p className="comment-content">{renderCommentContent(comment.content)}</p>
-        {comment.replyContent ? <p className="comment-reply">{renderCommentContent(comment.replyContent)}</p> : null}
-        {comment.likedCount > 0 ? <span className="comment-like">{comment.likedCount} 赞</span> : null}
-      </div>
-    </article>
-  );
+      </article>
+    );
+  };
 
   const renderArtistMeta = (song: Song) => {
     const artists = getSongArtists(song);
@@ -5780,6 +6062,7 @@ export default function App() {
                     <div ref={commentsScrollRef} className="comments-scroll">
                       {loadingComments && !activeSongComments ? <div className="empty-box">正在加载评论...</div> : null}
                       {!activeSongComments && commentsError ? <div className="empty-box">{commentsError}</div> : null}
+                      {commentActionError ? <div className="comment-action-error">{commentActionError}</div> : null}
                       {activeSongComments ? (
                         <>
                           {activeSongComments.hotComments.length > 0 ? (
