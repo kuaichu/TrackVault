@@ -58,6 +58,37 @@ import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, Art
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
 const COMMENT_PAGE_SIZE = 20;
+const neteaseEmojiMap: Record<string, string> = {
+  "[爱心]": "\u2764\uFE0F",
+  "[心碎]": "\uD83D\uDC94",
+  "[强]": "\uD83D\uDC4D",
+  "[弱]": "\uD83D\uDC4E",
+  "[大笑]": "\uD83D\uDE04",
+  "[可爱]": "\uD83D\uDE0A",
+  "[憨笑]": "\uD83D\uDE01",
+  "[呲牙]": "\uD83D\uDE01",
+  "[亲亲]": "\uD83D\uDE18",
+  "[色]": "\uD83D\uDE0D",
+  "[流泪]": "\uD83D\uDE22",
+  "[大哭]": "\uD83D\uDE2D",
+  "[惊恐]": "\uD83D\uDE31",
+  "[惊讶]": "\uD83D\uDE2E",
+  "[晕]": "\uD83D\uDE35",
+  "[生病]": "\uD83E\uDD12",
+  "[口罩]": "\uD83D\uDE37",
+  "[撇嘴]": "\uD83D\uDE15",
+  "[尴尬]": "\uD83D\uDE05",
+  "[开心]": "\uD83D\uDE04",
+  "[鬼脸]": "\uD83D\uDE1C",
+  "[拜]": "\uD83D\uDE4F",
+  "[礼物]": "\uD83C\uDF81",
+  "[蛋糕]": "\uD83C\uDF82",
+  "[钟情]": "\uD83D\uDC98",
+  "[星星]": "\u2B50",
+  "[便便]": "\uD83D\uDCA9",
+  "[牵手]": "\uD83E\uDD1D",
+  "[跳舞]": "\uD83D\uDC83"
+};
 const settingsQualityOptions: Array<{ level: DownloadQualityLevel; label: string }> = [
   { level: "hires", label: "Hi-Res" },
   { level: "lossless", label: "FLAC" },
@@ -467,6 +498,21 @@ function CoverArt({ song, className }: { song: Song | null; className: string })
       )}
     </div>
   );
+}
+
+function renderCommentContent(content: string) {
+  return content.split(/(\[[^\[\]]{1,16}\])/g).map((part, index) => {
+    const emoji = neteaseEmojiMap[part];
+    if (!emoji) {
+      return part;
+    }
+
+    return (
+      <span key={`${part}-${index}`} className="netease-comment-emoji" title={part} aria-label={part.slice(1, -1)}>
+        {emoji}
+      </span>
+    );
+  });
 }
 
 export default function App() {
@@ -5120,8 +5166,8 @@ export default function App() {
                                         <strong>{comment.nickname}</strong>
                                         <span>{comment.timeText}</span>
                                       </div>
-                                      <p className="comment-content">{comment.content}</p>
-                                      {comment.replyContent ? <p className="comment-reply">{comment.replyContent}</p> : null}
+                                      <p className="comment-content">{renderCommentContent(comment.content)}</p>
+                                      {comment.replyContent ? <p className="comment-reply">{renderCommentContent(comment.replyContent)}</p> : null}
                                       {comment.likedCount > 0 ? <span className="comment-like">{comment.likedCount} 赞</span> : null}
                                     </div>
                                   </article>
@@ -5146,8 +5192,8 @@ export default function App() {
                                         <strong>{comment.nickname}</strong>
                                         <span>{comment.timeText}</span>
                                       </div>
-                                      <p className="comment-content">{comment.content}</p>
-                                      {comment.replyContent ? <p className="comment-reply">{comment.replyContent}</p> : null}
+                                      <p className="comment-content">{renderCommentContent(comment.content)}</p>
+                                      {comment.replyContent ? <p className="comment-reply">{renderCommentContent(comment.replyContent)}</p> : null}
                                       {comment.likedCount > 0 ? <span className="comment-like">{comment.likedCount} 赞</span> : null}
                                     </div>
                                   </article>

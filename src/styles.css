@@ -2606,6 +2606,17 @@ input[type="range"] {
   font-size: 13px;
 }
 
+.netease-comment-emoji {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15em;
+  margin: 0 1px;
+  font-size: 1.05em;
+  line-height: 1;
+  vertical-align: -0.12em;
+}
+
 .comment-reply {
   padding: 8px 10px;
   border-radius: 10px;
