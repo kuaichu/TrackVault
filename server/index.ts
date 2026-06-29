@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { getAlbumProfile } from "./album-provider.js";
 import { getCurrentUserKey, getSession, loginSession, logoutSession } from "./account-store.js";
 import { getCloudSongs } from "./cloud-provider.js";
+import { getSongComments } from "./comment-provider.js";
 import { getDiscoverSongs } from "./discover-provider.js";
 import { getArtistProfile, resolveArtistIdByName } from "./artist-provider.js";
 import { getPlayHistory, getSearchHistory, removeSearchHistory, savePlayHistory, saveSearchHistory } from "./history-store.js";
@@ -186,6 +187,18 @@ app.get("/api/lyrics/:id", async (request, response) => {
   } catch (error) {
     response.status(502).json({
       message: error instanceof Error ? error.message : "获取歌词失败"
+    });
+  }
+});
+
+app.get("/api/comments/songs/:id", async (request, response) => {
+  try {
+    const page = Number(request.query.page);
+    const limit = Number(request.query.limit);
+    response.json(await getSongComments(request.params.id, page, limit));
+  } catch (error) {
+    response.status(502).json({
+      message: error instanceof Error ? error.message : "获取评论失败"
     });
   }
 });

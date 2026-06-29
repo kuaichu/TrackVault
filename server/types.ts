@@ -72,6 +72,27 @@ export type SongLyrics = {
   source: "lyric_new" | "lyric";
 };
 
+export type SongComment = {
+  id: string;
+  userId: string;
+  nickname: string;
+  avatarUrl?: string;
+  content: string;
+  timeText: string;
+  likedCount: number;
+  replyContent?: string;
+};
+
+export type SongCommentsPage = {
+  songId: string;
+  total: number;
+  page: number;
+  limit: number;
+  hasMore: boolean;
+  hotComments: SongComment[];
+  comments: SongComment[];
+};
+
 export type UserPlaylist = {
   id: string;
   name: string;

@@ -27,6 +27,7 @@ import type {
   PlaylistTransferJob,
   PlaylistTransferRunJob,
   Song,
+  SongCommentsPage,
   SongLyrics,
   TransferExportFormat,
   TransferExportResult,
@@ -357,6 +358,20 @@ export async function getLyrics(songId: string): Promise<SongLyrics> {
 
   const data = (await response.json()) as { lyrics: SongLyrics };
   return data.lyrics;
+}
+
+export async function getSongComments(songId: string, page = 1, limit = 20): Promise<SongCommentsPage> {
+  const params = new URLSearchParams({
+    page: String(page),
+    limit: String(limit)
+  });
+  const response = await apiFetch(`/api/comments/songs/${encodeURIComponent(songId)}?${params.toString()}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取评论失败");
+  }
+
+  return (await response.json()) as SongCommentsPage;
 }
 
 export async function getArtistProfile(artistId: string): Promise<ArtistProfile> {

@@ -25,6 +25,7 @@ import {
   getDiscoverSongs,
   getPlaylistSongs,
   getPlaylists,
+  getSongComments,
   getSearchHistory,
   getLyrics,
   getSettings,
@@ -52,10 +53,11 @@ import {
   startPlaylistTransferRunJob,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserPlaylist } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserPlaylist } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
+const COMMENT_PAGE_SIZE = 20;
 const settingsQualityOptions: Array<{ level: DownloadQualityLevel; label: string }> = [
   { level: "hires", label: "Hi-Res" },
   { level: "lossless", label: "FLAC" },
@@ -96,7 +98,7 @@ const defaultAdminConfig: AdminConfigView = {
 
 type MainTab = "search" | "account" | "settings";
 type NavKey = "discover" | "search" | "daily" | "playlists" | "transfer" | "cloud" | "downloads" | "history" | "artist" | "album";
-type RightPanelTab = "queue" | "lyrics";
+type RightPanelTab = "queue" | "lyrics" | "comments";
 type ResultSource = "search" | "playlist" | "cloud" | "daily" | "discover" | "artist" | "album";
 type PlaylistSortMode = "default" | "title-asc" | "title-desc" | "artist-asc" | "artist-desc";
 type SongContextMenuState = { song: Song; x: number; y: number };
@@ -609,6 +611,12 @@ export default function App() {
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
   const [loadingLyrics, setLoadingLyrics] = useState(false);
   const [lyricsError, setLyricsError] = useState("");
+  const [commentTrack, setCommentTrack] = useState<Song | null>(initialPlayerState.currentTrack);
+  const [songComments, setSongComments] = useState<SongCommentsPage | null>(null);
+  const [commentPage, setCommentPage] = useState(1);
+  const [commentRefreshKey, setCommentRefreshKey] = useState(0);
+  const [loadingComments, setLoadingComments] = useState(false);
+  const [commentsError, setCommentsError] = useState("");
   const [volume, setVolume] = useState(initialPlayerState.volume);
   const [playerError, setPlayerError] = useState("");
   const [likedSongIds, setLikedSongIds] = useState<string[]>([]);
@@ -1684,6 +1692,14 @@ export default function App() {
     }
 
     syncAudioForSong(song, true);
+  }
+
+  function openSongComments(song: Song) {
+    setCommentTrack(song);
+    setCommentPage(1);
+    setCommentsError("");
+    setRightPanelTab("comments");
+    setMessage(`正在查看评论：${song.title}`);
   }
 
   function handleSelectSong(song: Song) {
@@ -2870,6 +2886,47 @@ export default function App() {
     };
   }, [currentTrack?.id]);
 
+  useEffect(() => {
+    if (!currentTrack) {
+      return;
+    }
+
+    setCommentTrack((track) => (track?.id === currentTrack.id ? track : currentTrack));
+    setCommentPage(1);
+  }, [currentTrack?.id]);
+
+  useEffect(() => {
+    if (rightPanelTab !== "comments" || !commentTrack) {
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingComments(true);
+    setCommentsError("");
+
+    getSongComments(commentTrack.id, commentPage, COMMENT_PAGE_SIZE)
+      .then((data) => {
+        if (!cancelled) {
+          setSongComments(data);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setSongComments(null);
+          setCommentsError(error instanceof Error ? error.message : "获取评论失败");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingComments(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [rightPanelTab, commentTrack?.id, commentPage, commentRefreshKey]);
+
   const activeLyricIndex = useMemo(() => {
     if (lyrics.length === 0) {
       return -1;
@@ -3262,6 +3319,8 @@ export default function App() {
             : "暂时没有读取到该歌手的热门歌曲。";
   const hasReadableLyrics = Boolean(currentTrack && !loadingLyrics && !lyricsError && lyrics.length > 0);
   const shouldShowLyricsAtmosphere = Boolean(currentTrack?.coverUrl && (loadingLyrics || hasReadableLyrics));
+  const activeSongComments = songComments?.songId === commentTrack?.id ? songComments : null;
+  const commentTotalLabel = activeSongComments?.total ? (activeSongComments.total > 999 ? "999+" : String(activeSongComments.total)) : "";
 
   const renderArtistMeta = (song: Song) => {
     const artists = getSongArtists(song);
@@ -4915,6 +4974,19 @@ export default function App() {
             <button type="button" className={rightPanelTab === "lyrics" ? "right-tab active" : "right-tab"} onClick={() => setRightPanelTab("lyrics")}>
               歌词
             </button>
+            <button
+              type="button"
+              className={rightPanelTab === "comments" ? "right-tab active" : "right-tab"}
+              onClick={() => {
+                if (!commentTrack && currentTrack) {
+                  setCommentTrack(currentTrack);
+                }
+                setRightPanelTab("comments");
+              }}
+            >
+              评论
+              {commentTotalLabel ? <strong>{commentTotalLabel}</strong> : null}
+            </button>
           </div>
 
           <section className="play-sidebar-body">
@@ -4987,6 +5059,93 @@ export default function App() {
                     ))}
                   </div>
                 ) : null}
+              </div>
+            ) : null}
+
+            {rightPanelTab === "comments" ? (
+              <div className="comments-panel">
+                {!commentTrack ? (
+                  <div className="comments-empty">
+                    <MusicGlyph />
+                    <p>先播放或右键选择一首歌，再查看评论。</p>
+                  </div>
+                ) : (
+                  <>
+                    <header className="comments-track">
+                      <CoverArt song={commentTrack} className="comments-track-cover" />
+                      <div>
+                        <span>评论区</span>
+                        <strong>{commentTrack.title}</strong>
+                        <p>{commentTrack.artist}</p>
+                      </div>
+                      <button type="button" className="comments-refresh" disabled={loadingComments} onClick={() => setCommentRefreshKey((key) => key + 1)}>
+                        刷新
+                      </button>
+                    </header>
+
+                    {loadingComments ? <div className="empty-box">正在加载评论...</div> : null}
+                    {!loadingComments && commentsError ? <div className="empty-box">{commentsError}</div> : null}
+                    {!loadingComments && !commentsError && activeSongComments ? (
+                      <>
+                        {activeSongComments.hotComments.length > 0 ? (
+                          <section className="comments-section">
+                            <h3>热评</h3>
+                            <div className="comments-list">
+                              {activeSongComments.hotComments.map((comment) => (
+                                <article key={`hot-${comment.id}`} className="comment-row">
+                                  {comment.avatarUrl ? <img src={comment.avatarUrl} alt="" className="comment-avatar" loading="lazy" /> : <span className="comment-avatar placeholder">{comment.nickname.slice(0, 1)}</span>}
+                                  <div className="comment-copy">
+                                    <div className="comment-meta">
+                                      <strong>{comment.nickname}</strong>
+                                      <span>{comment.timeText}</span>
+                                    </div>
+                                    <p className="comment-content">{comment.content}</p>
+                                    {comment.replyContent ? <p className="comment-reply">{comment.replyContent}</p> : null}
+                                    {comment.likedCount > 0 ? <span className="comment-like">{comment.likedCount} 赞</span> : null}
+                                  </div>
+                                </article>
+                              ))}
+                            </div>
+                          </section>
+                        ) : null}
+
+                        <section className="comments-section">
+                          <h3>最新评论</h3>
+                          {activeSongComments.comments.length === 0 ? (
+                            <div className="empty-box">这首歌暂时没有读取到评论。</div>
+                          ) : (
+                            <div className="comments-list">
+                              {activeSongComments.comments.map((comment) => (
+                                <article key={comment.id} className="comment-row">
+                                  {comment.avatarUrl ? <img src={comment.avatarUrl} alt="" className="comment-avatar" loading="lazy" /> : <span className="comment-avatar placeholder">{comment.nickname.slice(0, 1)}</span>}
+                                  <div className="comment-copy">
+                                    <div className="comment-meta">
+                                      <strong>{comment.nickname}</strong>
+                                      <span>{comment.timeText}</span>
+                                    </div>
+                                    <p className="comment-content">{comment.content}</p>
+                                    {comment.replyContent ? <p className="comment-reply">{comment.replyContent}</p> : null}
+                                    {comment.likedCount > 0 ? <span className="comment-like">{comment.likedCount} 赞</span> : null}
+                                  </div>
+                                </article>
+                              ))}
+                            </div>
+                          )}
+                        </section>
+
+                        <div className="comments-pager">
+                          <button type="button" disabled={commentPage <= 1 || loadingComments} onClick={() => setCommentPage((page) => Math.max(1, page - 1))}>
+                            上一页
+                          </button>
+                          <span>第 {commentPage} 页</span>
+                          <button type="button" disabled={!activeSongComments.hasMore || loadingComments} onClick={() => setCommentPage((page) => page + 1)}>
+                            下一页
+                          </button>
+                        </div>
+                      </>
+                    ) : null}
+                  </>
+                )}
               </div>
             ) : null}
           </section>
@@ -5209,6 +5368,10 @@ export default function App() {
           <button type="button" role="menuitem" onClick={() => runSongContextAction(() => handleQueueSongNext(songContextMenu.song))}>
             <span className="song-context-icon"><PlayerIcon name="next" /></span>
             下一首播放
+          </button>
+          <button type="button" role="menuitem" onClick={() => runSongContextAction(() => openSongComments(songContextMenu.song))}>
+            <span className="song-context-icon">评</span>
+            查看评论
           </button>
           <div className="song-context-divider" />
           <button type="button" role="menuitem" disabled={Boolean(addingToPlaylistId)} onClick={() => runSongContextAction(() => handleOpenPlaylistPicker(songContextMenu.song))}>
