@@ -6848,6 +6848,8 @@ body {
 }
 
 .playlist-sort-control {
+  position: relative;
+  z-index: 45;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -6894,12 +6896,14 @@ body {
 }
 
 .playlist-sort-menu {
-  position: absolute;
-  top: calc(100% + 8px);
+  position: fixed;
+  top: 0;
   left: 0;
-  z-index: 82;
-  width: 100%;
+  z-index: 160;
+  width: 168px;
   min-width: 168px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 7px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 15px;

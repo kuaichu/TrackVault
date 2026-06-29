@@ -114,6 +114,8 @@ const playlistSortOptions: Array<{ value: PlaylistSortMode; label: string }> = [
   { value: "artist-asc", label: "歌手 A-Z" },
   { value: "artist-desc", label: "歌手 Z-A" }
 ];
+const PLAYLIST_SORT_MENU_ESTIMATED_HEIGHT = 214;
+const FLOATING_MENU_MARGIN = 12;
 const defaultSettings: AppSettings = {
   accountName: "本地账号",
   vipEnabled: false,
@@ -143,6 +145,7 @@ type DownloadIssueDialog = {
 };
 type ResultSource = "search" | "playlist" | "cloud" | "daily" | "discover" | "artist" | "album";
 type PlaylistSortMode = "default" | "title-asc" | "title-desc" | "artist-asc" | "artist-desc";
+type FloatingMenuStyle = Pick<CSSProperties, "top" | "left" | "width" | "maxHeight">;
 type SongContextMenuState = { song: Song; x: number; y: number };
 type UserProfileTarget = { id: string; fallbackName?: string; fallbackAvatarUrl?: string };
 type NeteaseLoginMode = "qr" | "cellphone" | "cookie";
@@ -753,6 +756,7 @@ export default function App() {
   });
   const playerStateSyncTimerRef = useRef<number | null>(null);
   const playerStateHydratedRef = useRef(false);
+  const playlistSortTriggerRef = useRef<HTMLButtonElement | null>(null);
   const qrCheckFailureCountRef = useRef(0);
   const qrAutoRefreshPendingRef = useRef(false);
   const qrAutoRefreshCountRef = useRef(0);
@@ -842,6 +846,7 @@ export default function App() {
   const [qualitySelectionTouched, setQualitySelectionTouched] = useState<Record<string, true>>({});
   const [openQualityMenuId, setOpenQualityMenuId] = useState<string | null>(null);
   const [openPlaylistSortMenu, setOpenPlaylistSortMenu] = useState(false);
+  const [playlistSortMenuStyle, setPlaylistSortMenuStyle] = useState<FloatingMenuStyle | null>(null);
   const [openSettingsQualityMenu, setOpenSettingsQualityMenu] = useState<"playback" | "download" | null>(null);
   const [mainTab, setMainTab] = useState<MainTab>("search");
   const [navKey, setNavKey] = useState<NavKey>("discover");
@@ -3069,6 +3074,43 @@ export default function App() {
     void loadPlaylistSongs(activePlaylist, 1, "", playlistSortMode);
   }
 
+  function updatePlaylistSortMenuStyle(trigger = playlistSortTriggerRef.current) {
+    if (!trigger) {
+      return;
+    }
+
+    const rect = trigger.getBoundingClientRect();
+    const width = Math.max(rect.width, 168);
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const availableBelow = viewportHeight - rect.bottom - FLOATING_MENU_MARGIN;
+    const availableAbove = rect.top - FLOATING_MENU_MARGIN;
+    const shouldOpenUp = availableBelow < PLAYLIST_SORT_MENU_ESTIMATED_HEIGHT && availableAbove > availableBelow;
+    const availableSpace = shouldOpenUp ? availableAbove : availableBelow;
+    const maxHeight = Math.max(136, Math.min(PLAYLIST_SORT_MENU_ESTIMATED_HEIGHT, availableSpace - 8));
+    const top = shouldOpenUp
+      ? Math.max(FLOATING_MENU_MARGIN, rect.top - maxHeight - 8)
+      : Math.min(rect.bottom + 8, viewportHeight - maxHeight - FLOATING_MENU_MARGIN);
+    const left = Math.min(
+      Math.max(FLOATING_MENU_MARGIN, rect.left),
+      Math.max(FLOATING_MENU_MARGIN, viewportWidth - width - FLOATING_MENU_MARGIN)
+    );
+
+    setPlaylistSortMenuStyle({ top, left, width, maxHeight });
+  }
+
+  function togglePlaylistSortMenu(trigger: HTMLButtonElement) {
+    setOpenQualityMenuId(null);
+
+    if (openPlaylistSortMenu) {
+      setOpenPlaylistSortMenu(false);
+      return;
+    }
+
+    updatePlaylistSortMenuStyle(trigger);
+    setOpenPlaylistSortMenu(true);
+  }
+
   function handlePlaylistSortChange(nextSortMode: PlaylistSortMode) {
     setPlaylistSortMode(nextSortMode);
     setOpenPlaylistSortMenu(false);
@@ -3214,6 +3256,33 @@ export default function App() {
     window.addEventListener("click", handleWindowClick);
     return () => window.removeEventListener("click", handleWindowClick);
   }, []);
+
+  useEffect(() => {
+    if (!openPlaylistSortMenu) {
+      setPlaylistSortMenuStyle(null);
+      return;
+    }
+
+    function handleFloatingSortMenuUpdate() {
+      updatePlaylistSortMenuStyle();
+    }
+
+    function handleFloatingSortMenuKeydown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpenPlaylistSortMenu(false);
+      }
+    }
+
+    window.addEventListener("resize", handleFloatingSortMenuUpdate);
+    window.addEventListener("scroll", handleFloatingSortMenuUpdate, true);
+    window.addEventListener("keydown", handleFloatingSortMenuKeydown);
+
+    return () => {
+      window.removeEventListener("resize", handleFloatingSortMenuUpdate);
+      window.removeEventListener("scroll", handleFloatingSortMenuUpdate, true);
+      window.removeEventListener("keydown", handleFloatingSortMenuKeydown);
+    };
+  }, [openPlaylistSortMenu]);
 
   useEffect(() => {
     if (!songContextMenu) {
@@ -5342,22 +5411,20 @@ export default function App() {
                       <span>排序</span>
                       <div className="playlist-sort-select" onClick={(event) => event.stopPropagation()}>
                         <button
+                          ref={playlistSortTriggerRef}
                           type="button"
                           className="playlist-sort-trigger"
                           aria-haspopup="listbox"
                           aria-expanded={openPlaylistSortMenu}
-                          onClick={() => {
-                            setOpenQualityMenuId(null);
-                            setOpenPlaylistSortMenu((current) => !current);
-                          }}
+                          onClick={(event) => togglePlaylistSortMenu(event.currentTarget)}
                         >
                           <span>{playlistSortOptions.find((option) => option.value === playlistSortMode)?.label ?? "默认顺序"}</span>
                           <span className={openPlaylistSortMenu ? "quality-caret open" : "quality-caret"}>
                             <ChevronIcon />
                           </span>
                         </button>
-                        {openPlaylistSortMenu ? (
-                          <div className="playlist-sort-menu" role="listbox" aria-label="歌单歌曲排序">
+                        {openPlaylistSortMenu && playlistSortMenuStyle ? (
+                          <div className="playlist-sort-menu" role="listbox" aria-label="歌单歌曲排序" style={playlistSortMenuStyle ?? undefined} onClick={(event) => event.stopPropagation()}>
                             {playlistSortOptions.map((option) => (
                               <button
                                 key={option.value}
