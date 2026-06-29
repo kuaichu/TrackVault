@@ -5854,7 +5854,7 @@ body {
 }
 
 .dock-volume {
-  grid-template-columns: 36px 94px 22px minmax(54px, 1fr) 34px 36px;
+  grid-template-columns: 36px 94px 22px minmax(64px, 1fr) 34px;
 }
 
 .dock-quality-select {
@@ -5890,16 +5890,68 @@ body {
 
 @media (max-width: 1120px) {
   .dock-volume {
-    grid-template-columns: 36px 94px 22px minmax(80px, 1fr) 34px 36px;
+    grid-template-columns: 36px 94px 22px minmax(80px, 1fr) 34px;
   }
 }
 
 @media (max-width: 760px) {
   .dock-volume {
-    grid-template-columns: 36px minmax(86px, 104px) 22px minmax(0, 1fr) 34px 36px;
+    grid-template-columns: 36px minmax(86px, 104px) 22px minmax(0, 1fr) 34px;
   }
 
   .dock-quality-select {
     width: 100%;
+  }
+}
+
+/* Final dock control sizing: keep the transport controls readable at small widths. */
+.player-dock .control-buttons {
+  gap: clamp(12px, 1.35vw, 18px);
+}
+
+.player-dock .dock-icon {
+  width: 46px;
+  height: 46px;
+}
+
+.player-dock .dock-icon.primary {
+  width: 68px;
+  height: 68px;
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 35% 24%, rgba(255, 255, 255, 0.42), transparent 28%),
+    linear-gradient(135deg, #ffb24f 0%, #ffd15f 100%);
+  box-shadow:
+    0 18px 36px rgba(255, 180, 93, 0.28),
+    0 0 0 8px rgba(255, 180, 93, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.46);
+}
+
+.player-dock .dock-icon.primary:hover {
+  background:
+    radial-gradient(circle at 35% 24%, rgba(255, 255, 255, 0.5), transparent 30%),
+    linear-gradient(135deg, #ffc06b 0%, #ffdc7f 100%);
+}
+
+.player-dock .dock-icon.primary .player-svg {
+  width: 25px;
+  height: 25px;
+}
+
+.player-dock .dock-icon.primary.locked-playback-button {
+  background: rgba(255, 180, 93, 0.16);
+  box-shadow: none;
+}
+
+@media (max-width: 760px) {
+  .player-dock .dock-icon {
+    width: 42px;
+    height: 42px;
+  }
+
+  .player-dock .dock-icon.primary {
+    width: 58px;
+    height: 58px;
+    border-radius: 18px;
   }
 }

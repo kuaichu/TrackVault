@@ -4843,7 +4843,6 @@ export default function App() {
           <PlayerIcon name="volume" />
           <input className="range-progress" style={volumeRangeStyle} type="range" min="0" max="100" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
           <strong>{volume}</strong>
-          <button type="button" className="dock-more-button" aria-label="更多操作"><PlayerIcon name="more" /></button>
         </div>
       </footer>
     </div>
