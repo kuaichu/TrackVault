@@ -3321,6 +3321,10 @@ export default function App() {
   const shouldShowLyricsAtmosphere = Boolean(currentTrack?.coverUrl && (loadingLyrics || hasReadableLyrics));
   const activeSongComments = songComments?.songId === commentTrack?.id ? songComments : null;
   const commentTotalLabel = activeSongComments?.total ? (activeSongComments.total > 999 ? "999+" : String(activeSongComments.total)) : "";
+  const commentContextLabel =
+    commentTrack && currentTrack?.id !== commentTrack.id
+      ? `${commentTrack.title} · ${commentTrack.artist}`
+      : "当前播放歌曲";
 
   const renderArtistMeta = (song: Song) => {
     const artists = getSongArtists(song);
@@ -5071,12 +5075,10 @@ export default function App() {
                   </div>
                 ) : (
                   <>
-                    <header className="comments-track">
-                      <CoverArt song={commentTrack} className="comments-track-cover" />
+                    <header className="comments-toolbar">
                       <div>
                         <span>评论区</span>
-                        <strong>{commentTrack.title}</strong>
-                        <p>{commentTrack.artist}</p>
+                        <strong>{commentContextLabel}</strong>
                       </div>
                       <button type="button" className="comments-refresh" disabled={loadingComments} onClick={() => setCommentRefreshKey((key) => key + 1)}>
                         刷新
