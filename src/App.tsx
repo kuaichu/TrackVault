@@ -33,6 +33,7 @@ import {
   checkNeteaseQrLogin,
   isDirectDownloadBlockedError,
   removeSearchHistory as removeSearchHistoryRemote,
+  removeSongsFromPlaylist,
   resolveArtistByName,
   loginAccount,
   loginWithNeteaseCellphone,
@@ -68,6 +69,13 @@ const playbackQualityOptions: Array<{ level: DownloadQualityLevel; label: string
   { level: "lossless", label: "FLAC" },
   { level: "hires", label: "Hi-Res" }
 ];
+const playlistSortOptions: Array<{ value: PlaylistSortMode; label: string }> = [
+  { value: "default", label: "默认顺序" },
+  { value: "title-asc", label: "标题 A-Z" },
+  { value: "title-desc", label: "标题 Z-A" },
+  { value: "artist-asc", label: "歌手 A-Z" },
+  { value: "artist-desc", label: "歌手 Z-A" }
+];
 const defaultSettings: AppSettings = {
   accountName: "本地账号",
   vipEnabled: false,
@@ -90,6 +98,7 @@ type MainTab = "search" | "account" | "settings";
 type NavKey = "discover" | "search" | "daily" | "playlists" | "transfer" | "cloud" | "downloads" | "history" | "artist" | "album";
 type RightPanelTab = "queue" | "lyrics";
 type ResultSource = "search" | "playlist" | "cloud" | "daily" | "discover" | "artist" | "album";
+type PlaylistSortMode = "default" | "title-asc" | "title-desc" | "artist-asc" | "artist-desc";
 type NeteaseLoginMode = "qr" | "cellphone" | "cookie";
 type ViewSnapshot = {
   results: Song[];
@@ -540,6 +549,7 @@ export default function App() {
   const [loadingCloudSongs, setLoadingCloudSongs] = useState(false);
   const [loadingDailySongs, setLoadingDailySongs] = useState(false);
   const [loadingDiscoverSongs, setLoadingDiscoverSongs] = useState(false);
+  const [removingPlaylistSongs, setRemovingPlaylistSongs] = useState(false);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
   const [activePlaylist, setActivePlaylist] = useState<UserPlaylist | null>(null);
   const [activeArtist, setActiveArtist] = useState<ArtistProfile | null>(null);
@@ -550,6 +560,7 @@ export default function App() {
   const [playlistSongsTotal, setPlaylistSongsTotal] = useState(0);
   const [playlistSearchInput, setPlaylistSearchInput] = useState("");
   const [playlistSearchKeyword, setPlaylistSearchKeyword] = useState("");
+  const [playlistSortMode, setPlaylistSortMode] = useState<PlaylistSortMode>("default");
   const [cloudMeta, setCloudMeta] = useState({ count: 0, size: 0, maxSize: 0 });
   const [savingSettings, setSavingSettings] = useState(false);
   const [savingAdminConfig, setSavingAdminConfig] = useState(false);
@@ -908,7 +919,7 @@ export default function App() {
     }
   }
 
-  async function loadPlaylistSongs(playlist: UserPlaylist, page = 1, keywordOverride = playlistSearchKeyword) {
+  async function loadPlaylistSongs(playlist: UserPlaylist, page = 1, keywordOverride = playlistSearchKeyword, sortOverride = playlistSortMode) {
     const cookieOk = await ensureNeteaseCookieHealthy();
     if (!cookieOk) {
       return;
@@ -927,7 +938,7 @@ export default function App() {
     );
 
     try {
-      const pageData = await getPlaylistSongs(playlist.id, page, PLAYLIST_SONGS_PAGE_SIZE, normalizedKeyword);
+      const pageData = await getPlaylistSongs(playlist.id, page, PLAYLIST_SONGS_PAGE_SIZE, normalizedKeyword, sortOverride);
       setResults(pageData.songs);
       setPlayQueue(pageData.songs);
       setResultSource("playlist");
@@ -2333,7 +2344,7 @@ export default function App() {
       return;
     }
 
-    void loadPlaylistSongs(activePlaylist, safePage, playlistSearchKeyword);
+    void loadPlaylistSongs(activePlaylist, safePage, playlistSearchKeyword, playlistSortMode);
   }
 
   function handlePlaylistSearchSubmit(event: FormEvent) {
@@ -2342,7 +2353,7 @@ export default function App() {
       return;
     }
 
-    void loadPlaylistSongs(activePlaylist, 1, playlistSearchInput);
+    void loadPlaylistSongs(activePlaylist, 1, playlistSearchInput, playlistSortMode);
   }
 
   function handleClearPlaylistSearch() {
@@ -2352,7 +2363,66 @@ export default function App() {
 
     setPlaylistSearchInput("");
     setPlaylistSearchKeyword("");
-    void loadPlaylistSongs(activePlaylist, 1, "");
+    void loadPlaylistSongs(activePlaylist, 1, "", playlistSortMode);
+  }
+
+  function handlePlaylistSortChange(nextSortMode: PlaylistSortMode) {
+    setPlaylistSortMode(nextSortMode);
+
+    if (!activePlaylist || loadingPlaylistSongs) {
+      return;
+    }
+
+    void loadPlaylistSongs(activePlaylist, 1, playlistSearchKeyword, nextSortMode);
+  }
+
+  async function handleRemoveSelectedPlaylistSongs() {
+    if (!activePlaylist || !activePlaylist.owned || removingPlaylistSongs || selectedVisibleSongs.length === 0) {
+      return;
+    }
+
+    const songIds = selectedVisibleSongs.map((song) => song.id);
+    const confirmed = window.confirm(`确定从「${activePlaylist.name}」移除 ${songIds.length} 首歌吗？不会删除歌曲本身。`);
+    if (!confirmed) {
+      return;
+    }
+
+    setRemovingPlaylistSongs(true);
+    setMessage(`正在从「${activePlaylist.name}」移除 ${songIds.length} 首歌...`);
+
+    try {
+      const result = await removeSongsFromPlaylist(activePlaylist.id, songIds);
+      const removedCount = Math.max(0, result.removedCount);
+      const updatedPlaylist = {
+        ...activePlaylist,
+        trackCount: Math.max(0, activePlaylist.trackCount - removedCount)
+      };
+      const removedIdSet = new Set(result.songIds);
+      const nextTotal = playlistSearchKeyword
+        ? Math.max(0, playlistSongsTotal - removedCount)
+        : updatedPlaylist.trackCount;
+      const nextPage = Math.min(playlistSongsPage, Math.max(1, Math.ceil(nextTotal / playlistSongsLimit)));
+
+      setPlaylists((current) =>
+        current.map((playlist) =>
+          playlist.id === activePlaylist.id
+            ? { ...playlist, trackCount: updatedPlaylist.trackCount }
+            : playlist
+        )
+      );
+      setActivePlaylist(updatedPlaylist);
+      setSelectedSongIds((current) => current.filter((songId) => !removedIdSet.has(songId)));
+      setResults((current) => current.filter((song) => !removedIdSet.has(song.id)));
+      setPlayQueue((current) => current.filter((song) => !removedIdSet.has(song.id)));
+      setPlaylistSongsTotal(nextTotal);
+
+      await loadPlaylistSongs(updatedPlaylist, nextPage, playlistSearchKeyword, playlistSortMode);
+      setMessage(`已从「${result.playlistName}」移除 ${removedCount} 首歌`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "从歌单移除失败");
+    } finally {
+      setRemovingPlaylistSongs(false);
+    }
   }
 
   function markLyricsManualScroll() {
@@ -3008,12 +3078,34 @@ export default function App() {
   const completedCount = useMemo(() => tasks.filter((task) => task.status === "done").length, [tasks]);
   const failedCount = useMemo(() => tasks.filter((task) => task.status === "failed").length, [tasks]);
   const visibleSongs = useMemo(() => {
-    if (resultSource === "playlist" || resultSource === "cloud" || resultSource === "daily" || resultSource === "discover" || resultSource === "artist" || resultSource === "album") {
-      return results;
+    const sourceSongs = resultSource === "playlist" || resultSource === "cloud" || resultSource === "daily" || resultSource === "discover" || resultSource === "artist" || resultSource === "album"
+      ? results
+      : results.slice(0, 30);
+
+    if (resultSource !== "playlist" || playlistSortMode === "default") {
+      return sourceSongs;
     }
 
-    return results.slice(0, 30);
-  }, [results, navKey, resultSource]);
+    const compareText = (left: string, right: string) => left.localeCompare(right, "zh-Hans-CN", { numeric: true, sensitivity: "base" });
+    const sortedSongs = [...sourceSongs];
+
+    sortedSongs.sort((left, right) => {
+      switch (playlistSortMode) {
+        case "title-asc":
+          return compareText(left.title, right.title);
+        case "title-desc":
+          return compareText(right.title, left.title);
+        case "artist-asc":
+          return compareText(left.artist, right.artist) || compareText(left.title, right.title);
+        case "artist-desc":
+          return compareText(right.artist, left.artist) || compareText(right.title, left.title);
+        default:
+          return 0;
+      }
+    });
+
+    return sortedSongs;
+  }, [results, navKey, resultSource, playlistSortMode]);
   const selectedVisibleSongs = useMemo(
     () => visibleSongs.filter((song) => selectedSongIds.includes(song.id)),
     [visibleSongs, selectedSongIds]
@@ -4111,21 +4203,33 @@ export default function App() {
                       下一页
                     </button>
                   </div>
-                  <form className="playlist-filter-form" onSubmit={handlePlaylistSearchSubmit}>
-                    <input
-                      value={playlistSearchInput}
-                      onChange={(event) => setPlaylistSearchInput(event.target.value)}
-                      placeholder="筛选当前歌单的歌名 / 歌手 / 专辑"
-                    />
-                    <button type="submit" className="secondary-button" disabled={loadingPlaylistSongs}>
-                      筛选
-                    </button>
-                    {playlistSearchKeyword ? (
-                      <button type="button" className="secondary-button" disabled={loadingPlaylistSongs} onClick={handleClearPlaylistSearch}>
-                        清除
+                  <div className="playlist-toolbar-controls">
+                    <label className="playlist-sort-control">
+                      <span>排序</span>
+                      <select value={playlistSortMode} onChange={(event) => handlePlaylistSortChange(event.target.value as PlaylistSortMode)}>
+                        {playlistSortOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <form className="playlist-filter-form" onSubmit={handlePlaylistSearchSubmit}>
+                      <input
+                        value={playlistSearchInput}
+                        onChange={(event) => setPlaylistSearchInput(event.target.value)}
+                        placeholder="筛选当前歌单的歌名 / 歌手 / 专辑"
+                      />
+                      <button type="submit" className="secondary-button" disabled={loadingPlaylistSongs}>
+                        筛选
                       </button>
-                    ) : null}
-                  </form>
+                      {playlistSearchKeyword ? (
+                        <button type="button" className="secondary-button" disabled={loadingPlaylistSongs} onClick={handleClearPlaylistSearch}>
+                          清除
+                        </button>
+                      ) : null}
+                    </form>
+                  </div>
                 </div>
               ) : null}
               {selectedVisibleSongs.length > 0 ? (
@@ -4141,6 +4245,16 @@ export default function App() {
                       {!hasNeteaseDownloadAuth ? <LockIcon /> : null}
                         {batchDownloading ? "启动中" : "直连下载已选"}
                     </button>
+                    {resultSource === "playlist" && activePlaylist?.owned ? (
+                      <button
+                        type="button"
+                        className="secondary-button compact danger-button"
+                        disabled={removingPlaylistSongs || loadingPlaylistSongs}
+                        onClick={() => void handleRemoveSelectedPlaylistSongs()}
+                      >
+                        {removingPlaylistSongs ? "移除中" : "从歌单移除"}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="secondary-button compact"

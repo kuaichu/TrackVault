@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import type { SearchType } from "NeteaseCloudMusicApi";
 import { getSettings } from "./settings-store.js";
-import type { DownloadQualityOption, PlaylistSongsPage, Song, UserPlaylist } from "./types.js";
+import type { DownloadQualityOption, PlaylistSongsPage, PlaylistTrackRemoveResult, Song, UserPlaylist } from "./types.js";
 
 const require = createRequire(import.meta.url);
 const { login_status, playlist_track_all, playlist_tracks, song_detail, user_playlist } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
@@ -62,6 +62,7 @@ type QualityFlags = {
   sq?: unknown | null;
   hr?: unknown | null;
 };
+type PlaylistSortMode = "default" | "title-asc" | "title-desc" | "artist-asc" | "artist-desc";
 
 const PLAYLIST_PAGE_SIZE = 100;
 const PLAYLIST_SEARCH_FETCH_BATCH_SIZE = 500;
@@ -271,6 +272,37 @@ function filterPlaylistSongs(songs: Song[], keyword: string) {
   );
 }
 
+function normalizePlaylistSortMode(sortMode: string | undefined): PlaylistSortMode {
+  const allowedModes: PlaylistSortMode[] = ["default", "title-asc", "title-desc", "artist-asc", "artist-desc"];
+  return allowedModes.includes(sortMode as PlaylistSortMode) ? (sortMode as PlaylistSortMode) : "default";
+}
+
+function sortPlaylistSongs(songs: Song[], sortMode: PlaylistSortMode) {
+  if (sortMode === "default") {
+    return songs;
+  }
+
+  const compareText = (left: string, right: string) => left.localeCompare(right, "zh-Hans-CN", { numeric: true, sensitivity: "base" });
+  const sortedSongs = [...songs];
+
+  sortedSongs.sort((left, right) => {
+    switch (sortMode) {
+      case "title-asc":
+        return compareText(left.title, right.title);
+      case "title-desc":
+        return compareText(right.title, left.title);
+      case "artist-asc":
+        return compareText(left.artist, right.artist) || compareText(left.title, right.title);
+      case "artist-desc":
+        return compareText(right.artist, left.artist) || compareText(right.title, left.title);
+      default:
+        return 0;
+    }
+  });
+
+  return sortedSongs;
+}
+
 function clearPlaylistSongCache(playlistId: string) {
   for (const key of playlistPageCache.keys()) {
     if (key.startsWith(`${playlistId}:`)) {
@@ -320,21 +352,22 @@ export async function getUserPlaylists(): Promise<UserPlaylist[]> {
   });
 }
 
-export async function getPlaylistSongs(playlistId: string, page = 1, limit = PLAYLIST_PAGE_SIZE, keyword = ""): Promise<PlaylistSongsPage> {
+export async function getPlaylistSongs(playlistId: string, page = 1, limit = PLAYLIST_PAGE_SIZE, keyword = "", sortMode = "default"): Promise<PlaylistSongsPage> {
   const cookie = await getCookie();
   const safePage = Math.max(1, Math.floor(page) || 1);
   const safeLimit = Math.min(200, Math.max(1, Math.floor(limit) || PLAYLIST_PAGE_SIZE));
   const normalizedKeyword = keyword.trim();
-  const cacheKey = `${playlistId}:${safePage}:${safeLimit}:${normalizedKeyword.toLocaleLowerCase()}`;
+  const normalizedSortMode = normalizePlaylistSortMode(sortMode);
+  const cacheKey = `${playlistId}:${safePage}:${safeLimit}:${normalizedKeyword.toLocaleLowerCase()}:${normalizedSortMode}`;
   const cached = playlistPageCache.get(cacheKey);
 
   if (cached && cached.expiresAt > Date.now()) {
     return cached.page;
   }
 
-  if (normalizedKeyword) {
+  if (normalizedKeyword || normalizedSortMode !== "default") {
     const allSongs = await getAllPlaylistSongsForSearch(playlistId, cookie);
-    const filteredSongs = filterPlaylistSongs(allSongs, normalizedKeyword);
+    const filteredSongs = sortPlaylistSongs(filterPlaylistSongs(allSongs, normalizedKeyword), normalizedSortMode);
     const offset = (safePage - 1) * safeLimit;
     const songs = filteredSongs.slice(offset, offset + safeLimit);
     const pageResult: PlaylistSongsPage = {
@@ -419,5 +452,51 @@ export async function addSongToUserPlaylist(playlistId: string, songId: string) 
     playlistName: targetPlaylist.name,
     songId: safeSongId,
     addedCount: 1
+  };
+}
+
+export async function removeSongsFromUserPlaylist(playlistId: string, songIds: string[]): Promise<PlaylistTrackRemoveResult> {
+  const safePlaylistId = playlistId.trim();
+  const safeSongIds = [...new Set(songIds.map((songId) => songId.trim()).filter(Boolean))];
+
+  if (!safePlaylistId) {
+    throw new Error("缺少目标歌单。");
+  }
+
+  if (safeSongIds.length === 0) {
+    throw new Error("请先选择要移除的歌曲。");
+  }
+
+  const cookie = await getCookie();
+  const playlists = await getUserPlaylists();
+  const targetPlaylist = playlists.find((playlist) => playlist.id === safePlaylistId);
+
+  if (!targetPlaylist) {
+    throw new Error("没有找到目标歌单，请刷新歌单列表后重试。");
+  }
+
+  if (!targetPlaylist.owned) {
+    throw new Error("只能从自己创建的网易云歌单移除歌曲。");
+  }
+
+  const removeResponse = await playlist_tracks({
+    op: "del",
+    pid: safePlaylistId,
+    tracks: safeSongIds.join(","),
+    cookie
+  });
+  const body = removeResponse.body as { code?: number; message?: string; msg?: string };
+
+  if (typeof body.code === "number" && body.code !== 200) {
+    throw new Error(getNeteaseApiErrorMessage(body, `从歌单移除失败：${body.code}`));
+  }
+
+  clearPlaylistSongCache(safePlaylistId);
+
+  return {
+    playlistId: safePlaylistId,
+    playlistName: targetPlaylist.name,
+    songIds: safeSongIds,
+    removedCount: safeSongIds.length
   };
 }

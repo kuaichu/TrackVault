@@ -11,7 +11,7 @@ import { getArtistProfile, resolveArtistIdByName } from "./artist-provider.js";
 import { getPlayHistory, getSearchHistory, removeSearchHistory, savePlayHistory, saveSearchHistory } from "./history-store.js";
 import { getSongLyrics } from "./lyric-provider.js";
 import { MediaAccessError } from "./media-security.js";
-import { addSongToUserPlaylist, getPlaylistSongs, getUserPlaylists } from "./playlist-provider.js";
+import { addSongToUserPlaylist, getPlaylistSongs, getUserPlaylists, removeSongsFromUserPlaylist } from "./playlist-provider.js";
 import { searchProvider } from "./provider.js";
 import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
@@ -127,7 +127,8 @@ app.get("/api/playlists/:id/songs", async (request, response) => {
     const page = Number(request.query.page);
     const limit = Number(request.query.limit);
     const keyword = typeof request.query.keyword === "string" ? request.query.keyword : "";
-    response.json(await getPlaylistSongs(request.params.id, page, limit, keyword));
+    const sort = typeof request.query.sort === "string" ? request.query.sort : "default";
+    response.json(await getPlaylistSongs(request.params.id, page, limit, keyword, sort));
   } catch (error) {
     response.status(502).json({
       message: error instanceof Error ? error.message : "获取歌单歌曲失败"
@@ -143,6 +144,18 @@ app.post("/api/playlists/:id/tracks", async (request, response) => {
   } catch (error) {
     response.status(400).json({
       message: error instanceof Error ? error.message : "添加到歌单失败"
+    });
+  }
+});
+
+app.delete("/api/playlists/:id/tracks", async (request, response) => {
+  const songIds = Array.isArray(request.body?.songIds) ? request.body.songIds.filter((songId: unknown) => typeof songId === "string") : [];
+
+  try {
+    response.json(await removeSongsFromUserPlaylist(request.params.id, songIds));
+  } catch (error) {
+    response.status(400).json({
+      message: error instanceof Error ? error.message : "从歌单移除失败"
     });
   }
 });

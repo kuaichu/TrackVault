@@ -92,6 +92,13 @@ export type PlaylistSongsPage = {
   keyword?: string;
 };
 
+export type PlaylistTrackRemoveResult = {
+  playlistId: string;
+  playlistName: string;
+  songIds: string[];
+  removedCount: number;
+};
+
 export type DownloadTaskStatus =
   | "queued"
   | "preparing"

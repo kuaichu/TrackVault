@@ -23,6 +23,7 @@ import type {
   PlaylistCompareResult,
   PlaylistSongsPage,
   PlaylistTrackAddResult,
+  PlaylistTrackRemoveResult,
   PlaylistTransferJob,
   PlaylistTransferRunJob,
   Song,
@@ -275,10 +276,11 @@ export async function getPlaylists(): Promise<UserPlaylist[]> {
   return data.playlists;
 }
 
-export async function getPlaylistSongs(playlistId: string, page = 1, limit = 100, keyword = ""): Promise<PlaylistSongsPage> {
+export async function getPlaylistSongs(playlistId: string, page = 1, limit = 100, keyword = "", sort = "default"): Promise<PlaylistSongsPage> {
   const params = new URLSearchParams({
     page: String(page),
-    limit: String(limit)
+    limit: String(limit),
+    sort
   });
   if (keyword.trim()) {
     params.set("keyword", keyword.trim());
@@ -306,6 +308,23 @@ export async function addSongToPlaylist(playlistId: string, songId: string): Pro
   }
 
   return (await response.json()) as PlaylistTrackAddResult;
+}
+
+export async function removeSongsFromPlaylist(playlistId: string, songIds: string[]): Promise<PlaylistTrackRemoveResult> {
+  const response = await apiFetch(`/api/playlists/${encodeURIComponent(playlistId)}/tracks`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ songIds })
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "从歌单移除失败");
+  }
+
+  return (await response.json()) as PlaylistTrackRemoveResult;
 }
 
 export async function getCloudSongs(): Promise<{ songs: Song[]; count: number; size: number; maxSize: number }> {
