@@ -3321,10 +3321,6 @@ export default function App() {
   const shouldShowLyricsAtmosphere = Boolean(currentTrack?.coverUrl && (loadingLyrics || hasReadableLyrics));
   const activeSongComments = songComments?.songId === commentTrack?.id ? songComments : null;
   const commentTotalLabel = activeSongComments?.total ? (activeSongComments.total > 999 ? "999+" : String(activeSongComments.total)) : "";
-  const commentContextLabel =
-    commentTrack && currentTrack?.id !== commentTrack.id
-      ? `${commentTrack.title} · ${commentTrack.artist}`
-      : "当前播放歌曲";
 
   const renderArtistMeta = (song: Song) => {
     const artists = getSongArtists(song);
@@ -5075,23 +5071,18 @@ export default function App() {
                   </div>
                 ) : (
                   <>
-                    <header className="comments-toolbar">
-                      <div>
-                        <span>评论区</span>
-                        <strong>{commentContextLabel}</strong>
-                      </div>
-                      <button type="button" className="comments-refresh" disabled={loadingComments} onClick={() => setCommentRefreshKey((key) => key + 1)}>
-                        刷新
-                      </button>
-                    </header>
-
                     {loadingComments ? <div className="empty-box">正在加载评论...</div> : null}
                     {!loadingComments && commentsError ? <div className="empty-box">{commentsError}</div> : null}
                     {!loadingComments && !commentsError && activeSongComments ? (
                       <>
                         {activeSongComments.hotComments.length > 0 ? (
                           <section className="comments-section">
-                            <h3>热评</h3>
+                            <div className="comments-section-head">
+                              <h3>热评</h3>
+                              <button type="button" className="comments-refresh" disabled={loadingComments} onClick={() => setCommentRefreshKey((key) => key + 1)}>
+                                刷新
+                              </button>
+                            </div>
                             <div className="comments-list">
                               {activeSongComments.hotComments.map((comment) => (
                                 <article key={`hot-${comment.id}`} className="comment-row">
@@ -5112,7 +5103,14 @@ export default function App() {
                         ) : null}
 
                         <section className="comments-section">
-                          <h3>最新评论</h3>
+                          <div className="comments-section-head">
+                            <h3>最新评论</h3>
+                            {activeSongComments.hotComments.length === 0 ? (
+                              <button type="button" className="comments-refresh" disabled={loadingComments} onClick={() => setCommentRefreshKey((key) => key + 1)}>
+                                刷新
+                              </button>
+                            ) : null}
+                          </div>
                           {activeSongComments.comments.length === 0 ? (
                             <div className="empty-box">这首歌暂时没有读取到评论。</div>
                           ) : (

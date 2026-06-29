@@ -2438,51 +2438,6 @@ input[type="range"] {
   background: rgba(255, 255, 255, 0.16);
 }
 
-.comments-toolbar {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  padding: 2px 4px 8px;
-  background: linear-gradient(180deg, rgba(13, 20, 31, 0.98), rgba(13, 20, 31, 0.78) 72%, transparent);
-}
-
-.comments-toolbar::after {
-  position: absolute;
-  left: 4px;
-  right: 4px;
-  bottom: 0;
-  height: 1px;
-  content: "";
-  background:
-    linear-gradient(90deg, rgba(255, 180, 93, 0.28), rgba(255, 255, 255, 0.06), transparent);
-}
-
-.comments-toolbar div {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-}
-
-.comments-toolbar span {
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.comments-toolbar strong {
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-primary);
-  font-size: 13px;
-  font-weight: 800;
-}
-
 .comments-refresh,
 .comments-pager button {
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -2519,9 +2474,17 @@ input[type="range"] {
   gap: 10px;
 }
 
+.comments-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  padding: 0 4px;
+}
+
 .comments-section h3 {
   margin: 0;
-  padding: 0 4px;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 900;
