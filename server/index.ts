@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { getAlbumProfile } from "./album-provider.js";
 import { getCurrentUserKey, getSession, loginSession, logoutSession } from "./account-store.js";
@@ -434,11 +435,17 @@ app.get("/api/download/proxy", async (request, response) => {
       response.status(206);
     }
 
-    Readable.fromWeb(upstream.body as any).pipe(response);
+    await pipeline(Readable.fromWeb(upstream.body as any), response);
   } catch (error) {
-    response.status(error instanceof MediaAccessError ? error.status : 502).json({
-      message: error instanceof Error ? error.message : "备用下载失败"
-    });
+    if (!response.headersSent) {
+      response.status(error instanceof MediaAccessError ? error.status : 502).json({
+        message: error instanceof Error ? error.message : "备用下载失败"
+      });
+      return;
+    }
+
+    console.warn("Proxy download stream interrupted:", error instanceof Error ? error.message : error);
+    response.destroy(error instanceof Error ? error : undefined);
   }
 });
 

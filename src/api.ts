@@ -144,12 +144,15 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
   }
 
   const directDownload = (await directResponse.json()) as DirectDownloadInfo;
-  const mediaResponse = await fetch(directDownload.url, {
-    credentials: "omit",
-    mode: "cors"
-  }).catch(() => {
+  let mediaResponse: Response;
+  try {
+    mediaResponse = await fetch(directDownload.url, {
+      credentials: "omit",
+      mode: "cors"
+    });
+  } catch {
     throw new DirectDownloadBlockedError("浏览器被网易云 CDN 跨域策略拦截，无法无中转保存到本机。");
-  });
+  }
 
   if (!mediaResponse.ok) {
     throw new Error(`网易云 CDN 下载失败：HTTP ${mediaResponse.status}`);
@@ -157,8 +160,12 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
 
   const contentLength = Number(mediaResponse.headers.get("content-length") ?? "0");
   if (!mediaResponse.body || !contentLength) {
-    const blob = await mediaResponse.blob();
-    saveBlob(blob, directDownload.filename);
+    try {
+      const blob = await mediaResponse.blob();
+      saveBlob(blob, directDownload.filename);
+    } catch {
+      throw new DirectDownloadBlockedError("网易云 CDN 下载流中断，浏览器无法稳定直连保存到本机。");
+    }
     return;
   }
 
@@ -166,17 +173,21 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
   const chunks: Uint8Array[] = [];
   let receivedBytes = 0;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
 
-    if (value) {
-      chunks.push(value);
-      receivedBytes += value.length;
-      onProgress?.(Math.max(1, Math.min(99, Math.round((receivedBytes / contentLength) * 100))));
+      if (value) {
+        chunks.push(value);
+        receivedBytes += value.length;
+        onProgress?.(Math.max(1, Math.min(99, Math.round((receivedBytes / contentLength) * 100))));
+      }
     }
+  } catch {
+    throw new DirectDownloadBlockedError("网易云 CDN 下载流中断，浏览器无法稳定直连保存到本机。");
   }
 
   saveBlob(new Blob(chunks, { type: mediaResponse.headers.get("content-type") ?? "application/octet-stream" }), directDownload.filename);
