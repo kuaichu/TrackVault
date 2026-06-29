@@ -1,7 +1,9 @@
 import { createRequire } from "node:module";
 import type { SearchType } from "NeteaseCloudMusicApi";
 import { getSettings } from "./settings-store.js";
-import type { DownloadQualityOption, PlaylistSongsPage, Song, UserPlaylist } from "./types.js";
+import type { PlaylistSongsPage, Song, UserPlaylist } from "./types.js";
+import { toUnifiedNeteaseTrack } from "./music-platform/netease-adapter.js";
+import { formatImageUrl, toSongFromUnifiedTrack } from "./music-platform/types.js";
 
 const require = createRequire(import.meta.url);
 const { login_status, playlist_track_all, song_detail, user_playlist } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
@@ -57,12 +59,6 @@ type PlaylistTrack = {
 };
 
 type DetailSong = PlaylistTrack;
-type QualityFlags = {
-  h?: unknown | null;
-  sq?: unknown | null;
-  hr?: unknown | null;
-};
-
 const PLAYLIST_PAGE_SIZE = 100;
 const PLAYLIST_SEARCH_FETCH_BATCH_SIZE = 500;
 const SONG_DETAIL_BATCH_SIZE = 300;
@@ -71,60 +67,6 @@ const PLAYLIST_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 
 const playlistPageCache = new Map<string, { expiresAt: number; page: PlaylistSongsPage }>();
 const playlistSearchCache = new Map<string, { expiresAt: number; songs: Song[] }>();
-
-function formatDuration(durationMs: number | undefined) {
-  if (!durationMs || durationMs <= 0) {
-    return "00:00";
-  }
-
-  const totalSeconds = Math.floor(durationMs / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
-
-function formatImageUrl(url: string | undefined, size = 160) {
-  const trimmed = url?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  return `${trimmed}?param=${size}y${size}`;
-}
-
-function getQualityLabel(song: QualityFlags) {
-  if (song.hr) {
-    return "Hi-Res";
-  }
-
-  if (song.sq) {
-    return "FLAC";
-  }
-
-  if (song.h) {
-    return "320K";
-  }
-
-  return "128K";
-}
-
-function getAvailableQualities(song: QualityFlags) {
-  const qualities: DownloadQualityOption[] = [{ level: "standard", label: "128K" }];
-
-  if (song.h) {
-    qualities.push({ level: "exhigh", label: "320K" });
-  }
-
-  if (song.sq) {
-    qualities.push({ level: "lossless", label: "FLAC" });
-  }
-
-  if (song.hr) {
-    qualities.push({ level: "hires", label: "Hi-Res" });
-  }
-
-  return qualities;
-}
 
 async function getCookie() {
   const settings = await getSettings();
@@ -198,24 +140,39 @@ async function getPlaylistTracksPage(playlistId: string, cookie: string, page: n
 
 function mapTrackToSong(track: PlaylistTrack, detailMap: Map<string, DetailSong>) {
   const detail = detailMap.get(String(track.id)) ?? track;
+  const unifiedTrack = toUnifiedNeteaseTrack(
+    {
+      id: track.id,
+      name: track.name,
+      dt: track.dt,
+      ar: track.ar,
+      al: track.al,
+      h: detail.h ?? track.h,
+      sq: detail.sq ?? track.sq,
+      hr: detail.hr ?? track.hr
+    },
+    {
+      source: "netease",
+      coverUrl: detail.al?.picUrl ?? track.al?.picUrl
+    }
+  );
 
-  return {
-    id: String(track.id),
-    title: track.name?.trim() || "未知歌曲",
-    artist: track.ar?.map((artist) => artist.name?.trim()).filter(Boolean).join(" / ") || "未知歌手",
-    primaryArtistId: track.ar?.[0]?.id ? String(track.ar[0].id) : undefined,
-    artists: track.ar?.map((artist) => ({
-      id: artist.id ? String(artist.id) : undefined,
-      name: artist.name?.trim() || "未知歌手"
-    })).filter((artist) => artist.name),
-    album: track.al?.name?.trim() || "未知专辑",
-    albumId: track.al?.id ? String(track.al.id) : undefined,
-    coverUrl: formatImageUrl(detail.al?.picUrl ?? track.al?.picUrl, 160),
-    duration: formatDuration(track.dt),
-    quality: getQualityLabel(detail),
-    availableQualities: getAvailableQualities(detail),
-    source: "netease"
-  } satisfies Song;
+  if (!unifiedTrack) {
+    return {
+      id: String(track.id),
+      title: track.name?.trim() || "未知歌曲",
+      artist: "未知歌手",
+      album: track.al?.name?.trim() || "未知专辑",
+      albumId: track.al?.id ? String(track.al.id) : undefined,
+      coverUrl: formatImageUrl(detail.al?.picUrl ?? track.al?.picUrl, 160),
+      duration: "00:00",
+      quality: "128K",
+      availableQualities: [{ level: "standard", label: "128K" }],
+      source: "netease"
+    } satisfies Song;
+  }
+
+  return toSongFromUnifiedTrack(unifiedTrack);
 }
 
 async function getAllPlaylistSongsForSearch(playlistId: string, cookie: string) {

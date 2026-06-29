@@ -1,3 +1,5 @@
+export type MusicPlatform = "netease" | "qq";
+
 export type DownloadQualityLevel =
   | "standard"
   | "exhigh"

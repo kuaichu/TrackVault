@@ -1,7 +1,9 @@
 import { createRequire } from "node:module";
 import type { SearchType } from "NeteaseCloudMusicApi";
 import { getSettings } from "./settings-store.js";
-import type { ArtistProfile, DownloadQualityOption, Song } from "./types.js";
+import type { ArtistProfile, Song } from "./types.js";
+import { toUnifiedNeteaseTrack } from "./music-platform/netease-adapter.js";
+import { toSongFromUnifiedTrack } from "./music-platform/types.js";
 
 const require = createRequire(import.meta.url);
 const { artist_desc, artist_detail, artist_top_song, artists, search } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
@@ -67,17 +69,6 @@ type ArtistSearchBody = {
   };
 };
 
-function formatDuration(durationMs: number | undefined) {
-  if (!durationMs || durationMs <= 0) {
-    return "00:00";
-  }
-
-  const totalSeconds = Math.floor(durationMs / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
-
 function formatImageUrl(url: string | undefined, size = 240) {
   const trimmed = url?.trim();
   if (!trimmed) {
@@ -86,63 +77,25 @@ function formatImageUrl(url: string | undefined, size = 240) {
 
   return `${trimmed}?param=${size}y${size}`;
 }
-
-function getQualityLabel(song: ArtistSong) {
-  if (song.hr) {
-    return "Hi-Res";
-  }
-
-  if (song.sq) {
-    return "FLAC";
-  }
-
-  if (song.h) {
-    return "320K";
-  }
-
-  return "128K";
-}
-
-function getAvailableQualities(song: ArtistSong) {
-  const qualities: DownloadQualityOption[] = [{ level: "standard", label: "128K" }];
-
-  if (song.h) {
-    qualities.push({ level: "exhigh", label: "320K" });
-  }
-
-  if (song.sq) {
-    qualities.push({ level: "lossless", label: "FLAC" });
-  }
-
-  if (song.hr) {
-    qualities.push({ level: "hires", label: "Hi-Res" });
-  }
-
-  return qualities;
-}
-
 function mapArtistSong(song: ArtistSong): Song | null {
-  if (!song.id) {
-    return null;
-  }
+  const unifiedTrack = toUnifiedNeteaseTrack(
+    {
+      id: song.id,
+      name: song.name,
+      dt: song.dt,
+      ar: song.ar,
+      al: song.al,
+      h: song.h,
+      sq: song.sq,
+      hr: song.hr
+    },
+    {
+      source: "netease-artist",
+      coverUrl: song.al?.picUrl
+    }
+  );
 
-  return {
-    id: String(song.id),
-    title: song.name?.trim() || "未知歌曲",
-    artist: song.ar?.map((artist) => artist.name?.trim()).filter(Boolean).join(" / ") || "未知歌手",
-    primaryArtistId: song.ar?.[0]?.id ? String(song.ar[0].id) : undefined,
-    artists: song.ar?.map((artist) => ({
-      id: artist.id ? String(artist.id) : undefined,
-      name: artist.name?.trim() || "未知歌手"
-    })).filter((artist) => artist.name),
-    album: song.al?.name?.trim() || "未知专辑",
-    albumId: song.al?.id ? String(song.al.id) : undefined,
-    coverUrl: formatImageUrl(song.al?.picUrl, 160),
-    duration: formatDuration(song.dt),
-    quality: getQualityLabel(song),
-    availableQualities: getAvailableQualities(song),
-    source: "netease-artist"
-  };
+  return unifiedTrack ? toSongFromUnifiedTrack(unifiedTrack) : null;
 }
 
 async function getCookie() {

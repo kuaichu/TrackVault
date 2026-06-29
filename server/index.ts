@@ -13,13 +13,14 @@ import { getSongLyrics } from "./lyric-provider.js";
 import { MediaAccessError } from "./media-security.js";
 import { getPlaylistSongs, getUserPlaylists } from "./playlist-provider.js";
 import { searchProvider } from "./provider.js";
+import { searchQqSongs } from "./qq-search-provider.js";
 import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./settings-store.js";
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
 import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, resolveSongStream } from "./task-store.js";
 import { checkNeteaseQrLogin, loginWithNeteaseCellphone, sendNeteaseCaptcha, startNeteaseQrLogin } from "./netease-auth.js";
-import type { AdminConfigUpdate, AppSettings, DownloadQualityLevel, DownloadRequest } from "./types.js";
+import type { AdminConfigUpdate, AppSettings, DownloadQualityLevel, DownloadRequest, MusicPlatform } from "./types.js";
 
 const app = express();
 const port = 3010;
@@ -42,8 +43,16 @@ app.get("/api/health", (_request, response) => {
 
 app.get("/api/search", async (request, response) => {
   const query = typeof request.query.q === "string" ? request.query.q : "";
-  const results = await searchProvider(query);
-  response.json({ results });
+  const platform = (typeof request.query.platform === "string" ? request.query.platform : "netease") as MusicPlatform;
+
+  try {
+    const results = platform === "qq" ? await searchQqSongs(query) : await searchProvider(query);
+    response.json({ results, platform });
+  } catch (error) {
+    response.status(502).json({
+      message: error instanceof Error ? error.message : "搜索失败"
+    });
+  }
 });
 
 app.get("/api/discover/songs", async (_request, response) => {

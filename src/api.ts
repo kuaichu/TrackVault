@@ -14,6 +14,7 @@ import type {
   NeteaseQrStartResult,
   PersistedPlayerState,
   PlaylistSongsPage,
+  MusicPlatform,
   Song,
   SongLyrics,
   UserPlaylist
@@ -60,10 +61,11 @@ export function getStreamUrl(songId: string, level: DownloadQualityLevel, expect
   return `/api/stream?${params.toString()}`;
 }
 
-export async function searchSongs(query: string): Promise<Song[]> {
-  const response = await apiFetch(`/api/search?q=${encodeURIComponent(query)}`);
+export async function searchSongs(query: string, platform: MusicPlatform = "netease"): Promise<Song[]> {
+  const response = await apiFetch(`/api/search?q=${encodeURIComponent(query)}&platform=${encodeURIComponent(platform)}`);
   if (!response.ok) {
-    throw new Error("搜索失败");
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "搜索失败");
   }
   const data = (await response.json()) as { results: Song[] };
   return data.results;

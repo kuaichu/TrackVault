@@ -112,6 +112,7 @@ TrackVault/
 完整项目文档见：
 
 - [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md)
+- [docs/MULTI_PLATFORM_ARCHITECTURE.md](docs/MULTI_PLATFORM_ARCHITECTURE.md)
 
 内容包括：
 
@@ -120,6 +121,7 @@ TrackVault/
 - 后端 API 清单
 - 数据持久化与会话隔离
 - 媒体 ACL 与管理员白名单回退
+- 多平台改造路线与 QQ 接入演进方案
 - 下载、播放、登录等核心链路
 - 部署方式与运维建议
 - 已知限制与后续扩展方向
