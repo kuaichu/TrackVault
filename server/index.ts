@@ -11,7 +11,7 @@ import { getArtistProfile, resolveArtistIdByName } from "./artist-provider.js";
 import { getPlayHistory, getSearchHistory, removeSearchHistory, savePlayHistory, saveSearchHistory } from "./history-store.js";
 import { getSongLyrics } from "./lyric-provider.js";
 import { MediaAccessError } from "./media-security.js";
-import { getPlaylistSongs, getUserPlaylists } from "./playlist-provider.js";
+import { addSongToUserPlaylist, getPlaylistSongs, getUserPlaylists } from "./playlist-provider.js";
 import { searchProvider } from "./provider.js";
 import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
@@ -131,6 +131,18 @@ app.get("/api/playlists/:id/songs", async (request, response) => {
   } catch (error) {
     response.status(502).json({
       message: error instanceof Error ? error.message : "获取歌单歌曲失败"
+    });
+  }
+});
+
+app.post("/api/playlists/:id/tracks", async (request, response) => {
+  const songId = typeof request.body?.songId === "string" ? request.body.songId : "";
+
+  try {
+    response.status(201).json(await addSongToUserPlaylist(request.params.id, songId));
+  } catch (error) {
+    response.status(400).json({
+      message: error instanceof Error ? error.message : "添加到歌单失败"
     });
   }
 });

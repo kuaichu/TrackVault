@@ -22,6 +22,7 @@ import type {
   PlaylistCompareRequest,
   PlaylistCompareResult,
   PlaylistSongsPage,
+  PlaylistTrackAddResult,
   PlaylistTransferJob,
   PlaylistTransferRunJob,
   Song,
@@ -288,6 +289,23 @@ export async function getPlaylistSongs(playlistId: string, page = 1, limit = 100
     throw new Error(data?.message ?? "获取歌单歌曲失败");
   }
   return (await response.json()) as PlaylistSongsPage;
+}
+
+export async function addSongToPlaylist(playlistId: string, songId: string): Promise<PlaylistTrackAddResult> {
+  const response = await apiFetch(`/api/playlists/${encodeURIComponent(playlistId)}/tracks`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ songId })
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "添加到歌单失败");
+  }
+
+  return (await response.json()) as PlaylistTrackAddResult;
 }
 
 export async function getCloudSongs(): Promise<{ songs: Song[]; count: number; size: number; maxSize: number }> {

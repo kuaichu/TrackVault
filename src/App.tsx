@@ -1,5 +1,6 @@
 import { type CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  addSongToPlaylist,
   checkNeteaseCookie,
   getAdminConfig as getAdminConfigRemote,
   sendNeteaseCaptcha,
@@ -349,6 +350,18 @@ function DownloadIcon() {
   );
 }
 
+function PlaylistAddIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="action-svg">
+      <path d="M5 7h9" />
+      <path d="M5 12h8" />
+      <path d="M5 17h6" />
+      <path d="M17 11.5v7" />
+      <path d="M13.5 15h7" />
+    </svg>
+  );
+}
+
 function LockIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" className="lock-svg">
@@ -586,6 +599,10 @@ export default function App() {
   const [playerError, setPlayerError] = useState("");
   const [likedSongIds, setLikedSongIds] = useState<string[]>([]);
   const [togglingLike, setTogglingLike] = useState(false);
+  const [playlistPickerSong, setPlaylistPickerSong] = useState<Song | null>(null);
+  const [playlistPickerLoading, setPlaylistPickerLoading] = useState(false);
+  const [playlistPickerError, setPlaylistPickerError] = useState("");
+  const [addingToPlaylistId, setAddingToPlaylistId] = useState<string | null>(null);
   const [loginForm, setLoginForm] = useState({
     accountName: "我的本地账号",
     vipEnabled: true,
@@ -2112,6 +2129,71 @@ export default function App() {
       setMessage(error instanceof Error ? error.message : alreadyLiked ? "取消喜欢失败" : "加入喜欢失败");
     } finally {
       setTogglingLike(false);
+    }
+  }
+
+  async function handleOpenPlaylistPicker(song: Song) {
+    if (!accountIsLoggedIn) {
+      setMessage("收藏到歌单需要先登录网易云账号，已为你打开登录窗口。");
+      await handleStartQrLogin();
+      return;
+    }
+
+    const cookieOk = await ensureNeteaseCookieHealthy();
+    if (!cookieOk) {
+      return;
+    }
+
+    setPlaylistPickerSong(song);
+    setPlaylistPickerError("");
+
+    if (playlists.length > 0) {
+      return;
+    }
+
+    setPlaylistPickerLoading(true);
+
+    try {
+      const data = await getPlaylists();
+      setPlaylists(data);
+      if (!data.some((playlist) => playlist.owned)) {
+        setPlaylistPickerError("当前账号没有可编辑的自建歌单。");
+      }
+    } catch (error) {
+      setPlaylistPickerError(error instanceof Error ? error.message : "读取歌单失败");
+    } finally {
+      setPlaylistPickerLoading(false);
+    }
+  }
+
+  async function handleAddSongToPlaylist(playlist: UserPlaylist) {
+    if (!playlistPickerSong || addingToPlaylistId) {
+      return;
+    }
+
+    setAddingToPlaylistId(playlist.id);
+    setPlaylistPickerError("");
+
+    try {
+      const result = await addSongToPlaylist(playlist.id, playlistPickerSong.id);
+      setPlaylists((current) =>
+        current.map((item) =>
+          item.id === playlist.id
+            ? { ...item, trackCount: item.trackCount + Math.max(1, result.addedCount) }
+            : item
+        )
+      );
+      setActivePlaylist((current) =>
+        current?.id === playlist.id
+          ? { ...current, trackCount: current.trackCount + Math.max(1, result.addedCount) }
+          : current
+      );
+      setMessage(`已收藏到「${result.playlistName}」：${playlistPickerSong.title}`);
+      setPlaylistPickerSong(null);
+    } catch (error) {
+      setPlaylistPickerError(error instanceof Error ? error.message : "添加到歌单失败");
+    } finally {
+      setAddingToPlaylistId(null);
     }
   }
 
@@ -3985,6 +4067,17 @@ export default function App() {
                       </button>
                       <button
                         type="button"
+                        className={!accountIsLoggedIn ? "row-icon-button playlist-add-button locked-download-button" : "row-icon-button playlist-add-button"}
+                        aria-label={!accountIsLoggedIn ? `登录后收藏 ${song.title} 到歌单` : `收藏 ${song.title} 到歌单`}
+                        title={!accountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
+                        disabled={Boolean(addingToPlaylistId)}
+                        onClick={(event) => { event.stopPropagation(); void handleOpenPlaylistPicker(song); }}
+                      >
+                        <PlaylistAddIcon />
+                        {!accountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                      </button>
+                      <button
+                        type="button"
                         className={!hasNeteaseDownloadAuth ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
                         aria-label={!hasNeteaseDownloadAuth ? `登录后下载 ${song.title}` : directDownloadingSongId === song.id ? `正在下载 ${song.title}` : `下载 ${song.title}`}
                         title={!hasNeteaseDownloadAuth ? "登录后下载" : directDownloadingSongId === song.id ? "正在下载" : "下载"}
@@ -4187,6 +4280,17 @@ export default function App() {
                         >
                           <PreviewIcon />
                           {playbackLocked ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                        </button>
+                        <button
+                          type="button"
+                          className={!accountIsLoggedIn ? "row-icon-button playlist-add-button locked-download-button" : "row-icon-button playlist-add-button"}
+                          aria-label={!accountIsLoggedIn ? `登录后收藏 ${song.title} 到歌单` : `收藏 ${song.title} 到歌单`}
+                          title={!accountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
+                          disabled={Boolean(addingToPlaylistId)}
+                          onClick={() => void handleOpenPlaylistPicker(song)}
+                        >
+                          <PlaylistAddIcon />
+                          {!accountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
                         </button>
                         <button
                           type="button"
@@ -4656,6 +4760,79 @@ export default function App() {
         </div>
       ) : null}
 
+      {playlistPickerSong ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="收藏到歌单" onClick={() => setPlaylistPickerSong(null)}>
+          <section className="playlist-picker-card" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <p className="eyebrow">Add To Playlist</p>
+                <h2>收藏到我的歌单</h2>
+              </div>
+              <button type="button" className="modal-close" onClick={() => setPlaylistPickerSong(null)} aria-label="关闭收藏到歌单">
+                ×
+              </button>
+            </header>
+
+            <div className="playlist-picker-song">
+              <CoverArt song={playlistPickerSong} className="result-cover" />
+              <div>
+                <strong>{playlistPickerSong.title}</strong>
+                <span>{playlistPickerSong.artist} · {playlistPickerSong.album}</span>
+              </div>
+            </div>
+
+            {playlistPickerError ? <p className="playlist-picker-error">{playlistPickerError}</p> : null}
+
+            {playlistPickerLoading ? (
+              <div className="empty-box">正在读取我的歌单...</div>
+            ) : createdPlaylists.length > 0 ? (
+              <div className="playlist-picker-list">
+                {createdPlaylists.map((playlist) => (
+                  <button
+                    key={playlist.id}
+                    type="button"
+                    className="playlist-picker-option"
+                    disabled={addingToPlaylistId !== null}
+                    onClick={() => void handleAddSongToPlaylist(playlist)}
+                  >
+                    <CoverArt
+                      song={{
+                        id: playlist.id,
+                        title: playlist.name,
+                        artist: playlist.creatorName,
+                        album: "歌单",
+                        coverUrl: playlist.coverUrl,
+                        duration: "00:00",
+                        quality: "歌单",
+                        availableQualities: [{ level: "standard", label: "128K" }],
+                        source: "netease"
+                      }}
+                      className="playlist-picker-cover"
+                    />
+                    <span>
+                      <strong>{playlist.name}</strong>
+                      <small>{playlist.trackCount} 首 · {playlist.creatorName}</small>
+                    </span>
+                    <em>{addingToPlaylistId === playlist.id ? "添加中" : "添加"}</em>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-box">当前账号没有可编辑的自建歌单。</div>
+            )}
+
+            <div className="qr-actions">
+              <button type="button" className="secondary-button" onClick={() => setPlaylistPickerSong(null)}>
+                取消
+              </button>
+              <button type="button" className="primary-button" onClick={() => { setPlaylistPickerSong(null); navigateTo("playlists"); }}>
+                查看歌单
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       <section className={isPlayerExpanded ? "player-modal open" : "player-modal"} aria-hidden={!isPlayerExpanded}>
         <div
           className="player-modal-backdrop"
@@ -4787,6 +4964,17 @@ export default function App() {
             onClick={() => void handleToggleCurrentTrackLike()}
           >
             <PlayerIcon name="heart" />
+          </button>
+          <button
+            type="button"
+            className={!accountIsLoggedIn ? "dock-like dock-playlist-add locked-download-button" : "dock-like dock-playlist-add"}
+            aria-label={currentTrack ? `收藏 ${currentTrack.title} 到歌单` : "收藏当前歌曲到歌单"}
+            title={!accountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
+            disabled={!currentTrack || Boolean(addingToPlaylistId)}
+            onClick={() => currentTrack ? void handleOpenPlaylistPicker(currentTrack) : undefined}
+          >
+            <PlaylistAddIcon />
+            {!accountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
           </button>
         </div>
 

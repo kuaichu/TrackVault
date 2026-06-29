@@ -4,7 +4,7 @@ import { getSettings } from "./settings-store.js";
 import type { DownloadQualityOption, PlaylistSongsPage, Song, UserPlaylist } from "./types.js";
 
 const require = createRequire(import.meta.url);
-const { login_status, playlist_track_all, song_detail, user_playlist } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
+const { login_status, playlist_track_all, playlist_tracks, song_detail, user_playlist } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
 
 type LoginStatusBody = {
   data?: {
@@ -271,6 +271,28 @@ function filterPlaylistSongs(songs: Song[], keyword: string) {
   );
 }
 
+function clearPlaylistSongCache(playlistId: string) {
+  for (const key of playlistPageCache.keys()) {
+    if (key.startsWith(`${playlistId}:`)) {
+      playlistPageCache.delete(key);
+    }
+  }
+
+  playlistSearchCache.delete(playlistId);
+}
+
+function getNeteaseApiErrorMessage(body: { code?: number; message?: string; msg?: string }, fallback: string) {
+  if (body.code === 401) {
+    return "登录态无效，请重新登录网易云账号。";
+  }
+
+  if (body.code === 502) {
+    return body.message ?? body.msg ?? "网易云拒绝添加，可能是歌曲已在歌单中或歌曲 ID 不可用。";
+  }
+
+  return body.message ?? body.msg ?? fallback;
+}
+
 export async function getUserPlaylists(): Promise<UserPlaylist[]> {
   const cookie = await getCookie();
   const user = await getLoggedInUser(cookie);
@@ -352,4 +374,50 @@ export async function getPlaylistSongs(playlistId: string, page = 1, limit = PLA
   });
 
   return pageResult;
+}
+
+export async function addSongToUserPlaylist(playlistId: string, songId: string) {
+  const safePlaylistId = playlistId.trim();
+  const safeSongId = songId.trim();
+
+  if (!safePlaylistId) {
+    throw new Error("缺少目标歌单。");
+  }
+
+  if (!safeSongId) {
+    throw new Error("缺少歌曲 ID。");
+  }
+
+  const cookie = await getCookie();
+  const playlists = await getUserPlaylists();
+  const targetPlaylist = playlists.find((playlist) => playlist.id === safePlaylistId);
+
+  if (!targetPlaylist) {
+    throw new Error("没有找到目标歌单，请刷新歌单列表后重试。");
+  }
+
+  if (!targetPlaylist.owned) {
+    throw new Error("只能添加到自己创建的网易云歌单。");
+  }
+
+  const addResponse = await playlist_tracks({
+    op: "add",
+    pid: safePlaylistId,
+    tracks: safeSongId,
+    cookie
+  });
+  const body = addResponse.body as { code?: number; message?: string; msg?: string };
+
+  if (typeof body.code === "number" && body.code !== 200) {
+    throw new Error(getNeteaseApiErrorMessage(body, `添加到歌单失败：${body.code}`));
+  }
+
+  clearPlaylistSongCache(safePlaylistId);
+
+  return {
+    playlistId: safePlaylistId,
+    playlistName: targetPlaylist.name,
+    songId: safeSongId,
+    addedCount: 1
+  };
 }
