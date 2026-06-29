@@ -3769,6 +3769,127 @@ export default function App() {
     </article>
   );
 
+  function seekPlayback(nextTime: number) {
+    const audio = audioRef.current;
+    playbackSecondsRef.current = nextTime;
+    setPlaybackSeconds(nextTime);
+    if (audio) {
+      audio.currentTime = nextTime;
+    }
+  }
+
+  function getPlayerBarBackgroundStyle() {
+    if (!currentTrack?.coverUrl) {
+      return undefined;
+    }
+
+    return {
+      backgroundImage: `
+        linear-gradient(90deg, rgba(8, 12, 19, 0.92), rgba(11, 15, 22, 0.76) 48%, rgba(8, 12, 19, 0.9)),
+        linear-gradient(180deg, rgba(255, 180, 93, 0.08), rgba(255, 255, 255, 0.015)),
+        url("${currentTrack.coverUrl}")
+      `
+    };
+  }
+
+  function renderPlayerBar(mode: "dock" | "modal") {
+    const isModalBar = mode === "modal";
+    const playerBarClass = `player-bar ${isModalBar ? "player-bar-modal player-modal-controls" : "player-bar-dock player-dock"}`;
+    const trackCover = <CoverArt song={currentTrack} className="dock-cover player-bar-cover" />;
+
+    return (
+      <footer className={playerBarClass} style={getPlayerBarBackgroundStyle()}>
+        <div className="dock-track player-bar-track">
+          {isModalBar ? (
+            <div className="dock-cover-button player-bar-cover-frame" aria-hidden="true">
+              {trackCover}
+            </div>
+          ) : (
+            <button type="button" className="dock-cover-button player-bar-cover-frame" aria-label="打开全屏播放器" onClick={() => setIsPlayerExpanded(true)}>
+              {trackCover}
+            </button>
+          )}
+          <div className="dock-copy player-bar-copy">
+            <strong>{currentTrack?.title ?? "等待选择歌曲"}</strong>
+            <p>{currentTrack ? `${currentTrack.artist} · ${currentTrack.album}` : "先点一首歌，再试听或直接播放。"}</p>
+          </div>
+          <div className="player-bar-actions">
+            <button
+              type="button"
+              className={currentTrack && likedSongIds.includes(currentTrack.id) ? "dock-like active" : "dock-like"}
+              aria-label={currentTrack && likedSongIds.includes(currentTrack.id) ? "取消喜欢当前歌曲" : "喜欢当前歌曲"}
+              title={currentTrack && likedSongIds.includes(currentTrack.id) ? "取消喜欢" : "喜欢"}
+              disabled={!currentTrack || togglingLike}
+              onClick={() => void handleToggleCurrentTrackLike()}
+            >
+              <PlayerIcon name="heart" />
+            </button>
+            <button
+              type="button"
+              className={!accountIsLoggedIn ? "dock-like dock-playlist-add locked-download-button" : "dock-like dock-playlist-add"}
+              aria-label={currentTrack ? `收藏 ${currentTrack.title} 到歌单` : "收藏当前歌曲到歌单"}
+              title={!accountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
+              disabled={!currentTrack || Boolean(addingToPlaylistId)}
+              onClick={() => currentTrack ? void handleOpenPlaylistPicker(currentTrack) : undefined}
+            >
+              <PlaylistAddIcon />
+              {!accountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
+            </button>
+          </div>
+        </div>
+
+        <div className="dock-controls player-bar-controls">
+          <div className="control-buttons">
+            <button type="button" className={playbackMode === "shuffle" ? "dock-icon mode-active" : "dock-icon"} aria-label={playbackMode === "shuffle" ? "关闭随机播放" : "开启随机播放"} title={playbackMode === "shuffle" ? "随机播放已开启" : "开启随机播放"} onClick={handleTogglePlaybackMode}><PlayerIcon name="shuffle" /></button>
+            <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后上一首" : "上一首"} title={playbackLocked ? "登录后播放" : "上一首"} disabled={playbackLocked || !currentTrack} onClick={handleReplay}><PlayerIcon name="previous" /></button>
+            <button type="button" className={playbackLocked ? "dock-icon primary locked-playback-button" : "dock-icon primary"} onClick={handleTogglePlayback} disabled={playbackLocked || (!currentTrack && !hasPlaybackQueue)} aria-label={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"} title={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"}>{playbackLocked ? <LockIcon /> : <PlayerIcon name={isPlaying ? "pause" : "play"} />}</button>
+            <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后下一首" : "下一首"} title={playbackLocked ? "登录后播放" : "下一首"} disabled={playbackLocked || !hasPlaybackQueue} onClick={handleNextTrack}><PlayerIcon name="next" /></button>
+          </div>
+
+          <div className="dock-progress player-bar-progress">
+            <span>{formatPlaybackTime(playbackSeconds)}</span>
+            <input
+              className="range-progress"
+              style={playbackRangeStyle}
+              type="range"
+              min="0"
+              max={Math.max(playbackDuration, 1)}
+              step="1"
+              title={`已缓冲到 ${formatPlaybackTime(bufferedSeconds)}`}
+              value={Math.min(playbackSeconds, Math.max(playbackDuration, 1))}
+              onChange={(event) => seekPlayback(Number(event.target.value))}
+            />
+            <span>{formatPlaybackTime(playbackDuration || parseDurationSeconds(currentTrack?.duration ?? "00:00"))}</span>
+          </div>
+        </div>
+
+        <div className="dock-volume player-bar-tools">
+          <button type="button" className="dock-queue-button" onClick={() => setIsPlayerExpanded(true)} aria-label="打开全屏播放器"><PlayerIcon name="queue" /></button>
+          {currentTrack ? (
+            renderQualitySelect(currentTrack, {
+              menuKey: `${mode}:${currentTrack.id}`,
+              className: "dock-quality-select",
+              triggerClassName: "dock-quality-trigger",
+              ariaLabel: `选择当前播放音质，当前 ${currentQualityLabel}`
+            })
+          ) : (
+            <div className="quality-select dock-quality-select">
+              <button type="button" className="quality-trigger dock-quality-trigger" disabled aria-label="未选择歌曲，无法选择音质">
+                <span>--</span>
+                <span className="quality-caret">
+                  <ChevronIcon />
+                </span>
+              </button>
+            </div>
+          )}
+          <PlayerIcon name="volume" />
+          <input className="range-progress" style={volumeRangeStyle} type="range" min="0" max="100" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
+          <strong>{volume}</strong>
+        </div>
+      </footer>
+    );
+  }
+
   const getTransferStatusLabel = (status: PlaylistTransferJob["tracks"][number]["status"]) => {
     switch (status) {
       case "matched":
@@ -5927,140 +6048,10 @@ export default function App() {
           </div>
         </div>
 
-        <footer className="player-modal-controls">
-          <div className="modal-track-card">
-            <CoverArt song={currentTrack} className="modal-track-cover" />
-            <div>
-              <strong>{currentTrack?.title ?? "等待选择歌曲"}</strong>
-              <span>{currentTrack?.artist ?? "从列表里播放一首歌"}</span>
-            </div>
-          </div>
-          <div className="control-buttons">
-            <button type="button" className={playbackMode === "shuffle" ? "dock-icon mode-active" : "dock-icon"} aria-label={playbackMode === "shuffle" ? "关闭随机播放" : "开启随机播放"} title={playbackMode === "shuffle" ? "随机播放已开启" : "开启随机播放"} onClick={handleTogglePlaybackMode}><PlayerIcon name="shuffle" /></button>
-            <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后上一首" : "上一首"} title={playbackLocked ? "登录后播放" : "上一首"} disabled={playbackLocked || !currentTrack} onClick={handleReplay}><PlayerIcon name="previous" /></button>
-            <button type="button" className={playbackLocked ? "dock-icon primary locked-playback-button" : "dock-icon primary"} onClick={handleTogglePlayback} disabled={playbackLocked || (!currentTrack && !hasPlaybackQueue)} aria-label={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"} title={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"}>{playbackLocked ? <LockIcon /> : <PlayerIcon name={isPlaying ? "pause" : "play"} />}</button>
-            <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后下一首" : "下一首"} title={playbackLocked ? "登录后播放" : "下一首"} disabled={playbackLocked || !hasPlaybackQueue} onClick={handleNextTrack}><PlayerIcon name="next" /></button>
-          </div>
-          <div className="dock-progress modal-progress">
-            <span>{formatPlaybackTime(playbackSeconds)}</span>
-            <input
-              className="range-progress"
-              style={playbackRangeStyle}
-              type="range"
-              min="0"
-              max={Math.max(playbackDuration, 1)}
-              step="1"
-              title={`已缓冲到 ${formatPlaybackTime(bufferedSeconds)}`}
-              value={Math.min(playbackSeconds, Math.max(playbackDuration, 1))}
-              onChange={(event) => {
-                const audio = audioRef.current;
-                const nextTime = Number(event.target.value);
-                playbackSecondsRef.current = nextTime;
-                setPlaybackSeconds(nextTime);
-                if (audio) {
-                  audio.currentTime = nextTime;
-                }
-              }}
-            />
-            <span>{formatPlaybackTime(playbackDuration || parseDurationSeconds(currentTrack?.duration ?? "00:00"))}</span>
-          </div>
-          <div className="modal-volume">
-            <PlayerIcon name="volume" />
-            <input className="range-progress" style={volumeRangeStyle} type="range" min="0" max="100" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
-            <strong>{volume}</strong>
-          </div>
-        </footer>
+        {renderPlayerBar("modal")}
       </section>
 
-      <footer className="player-dock">
-        <div className="dock-track">
-          <button type="button" className="dock-cover-button" aria-label="打开全屏播放器" onClick={() => setIsPlayerExpanded(true)}>
-            <CoverArt song={currentTrack} className="dock-cover" />
-          </button>
-          <div className="dock-copy">
-            <strong>{currentTrack?.title ?? "等待选择歌曲"}</strong>
-            <p>{currentTrack ? `${currentTrack.artist} · ${currentTrack.album}` : "先点一首歌，再试听或直接播放。"}</p>
-          </div>
-          <button
-            type="button"
-            className={currentTrack && likedSongIds.includes(currentTrack.id) ? "dock-like active" : "dock-like"}
-            aria-label={currentTrack && likedSongIds.includes(currentTrack.id) ? "取消喜欢当前歌曲" : "喜欢当前歌曲"}
-            title={currentTrack && likedSongIds.includes(currentTrack.id) ? "取消喜欢" : "喜欢"}
-            disabled={!currentTrack || togglingLike}
-            onClick={() => void handleToggleCurrentTrackLike()}
-          >
-            <PlayerIcon name="heart" />
-          </button>
-          <button
-            type="button"
-            className={!accountIsLoggedIn ? "dock-like dock-playlist-add locked-download-button" : "dock-like dock-playlist-add"}
-            aria-label={currentTrack ? `收藏 ${currentTrack.title} 到歌单` : "收藏当前歌曲到歌单"}
-            title={!accountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
-            disabled={!currentTrack || Boolean(addingToPlaylistId)}
-            onClick={() => currentTrack ? void handleOpenPlaylistPicker(currentTrack) : undefined}
-          >
-            <PlaylistAddIcon />
-            {!accountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
-          </button>
-        </div>
-
-        <div className="dock-controls">
-          <div className="control-buttons">
-            <button type="button" className={playbackMode === "shuffle" ? "dock-icon mode-active" : "dock-icon"} aria-label={playbackMode === "shuffle" ? "关闭随机播放" : "开启随机播放"} title={playbackMode === "shuffle" ? "随机播放已开启" : "开启随机播放"} onClick={handleTogglePlaybackMode}><PlayerIcon name="shuffle" /></button>
-            <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后上一首" : "上一首"} title={playbackLocked ? "登录后播放" : "上一首"} disabled={playbackLocked || !currentTrack} onClick={handleReplay}><PlayerIcon name="previous" /></button>
-            <button type="button" className={playbackLocked ? "dock-icon primary locked-playback-button" : "dock-icon primary"} onClick={handleTogglePlayback} disabled={playbackLocked || (!currentTrack && !hasPlaybackQueue)} aria-label={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"} title={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"}>{playbackLocked ? <LockIcon /> : <PlayerIcon name={isPlaying ? "pause" : "play"} />}</button>
-            <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后下一首" : "下一首"} title={playbackLocked ? "登录后播放" : "下一首"} disabled={playbackLocked || !hasPlaybackQueue} onClick={handleNextTrack}><PlayerIcon name="next" /></button>
-          </div>
-
-          <div className="dock-progress">
-            <span>{formatPlaybackTime(playbackSeconds)}</span>
-            <input
-              className="range-progress"
-              style={playbackRangeStyle}
-              type="range"
-              min="0"
-              max={Math.max(playbackDuration, 1)}
-              step="1"
-              title={`已缓冲到 ${formatPlaybackTime(bufferedSeconds)}`}
-              value={Math.min(playbackSeconds, Math.max(playbackDuration, 1))}
-              onChange={(event) => {
-                const audio = audioRef.current;
-                const nextTime = Number(event.target.value);
-                playbackSecondsRef.current = nextTime;
-                setPlaybackSeconds(nextTime);
-                if (audio) {
-                  audio.currentTime = nextTime;
-                }
-              }}
-            />
-            <span>{formatPlaybackTime(playbackDuration || parseDurationSeconds(currentTrack?.duration ?? "00:00"))}</span>
-          </div>
-        </div>
-
-        <div className="dock-volume">
-          <button type="button" className="dock-queue-button" onClick={() => setIsPlayerExpanded(true)} aria-label="打开全屏播放器"><PlayerIcon name="queue" /></button>
-          {currentTrack ? (
-            renderQualitySelect(currentTrack, {
-              menuKey: `dock:${currentTrack.id}`,
-              className: "dock-quality-select",
-              triggerClassName: "dock-quality-trigger",
-              ariaLabel: `选择当前播放音质，当前 ${currentQualityLabel}`
-            })
-          ) : (
-            <div className="quality-select dock-quality-select">
-              <button type="button" className="quality-trigger dock-quality-trigger" disabled aria-label="未选择歌曲，无法选择音质">
-                <span>--</span>
-                <span className="quality-caret">
-                  <ChevronIcon />
-                </span>
-              </button>
-            </div>
-          )}
-          <PlayerIcon name="volume" />
-          <input className="range-progress" style={volumeRangeStyle} type="range" min="0" max="100" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
-          <strong>{volume}</strong>
-        </div>
-      </footer>
+      {renderPlayerBar("dock")}
     </div>
   );
 }
