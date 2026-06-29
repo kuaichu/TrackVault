@@ -473,10 +473,12 @@ export default function App() {
   const initialPlayerState = loadPlayerState();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lyricPanelRef = useRef<HTMLDivElement | null>(null);
+  const commentsScrollRef = useRef<HTMLDivElement | null>(null);
   const modalLyricPanelRef = useRef<HTMLDivElement | null>(null);
   const activeLyricRef = useRef<HTMLButtonElement | null>(null);
   const activeModalLyricRef = useRef<HTMLButtonElement | null>(null);
   const lyricManualScrollUntilRef = useRef(0);
+  const pendingCommentScrollTopRef = useRef<number | null>(null);
   const lastAutoLyricIndexRef = useRef(-1);
   const lastModalAutoLyricIndexRef = useRef(-1);
   const restorePlaybackSecondsRef = useRef(initialPlayerState.playbackSeconds);
@@ -1702,6 +1704,11 @@ export default function App() {
     setMessage(`正在查看评论：${song.title}`);
   }
 
+  function handleRefreshSongComments() {
+    pendingCommentScrollTopRef.current = commentsScrollRef.current?.scrollTop ?? 0;
+    setCommentRefreshKey((key) => key + 1);
+  }
+
   function handleSelectSong(song: Song) {
     setMessage(accountIsLoggedIn ? `已选中：${song.title}。双击歌曲或点击试听开始播放。` : `已选中：${song.title}。登录网易云账号后可播放。`);
   }
@@ -2908,12 +2915,21 @@ export default function App() {
       .then((data) => {
         if (!cancelled) {
           setSongComments(data);
+          const scrollTop = pendingCommentScrollTopRef.current;
+          if (scrollTop !== null) {
+            window.requestAnimationFrame(() => {
+              if (!cancelled && commentsScrollRef.current) {
+                commentsScrollRef.current.scrollTop = scrollTop;
+              }
+              pendingCommentScrollTopRef.current = null;
+            });
+          }
         }
       })
       .catch((error) => {
         if (!cancelled) {
-          setSongComments(null);
           setCommentsError(error instanceof Error ? error.message : "获取评论失败");
+          pendingCommentScrollTopRef.current = null;
         }
       })
       .finally(() => {
@@ -3321,6 +3337,10 @@ export default function App() {
   const shouldShowLyricsAtmosphere = Boolean(currentTrack?.coverUrl && (loadingLyrics || hasReadableLyrics));
   const activeSongComments = songComments?.songId === commentTrack?.id ? songComments : null;
   const commentTotalLabel = activeSongComments?.total ? (activeSongComments.total > 999 ? "999+" : String(activeSongComments.total)) : "";
+  const commentContextLabel =
+    commentTrack && currentTrack?.id !== commentTrack.id
+      ? `${commentTrack.title} · ${commentTrack.artist}`
+      : "当前播放歌曲";
 
   const renderArtistMeta = (song: Song) => {
     const artists = getSongArtists(song);
@@ -5071,79 +5091,83 @@ export default function App() {
                   </div>
                 ) : (
                   <>
-                    {loadingComments ? <div className="empty-box">正在加载评论...</div> : null}
-                    {!loadingComments && commentsError ? <div className="empty-box">{commentsError}</div> : null}
-                    {!loadingComments && !commentsError && activeSongComments ? (
-                      <>
-                        {activeSongComments.hotComments.length > 0 ? (
+                    <header className="comments-toolbar">
+                      <div>
+                        <span>评论区</span>
+                        <strong>{commentContextLabel}</strong>
+                      </div>
+                      <button type="button" className="comments-refresh" disabled={loadingComments} onClick={handleRefreshSongComments}>
+                        刷新
+                      </button>
+                    </header>
+
+                    <div ref={commentsScrollRef} className="comments-scroll">
+                      {loadingComments && !activeSongComments ? <div className="empty-box">正在加载评论...</div> : null}
+                      {!activeSongComments && commentsError ? <div className="empty-box">{commentsError}</div> : null}
+                      {activeSongComments ? (
+                        <>
+                          {activeSongComments.hotComments.length > 0 ? (
+                            <section className="comments-section">
+                              <div className="comments-section-head">
+                                <h3>热评</h3>
+                              </div>
+                              <div className="comments-list">
+                                {activeSongComments.hotComments.map((comment) => (
+                                  <article key={`hot-${comment.id}`} className="comment-row">
+                                    {comment.avatarUrl ? <img src={comment.avatarUrl} alt="" className="comment-avatar" loading="lazy" /> : <span className="comment-avatar placeholder">{comment.nickname.slice(0, 1)}</span>}
+                                    <div className="comment-copy">
+                                      <div className="comment-meta">
+                                        <strong>{comment.nickname}</strong>
+                                        <span>{comment.timeText}</span>
+                                      </div>
+                                      <p className="comment-content">{comment.content}</p>
+                                      {comment.replyContent ? <p className="comment-reply">{comment.replyContent}</p> : null}
+                                      {comment.likedCount > 0 ? <span className="comment-like">{comment.likedCount} 赞</span> : null}
+                                    </div>
+                                  </article>
+                                ))}
+                              </div>
+                            </section>
+                          ) : null}
+
                           <section className="comments-section">
                             <div className="comments-section-head">
-                              <h3>热评</h3>
-                              <button type="button" className="comments-refresh" disabled={loadingComments} onClick={() => setCommentRefreshKey((key) => key + 1)}>
-                                刷新
-                              </button>
+                              <h3>最新评论</h3>
                             </div>
-                            <div className="comments-list">
-                              {activeSongComments.hotComments.map((comment) => (
-                                <article key={`hot-${comment.id}`} className="comment-row">
-                                  {comment.avatarUrl ? <img src={comment.avatarUrl} alt="" className="comment-avatar" loading="lazy" /> : <span className="comment-avatar placeholder">{comment.nickname.slice(0, 1)}</span>}
-                                  <div className="comment-copy">
-                                    <div className="comment-meta">
-                                      <strong>{comment.nickname}</strong>
-                                      <span>{comment.timeText}</span>
+                            {activeSongComments.comments.length === 0 ? (
+                              <div className="empty-box">这首歌暂时没有读取到评论。</div>
+                            ) : (
+                              <div className="comments-list">
+                                {activeSongComments.comments.map((comment) => (
+                                  <article key={comment.id} className="comment-row">
+                                    {comment.avatarUrl ? <img src={comment.avatarUrl} alt="" className="comment-avatar" loading="lazy" /> : <span className="comment-avatar placeholder">{comment.nickname.slice(0, 1)}</span>}
+                                    <div className="comment-copy">
+                                      <div className="comment-meta">
+                                        <strong>{comment.nickname}</strong>
+                                        <span>{comment.timeText}</span>
+                                      </div>
+                                      <p className="comment-content">{comment.content}</p>
+                                      {comment.replyContent ? <p className="comment-reply">{comment.replyContent}</p> : null}
+                                      {comment.likedCount > 0 ? <span className="comment-like">{comment.likedCount} 赞</span> : null}
                                     </div>
-                                    <p className="comment-content">{comment.content}</p>
-                                    {comment.replyContent ? <p className="comment-reply">{comment.replyContent}</p> : null}
-                                    {comment.likedCount > 0 ? <span className="comment-like">{comment.likedCount} 赞</span> : null}
-                                  </div>
-                                </article>
-                              ))}
-                            </div>
+                                  </article>
+                                ))}
+                              </div>
+                            )}
                           </section>
-                        ) : null}
 
-                        <section className="comments-section">
-                          <div className="comments-section-head">
-                            <h3>最新评论</h3>
-                            {activeSongComments.hotComments.length === 0 ? (
-                              <button type="button" className="comments-refresh" disabled={loadingComments} onClick={() => setCommentRefreshKey((key) => key + 1)}>
-                                刷新
-                              </button>
-                            ) : null}
+                          <div className="comments-pager">
+                            <button type="button" disabled={commentPage <= 1 || loadingComments} onClick={() => setCommentPage((page) => Math.max(1, page - 1))}>
+                              上一页
+                            </button>
+                            <span>第 {commentPage} 页</span>
+                            <button type="button" disabled={!activeSongComments.hasMore || loadingComments} onClick={() => setCommentPage((page) => page + 1)}>
+                              下一页
+                            </button>
                           </div>
-                          {activeSongComments.comments.length === 0 ? (
-                            <div className="empty-box">这首歌暂时没有读取到评论。</div>
-                          ) : (
-                            <div className="comments-list">
-                              {activeSongComments.comments.map((comment) => (
-                                <article key={comment.id} className="comment-row">
-                                  {comment.avatarUrl ? <img src={comment.avatarUrl} alt="" className="comment-avatar" loading="lazy" /> : <span className="comment-avatar placeholder">{comment.nickname.slice(0, 1)}</span>}
-                                  <div className="comment-copy">
-                                    <div className="comment-meta">
-                                      <strong>{comment.nickname}</strong>
-                                      <span>{comment.timeText}</span>
-                                    </div>
-                                    <p className="comment-content">{comment.content}</p>
-                                    {comment.replyContent ? <p className="comment-reply">{comment.replyContent}</p> : null}
-                                    {comment.likedCount > 0 ? <span className="comment-like">{comment.likedCount} 赞</span> : null}
-                                  </div>
-                                </article>
-                              ))}
-                            </div>
-                          )}
-                        </section>
-
-                        <div className="comments-pager">
-                          <button type="button" disabled={commentPage <= 1 || loadingComments} onClick={() => setCommentPage((page) => Math.max(1, page - 1))}>
-                            上一页
-                          </button>
-                          <span>第 {commentPage} 页</span>
-                          <button type="button" disabled={!activeSongComments.hasMore || loadingComments} onClick={() => setCommentPage((page) => page + 1)}>
-                            下一页
-                          </button>
-                        </div>
-                      </>
-                    ) : null}
+                        </>
+                      ) : null}
+                    </div>
                   </>
                 )}
               </div>
