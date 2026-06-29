@@ -673,6 +673,7 @@ export default function App() {
   const [likedSongIds, setLikedSongIds] = useState<string[]>([]);
   const [togglingLike, setTogglingLike] = useState(false);
   const [playlistPickerSong, setPlaylistPickerSong] = useState<Song | null>(null);
+  const [playlistPickerSongs, setPlaylistPickerSongs] = useState<Song[]>([]);
   const [playlistPickerSourcePlaylistId, setPlaylistPickerSourcePlaylistId] = useState<string | null>(null);
   const [songContextMenu, setSongContextMenu] = useState<SongContextMenuState | null>(null);
   const [playlistPickerLoading, setPlaylistPickerLoading] = useState(false);
@@ -2313,7 +2314,13 @@ export default function App() {
     }
   }
 
-  async function handleOpenPlaylistPicker(song: Song) {
+  async function handleOpenPlaylistPickerForSongs(songs: Song[]) {
+    const safeSongs = songs.filter((song, index, list) => song.id && list.findIndex((item) => item.id === song.id) === index);
+    if (safeSongs.length === 0) {
+      setMessage("当前没有可收藏的歌曲。");
+      return;
+    }
+
     if (!accountIsLoggedIn) {
       setMessage("收藏到歌单需要先登录网易云账号，已为你打开登录窗口。");
       await handleStartQrLogin();
@@ -2325,7 +2332,8 @@ export default function App() {
       return;
     }
 
-    setPlaylistPickerSong(song);
+    setPlaylistPickerSong(safeSongs[0]);
+    setPlaylistPickerSongs(safeSongs);
     setPlaylistPickerSourcePlaylistId(resultSource === "playlist" ? activePlaylist?.id ?? null : null);
     setPlaylistPickerError("");
 
@@ -2348,8 +2356,13 @@ export default function App() {
     }
   }
 
+  async function handleOpenPlaylistPicker(song: Song) {
+    await handleOpenPlaylistPickerForSongs([song]);
+  }
+
   async function handleAddSongToPlaylist(playlist: UserPlaylist) {
-    if (!playlistPickerSong || addingToPlaylistId) {
+    const songsToAdd = playlistPickerSongs.length > 0 ? playlistPickerSongs : playlistPickerSong ? [playlistPickerSong] : [];
+    if (songsToAdd.length === 0 || addingToPlaylistId) {
       return;
     }
 
@@ -2357,21 +2370,49 @@ export default function App() {
     setPlaylistPickerError("");
 
     try {
-      const result = await addSongToPlaylist(playlist.id, playlistPickerSong.id);
+      let playlistName = playlist.name;
+      let addedCount = 0;
+      let failedCount = 0;
+      let firstFailureMessage = "";
+
+      for (const song of songsToAdd) {
+        try {
+          const result = await addSongToPlaylist(playlist.id, song.id);
+          playlistName = result.playlistName;
+          addedCount += Math.max(1, result.addedCount);
+        } catch (error) {
+          failedCount += 1;
+          if (!firstFailureMessage) {
+            firstFailureMessage = error instanceof Error ? error.message : "添加到歌单失败";
+          }
+        }
+      }
+
+      if (addedCount === 0) {
+        setPlaylistPickerError(firstFailureMessage || "添加到歌单失败");
+        return;
+      }
+
       setPlaylists((current) =>
         current.map((item) =>
           item.id === playlist.id
-            ? { ...item, trackCount: item.trackCount + Math.max(1, result.addedCount) }
+            ? { ...item, trackCount: item.trackCount + addedCount }
             : item
         )
       );
       setActivePlaylist((current) =>
         current?.id === playlist.id
-          ? { ...current, trackCount: current.trackCount + Math.max(1, result.addedCount) }
+          ? { ...current, trackCount: current.trackCount + addedCount }
           : current
       );
-      setMessage(`已收藏到「${result.playlistName}」：${playlistPickerSong.title}`);
+      setMessage(songsToAdd.length === 1
+        ? `已收藏到「${playlistName}」：${songsToAdd[0].title}`
+        : `已收藏到「${playlistName}」：成功 ${addedCount} 首${failedCount > 0 ? `，失败 ${failedCount} 首` : ""}`);
+      if (songsToAdd.length > 1) {
+        setSelectedSongIds([]);
+      }
       setPlaylistPickerSong(null);
+      setPlaylistPickerSongs([]);
       setPlaylistPickerSourcePlaylistId(null);
     } catch (error) {
       setPlaylistPickerError(error instanceof Error ? error.message : "添加到歌单失败");
@@ -4503,6 +4544,15 @@ export default function App() {
                       {!hasNeteaseDownloadAuth ? <LockIcon /> : null}
                         {batchDownloading ? "启动中" : "直连下载已选"}
                     </button>
+                    <button
+                      type="button"
+                      className={!accountIsLoggedIn ? "secondary-button compact locked-action-button" : "secondary-button compact"}
+                      disabled={Boolean(addingToPlaylistId)}
+                      onClick={() => void handleOpenPlaylistPickerForSongs(selectedVisibleSongs)}
+                    >
+                      {!accountIsLoggedIn ? <LockIcon /> : null}
+                      收藏已选
+                    </button>
                     {resultSource === "playlist" && activePlaylist?.owned ? (
                       <button
                         type="button"
@@ -4732,7 +4782,16 @@ export default function App() {
                         onClick={() => void handleBatchDownload(selectedVisibleSongs, "已选歌曲")}
                       >
                         {!hasNeteaseDownloadAuth ? <LockIcon /> : null}
-                      {batchDownloading ? "启动中" : "直连下载已选"}
+                        {batchDownloading ? "启动中" : "直连下载已选"}
+                      </button>
+                      <button
+                        type="button"
+                        className={!accountIsLoggedIn ? "secondary-button compact locked-action-button" : "secondary-button compact"}
+                        disabled={Boolean(addingToPlaylistId)}
+                        onClick={() => void handleOpenPlaylistPickerForSongs(selectedVisibleSongs)}
+                      >
+                        {!accountIsLoggedIn ? <LockIcon /> : null}
+                        收藏已选
                       </button>
                       <button
                         type="button"
@@ -5396,14 +5455,14 @@ export default function App() {
       ) : null}
 
       {playlistPickerSong ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="收藏到歌单" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSourcePlaylistId(null); }}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="收藏到歌单" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSongs([]); setPlaylistPickerSourcePlaylistId(null); }}>
           <section className="playlist-picker-card" onClick={(event) => event.stopPropagation()}>
             <header>
               <div>
                 <p className="eyebrow">Add To Playlist</p>
                 <h2>收藏到我的歌单</h2>
               </div>
-              <button type="button" className="modal-close" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSourcePlaylistId(null); }} aria-label="关闭收藏到歌单">
+              <button type="button" className="modal-close" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSongs([]); setPlaylistPickerSourcePlaylistId(null); }} aria-label="关闭收藏到歌单">
                 ×
               </button>
             </header>
@@ -5411,8 +5470,8 @@ export default function App() {
             <div className="playlist-picker-song">
               <CoverArt song={playlistPickerSong} className="result-cover" />
               <div>
-                <strong>{playlistPickerSong.title}</strong>
-                <span>{playlistPickerSong.artist} · {playlistPickerSong.album}</span>
+                <strong>{playlistPickerSongs.length > 1 ? `已选 ${playlistPickerSongs.length} 首歌曲` : playlistPickerSong.title}</strong>
+                <span>{playlistPickerSongs.length > 1 ? `${playlistPickerSong.title} 等歌曲` : `${playlistPickerSong.artist} · ${playlistPickerSong.album}`}</span>
               </div>
             </div>
 
@@ -5448,7 +5507,7 @@ export default function App() {
                       <strong>{playlist.name}</strong>
                       <small>{playlist.trackCount} 首 · {playlist.creatorName}</small>
                     </span>
-                    <em>{addingToPlaylistId === playlist.id ? "添加中" : "添加"}</em>
+                    <em>{addingToPlaylistId === playlist.id ? "添加中" : playlistPickerSongs.length > 1 ? `添加 ${playlistPickerSongs.length} 首` : "添加"}</em>
                   </button>
                 ))}
               </div>
@@ -5461,10 +5520,10 @@ export default function App() {
             )}
 
             <div className="qr-actions">
-              <button type="button" className="secondary-button" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSourcePlaylistId(null); }}>
+              <button type="button" className="secondary-button" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSongs([]); setPlaylistPickerSourcePlaylistId(null); }}>
                 取消
               </button>
-              <button type="button" className="primary-button" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSourcePlaylistId(null); navigateTo("playlists"); }}>
+              <button type="button" className="primary-button" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSongs([]); setPlaylistPickerSourcePlaylistId(null); navigateTo("playlists"); }}>
                 查看歌单
               </button>
             </div>

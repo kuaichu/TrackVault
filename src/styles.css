@@ -567,6 +567,7 @@ input[type="range"] {
   font-style: normal;
   font-weight: 700;
   text-align: center;
+  white-space: nowrap;
 }
 
 .playlist-picker-error {
