@@ -4418,6 +4418,17 @@ export default function App() {
         </div>
 
         <div className="dock-volume player-bar-tools">
+          <button
+            type="button"
+            className={!hasNeteaseDownloadAuth ? "dock-queue-button player-download-button locked-download-button" : "dock-queue-button player-download-button"}
+            onClick={() => currentTrack ? void handleDownload(currentTrack) : undefined}
+            aria-label={!hasNeteaseDownloadAuth ? "登录后下载当前歌曲" : currentTrack ? `下载 ${currentTrack.title}` : "下载当前歌曲"}
+            title={!hasNeteaseDownloadAuth ? "登录后下载" : directDownloadingSongId === currentTrack?.id ? "正在下载" : "下载当前歌曲"}
+            disabled={!currentTrack || Boolean(directDownloadingSongId || batchDownloading)}
+          >
+            <DownloadIcon />
+            {!hasNeteaseDownloadAuth ? <span className="download-lock-badge"><LockIcon /></span> : null}
+          </button>
           <button type="button" className="dock-queue-button" onClick={() => setIsPlayerExpanded(true)} aria-label="打开全屏播放器"><PlayerIcon name="queue" /></button>
           {currentTrack ? (
             renderQualitySelect(currentTrack, {

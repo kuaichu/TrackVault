@@ -4615,6 +4615,16 @@ input[type="range"] {
   color: #ffd7a4;
 }
 
+.player-download-button {
+  position: relative;
+  color: #ffd7a4;
+}
+
+.player-download-button .action-svg {
+  width: 18px;
+  height: 18px;
+}
+
 .dock-like.active {
   background: rgba(255, 155, 87, 0.14);
   color: #ffb56f;
@@ -8100,7 +8110,7 @@ body {
 }
 
 .player-bar-tools {
-  grid-template-columns: 34px 78px 18px minmax(72px, 1fr) 30px;
+  grid-template-columns: 34px 34px 78px 18px minmax(72px, 1fr) 30px;
   gap: 8px;
 }
 
@@ -8117,7 +8127,7 @@ body {
 }
 
 .player-bar-modal .player-bar-tools {
-  grid-template-columns: 34px 78px 18px minmax(72px, 1fr) 30px;
+  grid-template-columns: 34px 34px 78px 18px minmax(72px, 1fr) 30px;
 }
 
 .player-bar-modal .dock-quality-trigger,
