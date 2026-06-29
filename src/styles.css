@@ -1265,20 +1265,18 @@ input[type="range"] {
 
 .content-titlebar {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: end;
   gap: 12px;
   min-width: 0;
 }
 
-.content-titlecopy {
-  min-width: 0;
+.content-titlebar.has-back {
+  grid-template-columns: 36px minmax(0, 1fr);
 }
 
-.back-button-slot {
-  width: 36px;
-  height: 36px;
-  display: block;
+.content-titlecopy {
+  min-width: 0;
 }
 
 .back-button {

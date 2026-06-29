@@ -4076,6 +4076,7 @@ export default function App() {
     },
     [activePlaylist, playlistSongsLimit, playlistSongsTotal, playlistSearchKeyword]
   );
+  const canGoBackFromCurrentView = viewHistory.length > 0 || isPlaylistSongsView;
   const playbackRatio = playbackDuration > 0 ? Math.min(100, (playbackSeconds / playbackDuration) * 100) : 0;
   const bufferedRatio = playbackDuration > 0 ? Math.min(100, (Math.max(bufferedSeconds, playbackSeconds) / playbackDuration) * 100) : 0;
   const playbackRangeStyle = { "--range-fill": `${playbackRatio}%`, "--range-buffer": `${bufferedRatio}%` } as CSSProperties;
@@ -4743,16 +4744,14 @@ export default function App() {
 
         <section className="content-panel">
           <header className="content-header">
-            <div className="content-titlebar">
-              {viewHistory.length > 0 || isPlaylistSongsView ? (
+            <div className={canGoBackFromCurrentView ? "content-titlebar has-back" : "content-titlebar"}>
+              {canGoBackFromCurrentView ? (
                 <button type="button" className="back-button" onClick={isPlaylistSongsView ? openPlaylistsPage : goBackView} aria-label={isPlaylistSongsView ? "返回我的歌单" : "返回上一个界面"}>
                   <svg aria-hidden="true" viewBox="0 0 24 24">
                     <path d="M14.8 6.4 9.2 12l5.6 5.6" />
                   </svg>
                 </button>
-              ) : (
-                <span className="back-button-slot" aria-hidden="true" />
-              )}
+              ) : null}
               <div className="content-titlecopy">
                 <p className="eyebrow">{contentMeta.title}</p>
                 <h1>{contentMeta.subtitle}</h1>
