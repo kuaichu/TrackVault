@@ -135,6 +135,12 @@ const defaultAdminConfig: AdminConfigView = {
 type MainTab = "search" | "account" | "settings";
 type NavKey = "discover" | "search" | "daily" | "playlists" | "transfer" | "cloud" | "downloads" | "history" | "artist" | "album";
 type RightPanelTab = "queue" | "lyrics" | "comments";
+type DownloadIssueDialog = {
+  song: Song;
+  message: string;
+  attemptedLevel: DownloadQualityLevel;
+  attemptedLabel: string;
+};
 type ResultSource = "search" | "playlist" | "cloud" | "daily" | "discover" | "artist" | "album";
 type PlaylistSortMode = "default" | "title-asc" | "title-desc" | "artist-asc" | "artist-desc";
 type SongContextMenuState = { song: Song; x: number; y: number };
@@ -908,6 +914,7 @@ export default function App() {
     note: "演示账号资料"
   });
   const [message, setMessage] = useState("正在加载发现音乐。");
+  const [downloadIssue, setDownloadIssue] = useState<DownloadIssueDialog | null>(null);
   const [playerStateReady, setPlayerStateReady] = useState(false);
   const accountProfile = session.profile;
   const accountDisplayName = accountProfile?.displayName ?? settings.accountName;
@@ -940,6 +947,18 @@ export default function App() {
 
   function getDownloadLevel(song: Song) {
     return qualitySelectionTouched[song.id] ? getSelectedLevel(song) : getPreferredDownloadQuality(song);
+  }
+
+  function getDownloadLevelLabel(song: Song, level: DownloadQualityLevel) {
+    return song.availableQualities.find((quality) => quality.level === level)?.label ?? (
+      level === "exhigh"
+        ? "320K"
+        : level === "lossless"
+          ? "FLAC"
+          : level === "hires"
+            ? "Hi-Res"
+            : "128K"
+    );
   }
 
   function getPreferredQualityForLevel(song: Song, level: DownloadQualityLevel) {
@@ -2280,23 +2299,22 @@ export default function App() {
     await runSearch(query);
   }
 
-  async function handleDownload(song: Song) {
+  function isDowngradedQualityError(messageText: string) {
+    return messageText.includes("低于你选择") || messageText.includes("实际文件是");
+  }
+
+  async function runDirectDownload(song: Song, level: DownloadQualityLevel, options: { showIssueDialog?: boolean } = {}) {
     if (directDownloadingSongId || batchDownloading) {
       return;
     }
 
-    if (!accountIsLoggedIn) {
-      setMessage("下载需要先登录账号，已为你打开登录窗口。");
-      await handleStartQrLogin();
-      return;
-    }
-
+    const showIssueDialog = options.showIssueDialog ?? true;
+    const selectedLabel = getDownloadLevelLabel(song, level);
     setDirectDownloadingSongId(song.id);
-    const level = getDownloadLevel(song);
-    const selected = song.availableQualities.find((item) => item.level === level);
 
     try {
-      setMessage(`正在从网易云直连下载：${song.title} · ${selected?.label ?? "128K"}`);
+      setDownloadIssue(null);
+      setMessage(`正在从网易云直连下载：${song.title} · ${selectedLabel}`);
       await startDirectSongDownload(song, level, (progress) => {
         setMessage(`正在从网易云直连下载：${song.title} · ${progress}%`);
       });
@@ -2314,11 +2332,39 @@ export default function App() {
           setMessage("直连下载被浏览器拦截，未使用服务器备用下载。");
         }
       } else {
+        if (showIssueDialog) {
+          setDownloadIssue({
+            song,
+            message: errorMessage,
+            attemptedLevel: level,
+            attemptedLabel: selectedLabel
+          });
+        }
         setMessage(errorMessage);
       }
     } finally {
       setDirectDownloadingSongId(null);
     }
+  }
+
+  async function handleDownload(song: Song) {
+    if (!accountIsLoggedIn) {
+      setMessage("下载需要先登录账号，已为你打开登录窗口。");
+      await handleStartQrLogin();
+      return;
+    }
+
+    await runDirectDownload(song, getDownloadLevel(song));
+  }
+
+  async function handleDownloadStandardFromIssue() {
+    const issue = downloadIssue;
+    if (!issue) {
+      return;
+    }
+
+    setDownloadIssue(null);
+    await runDirectDownload(issue.song, "standard", { showIssueDialog: false });
   }
 
   async function handleSaveTaskFile(task: DownloadTask) {
@@ -6355,6 +6401,44 @@ export default function App() {
               <button type="button" className="primary-button" onClick={closeQrLogin}>
                 关闭
               </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {downloadIssue ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="下载音质不可用" onClick={() => setDownloadIssue(null)}>
+          <section className="download-issue-card" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <p className="eyebrow">Download Quality</p>
+                <h2>当前音质不可用</h2>
+              </div>
+              <button type="button" className="modal-close" onClick={() => setDownloadIssue(null)} aria-label="关闭下载提示">
+                ×
+              </button>
+            </header>
+
+            <div className="download-issue-song">
+              <CoverArt song={downloadIssue.song} className="result-cover" />
+              <div>
+                <strong>{downloadIssue.song.title}</strong>
+                <span>{downloadIssue.song.artist} · {downloadIssue.song.album}</span>
+              </div>
+              <em>{downloadIssue.attemptedLabel}</em>
+            </div>
+
+            <p className="download-issue-message">{downloadIssue.message}</p>
+
+            <div className="download-issue-actions">
+              <button type="button" className="secondary-button" onClick={() => setDownloadIssue(null)}>
+                关闭
+              </button>
+              {isDowngradedQualityError(downloadIssue.message) && downloadIssue.attemptedLevel !== "standard" ? (
+                <button type="button" className="primary-button" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => void handleDownloadStandardFromIssue()}>
+                  下载 128K
+                </button>
+              ) : null}
             </div>
           </section>
         </div>
