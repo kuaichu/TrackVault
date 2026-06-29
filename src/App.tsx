@@ -737,6 +737,26 @@ export default function App() {
     setMessage("输入关键词开始搜索。");
   }
 
+  function openPlaylistsPage() {
+    setResults([]);
+    setActivePlaylist(null);
+    setActiveArtist(null);
+    setActiveAlbum(null);
+    setSelectedPlaylistId(null);
+    setResultSource("search");
+    setPlaylistSearchInput("");
+    setPlaylistSearchKeyword("");
+    setPlaylistSongsPage(1);
+    setPlaylistSongsHasMore(false);
+    setPlaylistSongsTotal(0);
+    setSelectedSongIds([]);
+    navigateTo("playlists");
+
+    if (playlists.length === 0 && !loadingPlaylists && settings.neteaseCookie.trim()) {
+      void loadUserPlaylists();
+    }
+  }
+
   function addSearchHistory(keyword: string) {
     setSearchHistory((current) => {
       const nextHistory = [keyword, ...current.filter((item) => item !== keyword)].slice(0, 10);
@@ -917,7 +937,7 @@ export default function App() {
       setPlaylistSongsTotal(pageData.total);
       setPlaylistSearchKeyword(pageData.keyword ?? normalizedKeyword);
       setPlaylistSearchInput(pageData.keyword ?? normalizedKeyword);
-      navigateTo("discover");
+      navigateTo("playlists");
       const totalPages = Math.max(1, Math.ceil((pageData.total || playlist.trackCount) / pageData.limit));
       setMessage(
         pageData.keyword
@@ -2970,6 +2990,8 @@ export default function App() {
         ? { title: "歌手", subtitle: activeArtist.name }
         : navKey === "album" && activeAlbum
           ? { title: "专辑", subtitle: activeAlbum.name }
+          : navKey === "playlists" && resultSource === "playlist" && activePlaylist
+            ? { title: "我的歌单", subtitle: activePlaylist.name }
         : activeMeta;
   const currentQualityLabel = currentTrack ? getSelectedLabel(currentTrack) : "128K";
   const isDiscoverListView = mainTab === "search" && navKey === "discover" && resultSource === "discover";
@@ -2977,6 +2999,36 @@ export default function App() {
     isDiscoverListView
       ? { count: `推荐新歌 · ${results.length} 首`, note: "来自网易云推荐新歌", action: loadingDiscoverSongs ? "加载中" : "刷新推荐", disabled: loadingDiscoverSongs, onClick: loadDiscoverSongs }
       : null;
+  const resultListLoading =
+    navKey === "discover"
+      ? loadingDiscoverSongs
+      : navKey === "cloud"
+        ? loadingCloudSongs
+        : navKey === "daily"
+          ? loadingDailySongs
+          : navKey === "playlists" && resultSource === "playlist"
+            ? loadingPlaylistSongs
+            : loadingArtist;
+  const resultLoadingMessage =
+    navKey === "discover"
+      ? "正在加载发现音乐..."
+      : navKey === "cloud"
+        ? "正在读取云盘音乐..."
+        : navKey === "daily"
+          ? "正在读取每日推荐..."
+          : navKey === "playlists" && resultSource === "playlist"
+            ? "正在读取歌单歌曲..."
+            : "正在读取歌手热门歌曲...";
+  const resultEmptyMessage =
+    navKey === "discover"
+      ? "暂时没有推荐歌曲，请稍后刷新。"
+      : navKey === "cloud"
+        ? "云盘里暂时没有读取到歌曲，或 Cookie 权限不足。"
+        : navKey === "daily"
+          ? "暂时没有读取到每日推荐，请确认 Cookie 登录态有效。"
+          : navKey === "playlists" && resultSource === "playlist"
+            ? "当前歌单没有读取到歌曲。"
+            : "暂时没有读取到该歌手的热门歌曲。";
   const hasReadableLyrics = Boolean(currentTrack && !loadingLyrics && !lyricsError && lyrics.length > 0);
   const shouldShowLyricsAtmosphere = Boolean(currentTrack?.coverUrl && (loadingLyrics || hasReadableLyrics));
 
@@ -3316,7 +3368,7 @@ export default function App() {
               <button type="button" className={mainTab === "search" && navKey === "daily" ? "nav-button active" : "nav-button"} onClick={() => void loadDailySongs()}>
                 每日推荐
               </button>
-              <button type="button" className={mainTab === "search" && navKey === "playlists" ? "nav-button active" : "nav-button"} onClick={() => navigateTo("playlists")}>
+              <button type="button" className={mainTab === "search" && navKey === "playlists" ? "nav-button active" : "nav-button"} onClick={openPlaylistsPage}>
                 我的歌单
               </button>
               <button type="button" className={mainTab === "search" && navKey === "transfer" ? "nav-button active" : "nav-button"} onClick={openTransferPage}>
@@ -3882,7 +3934,7 @@ export default function App() {
                 ) : null}
               </div>
             </section>
-          ) : mainTab === "search" && navKey === "playlists" ? (
+          ) : mainTab === "search" && navKey === "playlists" && !(resultSource === "playlist" && activePlaylist) ? (
             <section className="playlist-manager">
               <header className="playlist-manager-head">
                 <div>
@@ -3928,7 +3980,7 @@ export default function App() {
                 )}
               </div>
             </section>
-          ) : mainTab === "search" && (navKey === "discover" || navKey === "cloud" || navKey === "daily" || navKey === "artist" || navKey === "album") ? (
+          ) : mainTab === "search" && (navKey === "discover" || navKey === "cloud" || navKey === "daily" || navKey === "artist" || navKey === "album" || (navKey === "playlists" && resultSource === "playlist")) ? (
             <section className="results-panel">
               {navKey === "artist" && activeArtist ? (
                 <div className="artist-hero">
@@ -4061,11 +4113,11 @@ export default function App() {
               </div>
 
               <div className="results-body">
-                {(navKey === "discover" ? loadingDiscoverSongs : navKey === "cloud" ? loadingCloudSongs : navKey === "daily" ? loadingDailySongs : loadingArtist) && visibleSongs.length === 0 ? (
-                  <div className="empty-box">{navKey === "discover" ? "正在加载发现音乐..." : navKey === "cloud" ? "正在读取云盘音乐..." : navKey === "daily" ? "正在读取每日推荐..." : "正在读取歌手热门歌曲..."}</div>
+                {resultListLoading && visibleSongs.length === 0 ? (
+                  <div className="empty-box">{resultLoadingMessage}</div>
                 ) : null}
-                {!(navKey === "discover" ? loadingDiscoverSongs : navKey === "cloud" ? loadingCloudSongs : navKey === "daily" ? loadingDailySongs : loadingArtist) && visibleSongs.length === 0 ? (
-                  <div className="empty-box">{navKey === "discover" ? "暂时没有推荐歌曲，请稍后刷新。" : navKey === "cloud" ? "云盘里暂时没有读取到歌曲，或 Cookie 权限不足。" : navKey === "daily" ? "暂时没有读取到每日推荐，请确认 Cookie 登录态有效。" : "暂时没有读取到该歌手的热门歌曲。"}</div>
+                {!resultListLoading && visibleSongs.length === 0 ? (
+                  <div className="empty-box">{resultEmptyMessage}</div>
                 ) : null}
                 {visibleSongs.map((song) => (
                   <article
