@@ -1837,6 +1837,23 @@ export default function App() {
     });
   }
 
+  function openProfilePlaylist(playlist: UserProfile["playlists"][number]) {
+    const profileOwnerId = userProfileDisplay?.id ?? userProfileTarget?.id ?? "";
+    const isCurrentAccountProfile = Boolean(accountProfile?.provider === "netease" && accountProfile.id === profileOwnerId);
+    const mappedPlaylist: UserPlaylist = {
+      id: playlist.id,
+      name: playlist.name,
+      coverUrl: playlist.coverUrl,
+      trackCount: playlist.trackCount,
+      creatorName: userProfileName,
+      playCount: playlist.playCount,
+      owned: isCurrentAccountProfile && playlist.owned
+    };
+
+    closeUserProfile();
+    void loadPlaylistSongs(mappedPlaylist, 1, "");
+  }
+
   function handleSelectSong(song: Song) {
     setMessage(accountIsLoggedIn ? `已选中：${song.title}。双击歌曲或点击试听开始播放。` : `已选中：${song.title}。登录网易云账号后可播放。`);
   }
@@ -3509,7 +3526,7 @@ export default function App() {
         : navKey === "album" && activeAlbum
           ? { title: "专辑", subtitle: activeAlbum.name }
           : navKey === "playlists" && resultSource === "playlist" && activePlaylist
-            ? { title: "我的歌单", subtitle: activePlaylist.name }
+            ? { title: activePlaylist.owned ? "我的歌单" : "歌单", subtitle: activePlaylist.name }
         : activeMeta;
   const currentQualityLabel = currentTrack ? getSelectedLabel(currentTrack) : "128K";
   const isDiscoverListView = mainTab === "search" && navKey === "discover" && resultSource === "discover";
@@ -5524,7 +5541,13 @@ export default function App() {
                       </div>
                       <div className="user-profile-playlist-list">
                         {userProfileDisplay.playlists.map((playlist) => (
-                          <div key={playlist.id} className="user-profile-playlist">
+                          <button
+                            key={playlist.id}
+                            type="button"
+                            className="user-profile-playlist"
+                            onClick={() => openProfilePlaylist(playlist)}
+                            title={`打开歌单：${playlist.name}`}
+                          >
                             <div className="user-profile-playlist-cover">
                               {playlist.coverUrl ? <img src={playlist.coverUrl} alt="" loading="lazy" /> : <span>{playlist.name.slice(0, 1)}</span>}
                             </div>
@@ -5533,7 +5556,7 @@ export default function App() {
                               <span>{playlist.trackCount} 首 · 播放 {formatCompactCount(playlist.playCount)}</span>
                             </div>
                             <em className={playlist.owned ? "owned" : "collected"}>{playlist.owned ? "创建" : "收藏"}</em>
-                          </div>
+                          </button>
                         ))}
                       </div>
                     </section>

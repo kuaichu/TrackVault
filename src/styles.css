@@ -634,10 +634,30 @@ input[type="range"] {
   grid-template-columns: 46px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
+  width: 100%;
   padding: 10px;
   border-radius: 15px;
   background: rgba(17, 24, 35, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.055);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    transform 180ms ease;
+}
+
+.user-profile-playlist:hover,
+.user-profile-playlist:focus-visible {
+  border-color: rgba(255, 180, 93, 0.22);
+  background: rgba(255, 155, 87, 0.08);
+  transform: translateY(-1px);
+}
+
+.user-profile-playlist:focus-visible {
+  outline: 2px solid rgba(255, 180, 93, 0.24);
+  outline-offset: 2px;
 }
 
 .user-profile-playlist-cover {
