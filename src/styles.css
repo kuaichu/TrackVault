@@ -165,7 +165,8 @@ input[type="range"] {
 .dock-cover img,
 .play-sidebar-cover img,
 .artist-cover img,
-.playlist-cover img {
+.playlist-cover img,
+.playlist-picker-cover img {
   width: calc(100% - 8px);
   height: 100%;
   display: block;
@@ -426,6 +427,7 @@ input[type="range"] {
   width: min(520px, 100%);
   max-height: min(680px, calc(100vh - 48px));
   display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 16px;
   padding: 20px;
   border-radius: 24px;
@@ -489,8 +491,10 @@ input[type="range"] {
 
 .playlist-picker-list {
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: grid;
+  align-content: start;
   gap: 10px;
   padding-right: 4px;
 }
@@ -523,6 +527,14 @@ input[type="range"] {
   width: 48px;
   height: 48px;
   border-radius: 12px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffd7a4;
+  flex-shrink: 0;
+}
+
+.playlist-picker-cover img {
+  width: 100%;
 }
 
 .playlist-picker-option span,
