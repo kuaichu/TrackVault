@@ -621,6 +621,7 @@ export default function App() {
   const [batchDownloading, setBatchDownloading] = useState(false);
   const [directDownloadingSongId, setDirectDownloadingSongId] = useState<string | null>(null);
   const [savingTaskFileId, setSavingTaskFileId] = useState<string | null>(null);
+  const [batchSelectionMode, setBatchSelectionMode] = useState(false);
   const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
   const [qualitySelections, setQualitySelections] = useState<Record<string, DownloadQualityLevel>>({});
   const [qualitySelectionTouched, setQualitySelectionTouched] = useState<Record<string, true>>({});
@@ -774,6 +775,8 @@ export default function App() {
     setViewHistory((current) => [currentView, ...current.filter((item) => item.mainTab !== currentView.mainTab || item.navKey !== currentView.navKey)].slice(0, 20));
     setMainTab(nextMainTab);
     setNavKey(nextNavKey);
+    setBatchSelectionMode(false);
+    setSelectedSongIds([]);
     window.requestAnimationFrame(() => {
       if (resultBodyRef.current) {
         resultBodyRef.current.scrollTop = 0;
@@ -1944,6 +1947,15 @@ export default function App() {
       visibleSongs.forEach((song) => nextIds.add(song.id));
       return [...nextIds];
     });
+  }
+
+  function enterBatchSelectionMode() {
+    setBatchSelectionMode(true);
+  }
+
+  function exitBatchSelectionMode() {
+    setBatchSelectionMode(false);
+    setSelectedSongIds([]);
   }
 
   async function handleSaveAdminConfig(event: FormEvent) {
@@ -4402,7 +4414,7 @@ export default function App() {
               </div>
             </section>
           ) : mainTab === "search" && (navKey === "discover" || navKey === "cloud" || navKey === "daily" || navKey === "artist" || navKey === "album" || isPlaylistSongsView) ? (
-            <section className="results-panel">
+            <section className={batchSelectionMode ? "results-panel batch-mode" : "results-panel"}>
               {navKey === "artist" && activeArtist ? (
                 <div className="artist-hero">
                   <CoverArt
@@ -4531,58 +4543,63 @@ export default function App() {
                   </div>
                 </div>
               ) : null}
-              {selectedVisibleSongs.length > 0 ? (
+              {visibleSongs.length > 0 ? (
                 <div className="form-actions results-selection-bar">
-                  <span>已选 {selectedVisibleSongs.length} 首</span>
+                  <span>{batchSelectionMode ? `已选 ${selectedVisibleSongs.length} 首` : "批量选择歌曲后可下载、收藏或移除"}</span>
                   <div className="results-selection-actions">
-                    <button
-                      type="button"
-                      className={!hasNeteaseDownloadAuth ? "secondary-button compact locked-action-button" : "secondary-button compact"}
-                      disabled={batchDownloading}
-                      onClick={() => void handleBatchDownload(selectedVisibleSongs, "已选歌曲")}
-                    >
-                      {!hasNeteaseDownloadAuth ? <LockIcon /> : null}
-                        {batchDownloading ? "启动中" : "直连下载已选"}
-                    </button>
-                    <button
-                      type="button"
-                      className={!accountIsLoggedIn ? "secondary-button compact locked-action-button" : "secondary-button compact"}
-                      disabled={Boolean(addingToPlaylistId)}
-                      onClick={() => void handleOpenPlaylistPickerForSongs(selectedVisibleSongs)}
-                    >
-                      {!accountIsLoggedIn ? <LockIcon /> : null}
-                      收藏已选
-                    </button>
-                    {resultSource === "playlist" && activePlaylist?.owned ? (
-                      <button
-                        type="button"
-                        className="secondary-button compact danger-button"
-                        disabled={removingPlaylistSongs || loadingPlaylistSongs}
-                        onClick={() => void handleRemoveSelectedPlaylistSongs()}
-                      >
-                        {removingPlaylistSongs ? "移除中" : "从歌单移除"}
+                    {batchSelectionMode ? (
+                      <>
+                        <button
+                          type="button"
+                          className={!hasNeteaseDownloadAuth ? "secondary-button compact locked-action-button" : "secondary-button compact"}
+                          disabled={batchDownloading || selectedVisibleSongs.length === 0}
+                          onClick={() => void handleBatchDownload(selectedVisibleSongs, "已选歌曲")}
+                        >
+                          {!hasNeteaseDownloadAuth ? <LockIcon /> : null}
+                          {batchDownloading ? "启动中" : "直连下载已选"}
+                        </button>
+                        <button
+                          type="button"
+                          className={!accountIsLoggedIn ? "secondary-button compact locked-action-button" : "secondary-button compact"}
+                          disabled={Boolean(addingToPlaylistId) || selectedVisibleSongs.length === 0}
+                          onClick={() => void handleOpenPlaylistPickerForSongs(selectedVisibleSongs)}
+                        >
+                          {!accountIsLoggedIn ? <LockIcon /> : null}
+                          收藏已选
+                        </button>
+                        {resultSource === "playlist" && activePlaylist?.owned ? (
+                          <button
+                            type="button"
+                            className="secondary-button compact danger-button"
+                            disabled={removingPlaylistSongs || loadingPlaylistSongs || selectedVisibleSongs.length === 0}
+                            onClick={() => void handleRemoveSelectedPlaylistSongs()}
+                          >
+                            {removingPlaylistSongs ? "移除中" : "从歌单移除"}
+                          </button>
+                        ) : null}
+                        <button type="button" className="secondary-button compact" onClick={exitBatchSelectionMode}>
+                          退出批量
+                        </button>
+                      </>
+                    ) : (
+                      <button type="button" className="secondary-button compact" onClick={enterBatchSelectionMode}>
+                        批量操作
                       </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="secondary-button compact"
-                      disabled={batchDownloading}
-                      onClick={() => setSelectedSongIds([])}
-                    >
-                      清空选择
-                    </button>
+                    )}
                   </div>
                 </div>
               ) : null}
               <div className="results-head">
-                <label className="result-check-cell result-check-header">
-                  <input
-                    type="checkbox"
-                    checked={allVisibleSelected}
-                    aria-label={allVisibleSelected ? "取消全选当前列表" : "全选当前列表"}
-                    onChange={handleToggleVisibleSongsSelection}
-                  />
-                </label>
+                {batchSelectionMode ? (
+                  <label className="result-check-cell result-check-header">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      aria-label={allVisibleSelected ? "取消全选当前列表" : "全选当前列表"}
+                      onChange={handleToggleVisibleSongsSelection}
+                    />
+                  </label>
+                ) : null}
                 <span>歌曲</span>
                 <span>歌手 / 专辑</span>
                 <span>时长</span>
@@ -4605,14 +4622,16 @@ export default function App() {
                     onDoubleClick={() => handlePreview(song)}
                     onContextMenu={(event) => handleOpenSongContextMenu(event, song)}
                   >
-                    <label className="result-check-cell" onClick={(event) => event.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        checked={selectedSongIds.includes(song.id)}
-                        aria-label={`选择 ${song.title}`}
-                        onChange={() => handleToggleSongSelection(song.id)}
-                      />
-                    </label>
+                    {batchSelectionMode ? (
+                      <label className="result-check-cell" onClick={(event) => event.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedSongIds.includes(song.id)}
+                          aria-label={`选择 ${song.title}`}
+                          onChange={() => handleToggleSongSelection(song.id)}
+                        />
+                      </label>
+                    ) : null}
                     <div className="result-track">
                       <CoverArt song={song} className="result-cover" />
                       <div className="result-copy">
@@ -4770,49 +4789,54 @@ export default function App() {
               </div>
 
               {resultSource === "search" && results.length > 0 ? (
-              <section className="results-panel">
-                {selectedVisibleSongs.length > 0 ? (
+              <section className={batchSelectionMode ? "results-panel batch-mode" : "results-panel"}>
+                {visibleSongs.length > 0 ? (
                   <div className="form-actions results-selection-bar">
-                    <span>已选 {selectedVisibleSongs.length} 首</span>
+                    <span>{batchSelectionMode ? `已选 ${selectedVisibleSongs.length} 首` : "批量选择歌曲后可下载或收藏"}</span>
                     <div className="results-selection-actions">
-                      <button
-                        type="button"
-                        className={!hasNeteaseDownloadAuth ? "secondary-button compact locked-action-button" : "secondary-button compact"}
-                        disabled={batchDownloading}
-                        onClick={() => void handleBatchDownload(selectedVisibleSongs, "已选歌曲")}
-                      >
-                        {!hasNeteaseDownloadAuth ? <LockIcon /> : null}
-                        {batchDownloading ? "启动中" : "直连下载已选"}
-                      </button>
-                      <button
-                        type="button"
-                        className={!accountIsLoggedIn ? "secondary-button compact locked-action-button" : "secondary-button compact"}
-                        disabled={Boolean(addingToPlaylistId)}
-                        onClick={() => void handleOpenPlaylistPickerForSongs(selectedVisibleSongs)}
-                      >
-                        {!accountIsLoggedIn ? <LockIcon /> : null}
-                        收藏已选
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary-button compact"
-                        disabled={batchDownloading}
-                        onClick={() => setSelectedSongIds([])}
-                      >
-                        清空选择
-                      </button>
+                      {batchSelectionMode ? (
+                        <>
+                          <button
+                            type="button"
+                            className={!hasNeteaseDownloadAuth ? "secondary-button compact locked-action-button" : "secondary-button compact"}
+                            disabled={batchDownloading || selectedVisibleSongs.length === 0}
+                            onClick={() => void handleBatchDownload(selectedVisibleSongs, "已选歌曲")}
+                          >
+                            {!hasNeteaseDownloadAuth ? <LockIcon /> : null}
+                            {batchDownloading ? "启动中" : "直连下载已选"}
+                          </button>
+                          <button
+                            type="button"
+                            className={!accountIsLoggedIn ? "secondary-button compact locked-action-button" : "secondary-button compact"}
+                            disabled={Boolean(addingToPlaylistId) || selectedVisibleSongs.length === 0}
+                            onClick={() => void handleOpenPlaylistPickerForSongs(selectedVisibleSongs)}
+                          >
+                            {!accountIsLoggedIn ? <LockIcon /> : null}
+                            收藏已选
+                          </button>
+                          <button type="button" className="secondary-button compact" onClick={exitBatchSelectionMode}>
+                            退出批量
+                          </button>
+                        </>
+                      ) : (
+                        <button type="button" className="secondary-button compact" onClick={enterBatchSelectionMode}>
+                          批量操作
+                        </button>
+                      )}
                     </div>
                   </div>
                 ) : null}
                 <header className="results-head">
-                  <label className="result-check-cell result-check-header">
-                    <input
-                      type="checkbox"
-                      checked={allVisibleSelected}
-                      aria-label={allVisibleSelected ? "取消全选当前列表" : "全选当前列表"}
-                      onChange={handleToggleVisibleSongsSelection}
-                    />
-                  </label>
+                  {batchSelectionMode ? (
+                    <label className="result-check-cell result-check-header">
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        aria-label={allVisibleSelected ? "取消全选当前列表" : "全选当前列表"}
+                        onChange={handleToggleVisibleSongsSelection}
+                      />
+                    </label>
+                  ) : null}
                   <span>歌曲</span>
                   <span>歌手 / 专辑</span>
                   <span>时长</span>
@@ -4829,14 +4853,16 @@ export default function App() {
                       onDoubleClick={() => handlePreview(song)}
                       onContextMenu={(event) => handleOpenSongContextMenu(event, song)}
                     >
-                      <label className="result-check-cell" onClick={(event) => event.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={selectedSongIds.includes(song.id)}
-                          aria-label={`选择 ${song.title}`}
-                          onChange={() => handleToggleSongSelection(song.id)}
-                        />
-                      </label>
+                      {batchSelectionMode ? (
+                        <label className="result-check-cell" onClick={(event) => event.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedSongIds.includes(song.id)}
+                            aria-label={`选择 ${song.title}`}
+                            onChange={() => handleToggleSongSelection(song.id)}
+                          />
+                        </label>
+                      ) : null}
                       <div className="result-track">
                         <CoverArt song={song} className="result-cover" />
                         <div className="result-copy">
