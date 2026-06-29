@@ -593,6 +593,17 @@ export default function App() {
   });
   const [message, setMessage] = useState("正在加载发现音乐。");
   const [playerStateReady, setPlayerStateReady] = useState(false);
+  const accountProfile = session.profile;
+  const accountDisplayName = accountProfile?.displayName ?? settings.accountName;
+  const accountAvatarUrl = accountProfile?.avatarUrl;
+  const accountVipEnabled = accountProfile?.vipEnabled ?? settings.vipEnabled;
+  const accountProviderLabel = accountProfile?.provider === "netease" ? "网易云已同步" : session.loggedIn ? "本地登录中" : "未登录";
+  const accountBadgeLabel = accountVipEnabled ? "黑胶 VIP" : "标准";
+  const accountStatusLabel = session.loggedIn || accountProfile?.provider === "netease" ? accountBadgeLabel : "未登录";
+  const accountIsLoggedIn = session.loggedIn || accountProfile?.provider === "netease";
+  const hasNeteaseDownloadAuth = accountIsLoggedIn;
+  const playbackLocked = !accountIsLoggedIn;
+  const hasPlaybackQueue = playQueue.length > 0 || results.length > 0;
 
   function getSelectedLevel(song: Song) {
     return qualitySelections[song.id] ?? getPreferredPlaybackQuality(song);
@@ -1578,12 +1589,28 @@ export default function App() {
     });
   }
 
+  function requirePlaybackAuth() {
+    if (accountIsLoggedIn) {
+      return true;
+    }
+
+    setIsPlaying(false);
+    audioRef.current?.pause();
+    setPlayerError("播放需要先登录网易云账号。请先扫码登录或导入 MUSIC_U Cookie。");
+    setMessage("播放功能已锁定：请先登录网易云账号。");
+    return false;
+  }
+
   function handlePreview(song: Song) {
+    if (!requirePlaybackAuth()) {
+      return;
+    }
+
     syncAudioForSong(song, true);
   }
 
   function handleSelectSong(song: Song) {
-    setMessage(`已选中：${song.title}。双击歌曲或点击试听开始播放。`);
+    setMessage(accountIsLoggedIn ? `已选中：${song.title}。双击歌曲或点击试听开始播放。` : `已选中：${song.title}。登录网易云账号后可播放。`);
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -2003,6 +2030,10 @@ export default function App() {
   }
 
   function handleTogglePlayback() {
+    if (!requirePlaybackAuth()) {
+      return;
+    }
+
     const audio = audioRef.current;
     if (!audio) {
       return;
@@ -2036,6 +2067,10 @@ export default function App() {
   }
 
   function handleReplay() {
+    if (!requirePlaybackAuth()) {
+      return;
+    }
+
     const audio = audioRef.current;
     if (!audio || !currentTrack) {
       return;
@@ -2108,6 +2143,10 @@ export default function App() {
   }
 
   function handleNextTrack() {
+    if (!requirePlaybackAuth()) {
+      return;
+    }
+
     const queue = getActivePlaybackQueue();
     if (queue.length === 0) {
       return;
@@ -2130,7 +2169,13 @@ export default function App() {
           mode: playbackMode
         });
         if (nextSong) {
-          window.setTimeout(() => syncAudioForSong(nextSong, true), 0);
+          if (accountIsLoggedIn) {
+            window.setTimeout(() => syncAudioForSong(nextSong, true), 0);
+          } else {
+            setCurrentTrack(nextSong);
+            setPlaybackSeconds(0);
+            setPlaybackDuration(parseDurationSeconds(nextSong.duration));
+          }
         } else {
           audioRef.current?.pause();
           setCurrentTrack(null);
@@ -2197,6 +2242,10 @@ export default function App() {
   }
 
   function handleSeekToLyric(time: number) {
+    if (!requirePlaybackAuth()) {
+      return;
+    }
+
     const audio = audioRef.current;
     if (!audio || !currentTrack) {
       return;
@@ -2635,7 +2684,9 @@ export default function App() {
       });
 
       if (nextSong) {
-        window.setTimeout(() => syncAudioForSong(nextSong, true), 0);
+        if (accountIsLoggedIn) {
+          window.setTimeout(() => syncAudioForSong(nextSong, true), 0);
+        }
       }
     };
 
@@ -2725,7 +2776,16 @@ export default function App() {
       return;
     }
 
-      const nextUrl = getStreamUrl(currentTrack.id, getSelectedLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
+    if (playbackLocked) {
+      audio.pause();
+      audio.removeAttribute("src");
+      delete audio.dataset.streamUrl;
+      audio.load();
+      setPlaybackDuration(parseDurationSeconds(currentTrack.duration));
+      return;
+    }
+
+    const nextUrl = getStreamUrl(currentTrack.id, getSelectedLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
     if (audio.dataset.streamUrl === nextUrl) {
       return;
     }
@@ -2747,7 +2807,7 @@ export default function App() {
 
       audio.addEventListener("loadedmetadata", handleRestoreSeek, { once: true });
     }
-  }, [currentTrack?.id]);
+  }, [currentTrack?.id, playbackLocked]);
 
   const activeCount = useMemo(
     () => tasks.filter((task) => task.status === "queued" || task.status === "downloading" || task.status === "preparing").length,
@@ -2798,15 +2858,6 @@ export default function App() {
     isDiscoverListView
       ? { count: `推荐新歌 · ${results.length} 首`, note: "来自网易云推荐新歌", action: loadingDiscoverSongs ? "加载中" : "刷新推荐", disabled: loadingDiscoverSongs, onClick: loadDiscoverSongs }
       : null;
-  const accountProfile = session.profile;
-  const accountDisplayName = accountProfile?.displayName ?? settings.accountName;
-  const accountAvatarUrl = accountProfile?.avatarUrl;
-  const accountVipEnabled = accountProfile?.vipEnabled ?? settings.vipEnabled;
-  const accountProviderLabel = accountProfile?.provider === "netease" ? "网易云已同步" : session.loggedIn ? "本地登录中" : "未登录";
-  const accountBadgeLabel = accountVipEnabled ? "黑胶 VIP" : "标准";
-  const accountStatusLabel = session.loggedIn || accountProfile?.provider === "netease" ? accountBadgeLabel : "未登录";
-  const accountIsLoggedIn = session.loggedIn || accountProfile?.provider === "netease";
-  const hasNeteaseDownloadAuth = accountIsLoggedIn;
   const hasReadableLyrics = Boolean(currentTrack && !loadingLyrics && !lyricsError && lyrics.length > 0);
   const shouldShowLyricsAtmosphere = Boolean(currentTrack?.coverUrl && (loadingLyrics || hasReadableLyrics));
 
@@ -2867,7 +2918,7 @@ export default function App() {
     }));
     setOpenQualityMenuId(null);
 
-    if (currentTrack?.id === song.id && isPlaying) {
+    if (accountIsLoggedIn && currentTrack?.id === song.id && isPlaying) {
       window.setTimeout(() => {
         syncAudioForSong(song, true);
       }, 0);
@@ -3921,8 +3972,16 @@ export default function App() {
 
                     {renderQualitySelect(song)}
                     <div className="row-actions">
-                      <button type="button" className="row-icon-button" aria-label={`试听 ${song.title}`} title="试听" onClick={(event) => { event.stopPropagation(); handlePreview(song); }}>
+                      <button
+                        type="button"
+                        className={playbackLocked ? "row-icon-button locked-playback-button" : "row-icon-button"}
+                        aria-label={playbackLocked ? `登录后试听 ${song.title}` : `试听 ${song.title}`}
+                        title={playbackLocked ? "登录后试听" : "试听"}
+                        disabled={playbackLocked}
+                        onClick={(event) => { event.stopPropagation(); handlePreview(song); }}
+                      >
                         <PreviewIcon />
+                        {playbackLocked ? <span className="download-lock-badge"><LockIcon /></span> : null}
                       </button>
                       <button
                         type="button"
@@ -3965,8 +4024,14 @@ export default function App() {
                         <span>{song.artist} · {song.album}</span>
                       </div>
                       <span className="result-time">{song.duration}</span>
-                      <button type="button" className="secondary-button" onClick={(event) => { event.stopPropagation(); handlePreview(song); }}>
-                        播放
+                      <button
+                        type="button"
+                        className={playbackLocked ? "secondary-button locked-action-button" : "secondary-button"}
+                        disabled={playbackLocked}
+                        onClick={(event) => { event.stopPropagation(); handlePreview(song); }}
+                      >
+                        {playbackLocked ? <LockIcon /> : null}
+                        {playbackLocked ? "登录后播放" : "播放"}
                       </button>
                     </article>
                   ))
@@ -4112,8 +4177,16 @@ export default function App() {
                       {renderQualitySelect(song)}
 
                       <div className="row-actions" onClick={(event) => event.stopPropagation()}>
-                        <button type="button" className="row-icon-button" aria-label={`试听 ${song.title}`} title="试听" onClick={() => handlePreview(song)}>
+                        <button
+                          type="button"
+                          className={playbackLocked ? "row-icon-button locked-playback-button" : "row-icon-button"}
+                          aria-label={playbackLocked ? `登录后试听 ${song.title}` : `试听 ${song.title}`}
+                          title={playbackLocked ? "登录后试听" : "试听"}
+                          disabled={playbackLocked}
+                          onClick={() => handlePreview(song)}
+                        >
                           <PreviewIcon />
+                          {playbackLocked ? <span className="download-lock-badge"><LockIcon /></span> : null}
                         </button>
                         <button
                           type="button"
@@ -4392,7 +4465,12 @@ export default function App() {
                   <div className="empty-box">播放队列为空，先搜索或试听一首歌。</div>
                 ) : (
                   playQueue.map((song, index) => (
-                    <article key={song.id} className={currentTrack?.id === song.id ? "play-queue-row active" : "play-queue-row"} onClick={() => handlePreview(song)}>
+                    <article
+                      key={song.id}
+                      className={[currentTrack?.id === song.id ? "play-queue-row active" : "play-queue-row", playbackLocked ? "locked-playback-row" : ""].filter(Boolean).join(" ")}
+                      title={playbackLocked ? "登录后播放" : undefined}
+                      onClick={() => handlePreview(song)}
+                    >
                       <span className="queue-index">{String(index + 1).padStart(2, "0")}</span>
                       <div className="queue-song-copy">
                         <strong>{song.title}</strong>
@@ -4658,9 +4736,9 @@ export default function App() {
           </div>
           <div className="control-buttons">
             <button type="button" className={playbackMode === "shuffle" ? "dock-icon primary" : "dock-icon"} aria-label={playbackMode === "shuffle" ? "关闭随机播放" : "开启随机播放"} title={playbackMode === "shuffle" ? "随机播放已开启" : "开启随机播放"} onClick={handleTogglePlaybackMode}><PlayerIcon name="shuffle" /></button>
-            <button type="button" className="dock-icon" aria-label="上一首" onClick={handleReplay}><PlayerIcon name="previous" /></button>
-            <button type="button" className="dock-icon primary" onClick={handleTogglePlayback} aria-label={isPlaying ? "暂停" : "播放"}><PlayerIcon name={isPlaying ? "pause" : "play"} /></button>
-            <button type="button" className="dock-icon" aria-label="下一首" onClick={handleNextTrack}><PlayerIcon name="next" /></button>
+            <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后上一首" : "上一首"} title={playbackLocked ? "登录后播放" : "上一首"} disabled={playbackLocked || !currentTrack} onClick={handleReplay}><PlayerIcon name="previous" /></button>
+            <button type="button" className={playbackLocked ? "dock-icon primary locked-playback-button" : "dock-icon primary"} onClick={handleTogglePlayback} disabled={playbackLocked || (!currentTrack && !hasPlaybackQueue)} aria-label={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"} title={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"}>{playbackLocked ? <LockIcon /> : <PlayerIcon name={isPlaying ? "pause" : "play"} />}</button>
+            <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后下一首" : "下一首"} title={playbackLocked ? "登录后播放" : "下一首"} disabled={playbackLocked || !hasPlaybackQueue} onClick={handleNextTrack}><PlayerIcon name="next" /></button>
           </div>
           <div className="dock-progress modal-progress">
             <span>{formatPlaybackTime(playbackSeconds)}</span>
@@ -4715,9 +4793,9 @@ export default function App() {
         <div className="dock-controls">
           <div className="control-buttons">
             <button type="button" className={playbackMode === "shuffle" ? "dock-icon primary" : "dock-icon"} aria-label={playbackMode === "shuffle" ? "关闭随机播放" : "开启随机播放"} title={playbackMode === "shuffle" ? "随机播放已开启" : "开启随机播放"} onClick={handleTogglePlaybackMode}><PlayerIcon name="shuffle" /></button>
-            <button type="button" className="dock-icon" aria-label="上一首" onClick={handleReplay}><PlayerIcon name="previous" /></button>
-            <button type="button" className="dock-icon primary" onClick={handleTogglePlayback} aria-label={isPlaying ? "暂停" : "播放"}><PlayerIcon name={isPlaying ? "pause" : "play"} /></button>
-            <button type="button" className="dock-icon" aria-label="下一首" onClick={handleNextTrack}><PlayerIcon name="next" /></button>
+            <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后上一首" : "上一首"} title={playbackLocked ? "登录后播放" : "上一首"} disabled={playbackLocked || !currentTrack} onClick={handleReplay}><PlayerIcon name="previous" /></button>
+            <button type="button" className={playbackLocked ? "dock-icon primary locked-playback-button" : "dock-icon primary"} onClick={handleTogglePlayback} disabled={playbackLocked || (!currentTrack && !hasPlaybackQueue)} aria-label={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"} title={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"}>{playbackLocked ? <LockIcon /> : <PlayerIcon name={isPlaying ? "pause" : "play"} />}</button>
+            <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后下一首" : "下一首"} title={playbackLocked ? "登录后播放" : "下一首"} disabled={playbackLocked || !hasPlaybackQueue} onClick={handleNextTrack}><PlayerIcon name="next" /></button>
           </div>
 
           <div className="dock-progress">

@@ -1197,6 +1197,35 @@ input[type="range"] {
   opacity: 0.78;
 }
 
+.row-icon-button.locked-playback-button,
+.dock-icon.locked-playback-button {
+  position: relative;
+  opacity: 0.46;
+  cursor: not-allowed;
+}
+
+.row-icon-button.locked-playback-button:hover,
+.dock-icon.locked-playback-button:hover {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(20, 27, 39, 0.82);
+  color: var(--text-secondary);
+  transform: none;
+}
+
+.dock-icon.primary.locked-playback-button {
+  background: rgba(255, 180, 93, 0.18);
+  color: #ffd7a4;
+  box-shadow: none;
+}
+
+.locked-playback-row {
+  cursor: not-allowed;
+}
+
+.locked-playback-row .queue-song-copy {
+  opacity: 0.62;
+}
+
 .action-svg {
   width: 19px;
   height: 19px;
