@@ -6389,8 +6389,13 @@ body {
 /* Final table pass: keep the music workspace calm and prevent cramped mid-size windows. */
 .results-head,
 .result-row {
-  grid-template-columns: 24px minmax(210px, 1.18fr) minmax(220px, 1.12fr) 64px 108px 136px;
+  grid-template-columns: minmax(210px, 1.18fr) minmax(220px, 1.12fr) 64px 108px 136px;
   gap: 12px;
+}
+
+.results-panel.batch-mode .results-head,
+.results-panel.batch-mode .result-row {
+  grid-template-columns: 24px minmax(210px, 1.18fr) minmax(220px, 1.12fr) 64px 108px 136px;
 }
 
 .results-head {
@@ -6458,6 +6463,11 @@ body {
 
   .results-head,
   .result-row {
+    grid-template-columns: minmax(220px, 1.18fr) minmax(230px, 1.1fr) 64px 108px 126px;
+  }
+
+  .results-panel.batch-mode .results-head,
+  .results-panel.batch-mode .result-row {
     grid-template-columns: 24px minmax(220px, 1.18fr) minmax(230px, 1.1fr) 64px 108px 126px;
   }
 }
@@ -6473,14 +6483,24 @@ body {
 
   .results-head,
   .result-row {
-    grid-template-columns: 24px minmax(180px, 1.14fr) minmax(190px, 1fr) 60px 104px 122px;
+    grid-template-columns: minmax(180px, 1.14fr) minmax(190px, 1fr) 60px 104px 122px;
     gap: 10px;
+  }
+
+  .results-panel.batch-mode .results-head,
+  .results-panel.batch-mode .result-row {
+    grid-template-columns: 24px minmax(180px, 1.14fr) minmax(190px, 1fr) 60px 104px 122px;
   }
 }
 
 @media (max-width: 860px) {
   .results-head,
   .result-row {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr) 52px 96px 116px;
+  }
+
+  .results-panel.batch-mode .results-head,
+  .results-panel.batch-mode .result-row {
     grid-template-columns: 22px minmax(0, 1.15fr) minmax(0, 0.95fr) 52px 96px 116px;
   }
 
