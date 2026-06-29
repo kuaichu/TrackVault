@@ -4364,10 +4364,11 @@ input[type="range"] {
   }
 }
 
-/* Real range progress: yellow only before the thumb, dark track after it. */
+/* Real range progress: yellow before the thumb, muted buffer after it. */
 .player-dock input[type="range"].range-progress,
 .player-modal-controls input[type="range"].range-progress {
   --range-fill: 0%;
+  --range-buffer: var(--range-fill);
   appearance: none;
   -webkit-appearance: none;
   height: 24px;
@@ -4386,7 +4387,9 @@ input[type="range"] {
       90deg,
       #fbbf24 0%,
       #f59e0b var(--range-fill),
-      rgba(255, 255, 255, 0.14) var(--range-fill),
+      rgba(255, 255, 255, 0.3) var(--range-fill),
+      rgba(255, 255, 255, 0.24) var(--range-buffer),
+      rgba(255, 255, 255, 0.14) var(--range-buffer),
       rgba(255, 255, 255, 0.14) 100%
     );
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.38);
@@ -4410,7 +4413,14 @@ input[type="range"] {
 .player-modal-controls input[type="range"].range-progress::-moz-range-track {
   height: 6px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.14);
+  background:
+    linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.24) 0%,
+      rgba(255, 255, 255, 0.24) var(--range-buffer),
+      rgba(255, 255, 255, 0.14) var(--range-buffer),
+      rgba(255, 255, 255, 0.14) 100%
+    );
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.38);
 }
 

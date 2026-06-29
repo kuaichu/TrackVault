@@ -592,6 +592,7 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSeconds, setPlaybackSeconds] = useState(initialPlayerState.playbackSeconds);
   const [playbackDuration, setPlaybackDuration] = useState(0);
+  const [bufferedSeconds, setBufferedSeconds] = useState(0);
   const [playbackMode, setPlaybackMode] = useState<"sequential" | "shuffle">(initialPlayerState.playbackMode === "shuffle" ? "shuffle" : "sequential");
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
   const [loadingLyrics, setLoadingLyrics] = useState(false);
@@ -1639,6 +1640,7 @@ export default function App() {
       playbackSecondsRef.current = startAtSeconds;
       setPlaybackSeconds(startAtSeconds);
       setPlaybackDuration(parseDurationSeconds(song.duration));
+      setBufferedSeconds(0);
     }
 
     if (!autoplay || playAfterMetadata) {
@@ -2794,19 +2796,59 @@ export default function App() {
       return;
     }
 
+    const updateBufferedSeconds = () => {
+      const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : parseDurationSeconds(currentTrack?.duration ?? "00:00");
+      if (!duration || audio.buffered.length === 0) {
+        setBufferedSeconds(0);
+        return;
+      }
+
+      const currentTime = audio.currentTime || playbackSecondsRef.current || 0;
+      let nextBufferedSeconds = 0;
+
+      for (let index = 0; index < audio.buffered.length; index += 1) {
+        const rangeStart = audio.buffered.start(index);
+        const rangeEnd = audio.buffered.end(index);
+
+        if (rangeStart <= currentTime + 0.5 && rangeEnd >= currentTime) {
+          nextBufferedSeconds = Math.max(nextBufferedSeconds, rangeEnd);
+        } else if (rangeEnd < currentTime) {
+          nextBufferedSeconds = Math.max(nextBufferedSeconds, rangeEnd);
+        }
+      }
+
+      setBufferedSeconds(Math.min(duration, Math.max(0, nextBufferedSeconds)));
+    };
+
     const handleTimeUpdate = () => {
       const nextSeconds = audio.currentTime || 0;
       playbackSecondsRef.current = nextSeconds;
       setPlaybackSeconds(nextSeconds);
+      updateBufferedSeconds();
     };
 
     const handleLoadedMetadata = () => {
       setPlaybackDuration(Number.isFinite(audio.duration) ? audio.duration : 0);
+      updateBufferedSeconds();
+    };
+
+    const handleDurationChange = () => {
+      setPlaybackDuration(Number.isFinite(audio.duration) ? audio.duration : 0);
+      updateBufferedSeconds();
+    };
+
+    const handleProgress = () => {
+      updateBufferedSeconds();
+    };
+
+    const handleEmptied = () => {
+      setBufferedSeconds(0);
     };
 
     const handlePlay = () => {
       setIsPlaying(true);
       setPlayerError("");
+      updateBufferedSeconds();
     };
 
     const handlePause = () => {
@@ -2830,11 +2872,16 @@ export default function App() {
 
     const handleError = () => {
       setIsPlaying(false);
+      setBufferedSeconds(0);
       setPlayerError("当前歌曲没有成功返回可播放音频，请检查 Cookie 或换一个音质再试。");
     };
 
     audio.addEventListener("timeupdate", handleTimeUpdate);
     audio.addEventListener("loadedmetadata", handleLoadedMetadata);
+    audio.addEventListener("durationchange", handleDurationChange);
+    audio.addEventListener("progress", handleProgress);
+    audio.addEventListener("canplay", handleProgress);
+    audio.addEventListener("emptied", handleEmptied);
     audio.addEventListener("play", handlePlay);
     audio.addEventListener("pause", handlePause);
     audio.addEventListener("ended", handleEnded);
@@ -2843,6 +2890,10 @@ export default function App() {
     return () => {
       audio.removeEventListener("timeupdate", handleTimeUpdate);
       audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      audio.removeEventListener("durationchange", handleDurationChange);
+      audio.removeEventListener("progress", handleProgress);
+      audio.removeEventListener("canplay", handleProgress);
+      audio.removeEventListener("emptied", handleEmptied);
       audio.removeEventListener("play", handlePlay);
       audio.removeEventListener("pause", handlePause);
       audio.removeEventListener("ended", handleEnded);
@@ -2919,6 +2970,7 @@ export default function App() {
       audio.removeAttribute("src");
       delete audio.dataset.streamUrl;
       audio.load();
+      setBufferedSeconds(0);
       setPlaybackDuration(parseDurationSeconds(currentTrack.duration));
       return;
     }
@@ -2932,6 +2984,7 @@ export default function App() {
     audio.src = nextUrl;
     audio.dataset.streamUrl = nextUrl;
     audio.load();
+    setBufferedSeconds(0);
     setPlaybackDuration(parseDurationSeconds(currentTrack.duration));
 
     const restoreTime = restorePlaybackSecondsRef.current;
@@ -2980,7 +3033,8 @@ export default function App() {
     [activePlaylist, playlistSongsLimit, playlistSongsTotal, playlistSearchKeyword]
   );
   const playbackRatio = playbackDuration > 0 ? Math.min(100, (playbackSeconds / playbackDuration) * 100) : 0;
-  const playbackRangeStyle = { "--range-fill": `${playbackRatio}%` } as CSSProperties;
+  const bufferedRatio = playbackDuration > 0 ? Math.min(100, (Math.max(bufferedSeconds, playbackSeconds) / playbackDuration) * 100) : 0;
+  const playbackRangeStyle = { "--range-fill": `${playbackRatio}%`, "--range-buffer": `${bufferedRatio}%` } as CSSProperties;
   const volumeRangeStyle = { "--range-fill": `${volume}%` } as CSSProperties;
   const activeMeta = navText[navKey];
   const contentMeta =
@@ -5022,6 +5076,7 @@ export default function App() {
               min="0"
               max={Math.max(playbackDuration, 1)}
               step="1"
+              title={`已缓冲到 ${formatPlaybackTime(bufferedSeconds)}`}
               value={Math.min(playbackSeconds, Math.max(playbackDuration, 1))}
               onChange={(event) => {
                 const audio = audioRef.current;
@@ -5092,6 +5147,7 @@ export default function App() {
               min="0"
               max={Math.max(playbackDuration, 1)}
               step="1"
+              title={`已缓冲到 ${formatPlaybackTime(bufferedSeconds)}`}
               value={Math.min(playbackSeconds, Math.max(playbackDuration, 1))}
               onChange={(event) => {
                 const audio = audioRef.current;
