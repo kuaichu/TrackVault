@@ -8493,3 +8493,85 @@ body {
   opacity: 0;
   pointer-events: none;
 }
+
+/* Interaction polish: make buttons read as controls, not inert labels. */
+.secondary-button,
+.back-button,
+.playlist-sort-trigger,
+.playlist-filter-form input {
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.secondary-button:not(:disabled):hover,
+.back-button:not(:disabled):hover,
+.playlist-sort-trigger:not(:disabled):hover,
+.playlist-sort-trigger[aria-expanded="true"] {
+  border-color: rgba(255, 180, 93, 0.34);
+  background:
+    linear-gradient(135deg, rgba(255, 180, 93, 0.16), rgba(255, 180, 93, 0.055)),
+    rgba(33, 27, 24, 0.78);
+  color: #fff3df;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 10px 24px rgba(0, 0, 0, 0.18);
+}
+
+.secondary-button:not(:disabled):active,
+.back-button:not(:disabled):active,
+.playlist-sort-trigger:not(:disabled):active {
+  transform: translateY(1px);
+  border-color: rgba(255, 180, 93, 0.46);
+  background:
+    linear-gradient(135deg, rgba(255, 180, 93, 0.22), rgba(255, 180, 93, 0.08)),
+    rgba(39, 31, 25, 0.88);
+}
+
+.secondary-button:focus-visible,
+.back-button:focus-visible,
+.playlist-sort-trigger:focus-visible {
+  outline: 2px solid rgba(255, 180, 93, 0.46);
+  outline-offset: 3px;
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  box-shadow: none;
+}
+
+.results-selection-bar {
+  min-height: 64px;
+  align-items: center;
+  margin: 8px 0 12px;
+  padding: 10px 22px;
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  border-radius: 18px;
+  background: rgba(11, 17, 27, 0.42);
+}
+
+.results-selection-bar > span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 42px;
+}
+
+.results-selection-actions {
+  align-items: center;
+  margin-left: auto;
+}
+
+.results-panel.batch-mode .results-selection-bar {
+  border-color: rgba(255, 180, 93, 0.18);
+  background:
+    linear-gradient(90deg, rgba(255, 180, 93, 0.1), rgba(255, 180, 93, 0.025)),
+    rgba(13, 19, 30, 0.72);
+}
+
+.results-panel.batch-mode .results-selection-bar > span {
+  color: #ffe0a3;
+}
