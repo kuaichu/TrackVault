@@ -151,6 +151,7 @@ type ViewSnapshot = {
   cloudMeta: { count: number; size: number; maxSize: number };
   qualitySelections: Record<string, DownloadQualityLevel>;
   qualitySelectionTouched: Record<string, true>;
+  resultScrollTop: number;
 };
 
 type ViewState = { mainTab: MainTab; navKey: NavKey; snapshot: ViewSnapshot };
@@ -519,6 +520,7 @@ export default function App() {
   const initialPlayerState = loadPlayerState();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lyricPanelRef = useRef<HTMLDivElement | null>(null);
+  const resultBodyRef = useRef<HTMLDivElement | null>(null);
   const commentsScrollRef = useRef<HTMLDivElement | null>(null);
   const modalLyricPanelRef = useRef<HTMLDivElement | null>(null);
   const activeLyricRef = useRef<HTMLButtonElement | null>(null);
@@ -742,6 +744,7 @@ export default function App() {
       return;
     }
 
+    const resultScrollTop = resultBodyRef.current?.scrollTop ?? 0;
     const currentView = {
       mainTab,
       navKey,
@@ -761,12 +764,18 @@ export default function App() {
         playlistSearchKeyword,
         cloudMeta,
         qualitySelections,
-        qualitySelectionTouched
+        qualitySelectionTouched,
+        resultScrollTop
       }
     };
     setViewHistory((current) => [currentView, ...current.filter((item) => item.mainTab !== currentView.mainTab || item.navKey !== currentView.navKey)].slice(0, 20));
     setMainTab(nextMainTab);
     setNavKey(nextNavKey);
+    window.requestAnimationFrame(() => {
+      if (resultBodyRef.current) {
+        resultBodyRef.current.scrollTop = 0;
+      }
+    });
   }
 
   function goBackView() {
@@ -794,6 +803,11 @@ export default function App() {
     setCloudMeta(previousView.snapshot.cloudMeta);
     setQualitySelections(previousView.snapshot.qualitySelections);
     setQualitySelectionTouched(previousView.snapshot.qualitySelectionTouched);
+    window.requestAnimationFrame(() => {
+      if (resultBodyRef.current) {
+        resultBodyRef.current.scrollTop = previousView.snapshot.resultScrollTop;
+      }
+    });
   }
 
   function openSearchPage() {
@@ -4490,7 +4504,7 @@ export default function App() {
                 <span>操作</span>
               </div>
 
-              <div className="results-body">
+              <div ref={resultBodyRef} className="results-body">
                 {resultListLoading && visibleSongs.length === 0 ? (
                   <div className="empty-box">{resultLoadingMessage}</div>
                 ) : null}
@@ -4711,7 +4725,7 @@ export default function App() {
                   <span>操作</span>
                 </header>
 
-                <div className="results-body">
+                <div ref={resultBodyRef} className="results-body">
                   {visibleSongs.map((song) => (
                     <article
                       key={song.id}
