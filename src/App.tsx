@@ -468,6 +468,7 @@ export default function App() {
   const lastAutoLyricIndexRef = useRef(-1);
   const lastModalAutoLyricIndexRef = useRef(-1);
   const restorePlaybackSecondsRef = useRef(initialPlayerState.playbackSeconds);
+  const playbackSecondsRef = useRef(initialPlayerState.playbackSeconds);
   const searchRequestIdRef = useRef(0);
   const listRequestIdRef = useRef(0);
   const cookieHealthRef = useRef<{ cookie: string; checkedAt: number; result: NeteaseCookieCheckResult | null }>({
@@ -1573,13 +1574,13 @@ export default function App() {
     }
   }
 
-  function syncAudioForSong(song: Song, autoplay: boolean) {
+  function syncAudioForSong(song: Song, autoplay: boolean, options: { startAtSeconds?: number; level?: DownloadQualityLevel } = {}) {
     const audio = audioRef.current;
     if (!audio) {
       return;
     }
 
-    const nextUrl = getStreamUrl(song.id, getSelectedLevel(song), parseDurationSeconds(song.duration));
+    const nextUrl = getStreamUrl(song.id, options.level ?? getSelectedLevel(song), parseDurationSeconds(song.duration));
     const currentUrl = audio.dataset.streamUrl ?? "";
     const shouldReload = currentUrl !== nextUrl;
 
@@ -1587,16 +1588,40 @@ export default function App() {
     addToPlayHistory(song);
     setPlayerError("");
 
+    let playAfterMetadata = false;
+
     if (shouldReload) {
+      const startAtSeconds = Math.max(0, options.startAtSeconds ?? 0);
+
+      if (startAtSeconds > 0) {
+        playAfterMetadata = autoplay;
+        const handleRestoreSeek = () => {
+          const boundedTime = Math.min(startAtSeconds, Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : startAtSeconds);
+          audio.currentTime = boundedTime;
+          playbackSecondsRef.current = boundedTime;
+          setPlaybackSeconds(boundedTime);
+
+          if (playAfterMetadata) {
+            void audio.play().catch(() => {
+              setIsPlaying(false);
+              setPlayerError("当前歌曲暂时无法预览，可能需要更完整的 Cookie 或该音源不支持在线播放。");
+            });
+          }
+        };
+
+        audio.addEventListener("loadedmetadata", handleRestoreSeek, { once: true });
+      }
+
       audio.pause();
       audio.src = nextUrl;
       audio.dataset.streamUrl = nextUrl;
       audio.load();
-      setPlaybackSeconds(0);
+      playbackSecondsRef.current = startAtSeconds;
+      setPlaybackSeconds(startAtSeconds);
       setPlaybackDuration(parseDurationSeconds(song.duration));
     }
 
-    if (!autoplay) {
+    if (!autoplay || playAfterMetadata) {
       return;
     }
 
@@ -2099,6 +2124,7 @@ export default function App() {
     }
 
     audio.currentTime = 0;
+    playbackSecondsRef.current = 0;
     setPlaybackSeconds(0);
     void audio.play().catch(() => {
       setIsPlaying(false);
@@ -2255,12 +2281,14 @@ export default function App() {
             window.setTimeout(() => syncAudioForSong(nextSong, true), 0);
           } else {
             setCurrentTrack(nextSong);
+            playbackSecondsRef.current = 0;
             setPlaybackSeconds(0);
             setPlaybackDuration(parseDurationSeconds(nextSong.duration));
           }
         } else {
           audioRef.current?.pause();
           setCurrentTrack(null);
+          playbackSecondsRef.current = 0;
           setPlaybackSeconds(0);
           setPlaybackDuration(0);
         }
@@ -2338,6 +2366,7 @@ export default function App() {
 
     const seek = () => {
       audio.currentTime = time;
+      playbackSecondsRef.current = time;
       setPlaybackSeconds(time);
       lyricManualScrollUntilRef.current = 0;
       scrollLyricIntoPanel(lyricPanelRef.current, activeLyricRef.current);
@@ -2494,6 +2523,7 @@ export default function App() {
 
         if (hasPersistedPlayerState(remotePlayerState)) {
           restorePlaybackSecondsRef.current = remotePlayerState.playbackSeconds;
+          playbackSecondsRef.current = remotePlayerState.playbackSeconds;
           setCurrentTrack(remotePlayerState.currentTrack);
           setPlayQueue(remotePlayerState.playQueue);
           setPlaybackSeconds(remotePlayerState.playbackSeconds);
@@ -2726,6 +2756,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    playbackSecondsRef.current = playbackSeconds;
+  }, [playbackSeconds]);
+
+  useEffect(() => {
     const audio = audioRef.current;
     if (!audio) {
       return;
@@ -2741,7 +2775,9 @@ export default function App() {
     }
 
     const handleTimeUpdate = () => {
-      setPlaybackSeconds(audio.currentTime || 0);
+      const nextSeconds = audio.currentTime || 0;
+      playbackSecondsRef.current = nextSeconds;
+      setPlaybackSeconds(nextSeconds);
     };
 
     const handleLoadedMetadata = () => {
@@ -2883,6 +2919,7 @@ export default function App() {
       const handleRestoreSeek = () => {
         const boundedTime = Math.min(restoreTime, Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : restoreTime);
         audio.currentTime = boundedTime;
+        playbackSecondsRef.current = boundedTime;
         setPlaybackSeconds(boundedTime);
         restorePlaybackSecondsRef.current = 0;
       };
@@ -2990,6 +3027,13 @@ export default function App() {
   );
 
   function handleSelectQuality(song: Song, level: DownloadQualityLevel) {
+    const isCurrentTrack = currentTrack?.id === song.id;
+    const audio = audioRef.current;
+    const resumeSeconds = isCurrentTrack
+      ? Math.max(0, audio?.currentTime || playbackSecondsRef.current || playbackSeconds || 0)
+      : 0;
+    const shouldResumePlayback = isCurrentTrack && Boolean(audio && !audio.paused);
+
     setQualitySelections((current) => ({
       ...current,
       [song.id]: level
@@ -3000,9 +3044,9 @@ export default function App() {
     }));
     setOpenQualityMenuId(null);
 
-    if (accountIsLoggedIn && currentTrack?.id === song.id && isPlaying) {
+    if (accountIsLoggedIn && isCurrentTrack) {
       window.setTimeout(() => {
-        syncAudioForSong(song, true);
+        syncAudioForSong(song, shouldResumePlayback, { level, startAtSeconds: resumeSeconds });
       }, 0);
     }
   }
@@ -4930,6 +4974,7 @@ export default function App() {
               onChange={(event) => {
                 const audio = audioRef.current;
                 const nextTime = Number(event.target.value);
+                playbackSecondsRef.current = nextTime;
                 setPlaybackSeconds(nextTime);
                 if (audio) {
                   audio.currentTime = nextTime;
@@ -4999,6 +5044,7 @@ export default function App() {
               onChange={(event) => {
                 const audio = audioRef.current;
                 const nextTime = Number(event.target.value);
+                playbackSecondsRef.current = nextTime;
                 setPlaybackSeconds(nextTime);
                 if (audio) {
                   audio.currentTime = nextTime;
