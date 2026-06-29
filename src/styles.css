@@ -6151,15 +6151,85 @@ body {
   font-weight: 700;
 }
 
-.playlist-sort-control select {
+.playlist-sort-select {
+  position: relative;
+  min-width: 146px;
+}
+
+.playlist-sort-trigger {
   height: 42px;
-  min-width: 132px;
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 8px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
   background: rgba(19, 28, 42, 0.74);
   color: var(--text-primary);
-  padding: 0 12px;
+  padding: 0 8px 0 13px;
   font: inherit;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+
+.playlist-sort-trigger > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playlist-sort-trigger:hover,
+.playlist-sort-trigger[aria-expanded="true"] {
+  border-color: rgba(255, 180, 93, 0.26);
+  background: rgba(27, 36, 52, 0.9);
+}
+
+.playlist-sort-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 82;
+  width: 100%;
+  min-width: 168px;
+  padding: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 15px;
+  background:
+    linear-gradient(180deg, rgba(24, 31, 45, 0.98), rgba(14, 19, 30, 0.98)),
+    var(--panel-bg-solid);
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(18px);
+}
+
+.playlist-sort-option {
+  width: 100%;
+  min-height: 36px;
+  border: none;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+
+.playlist-sort-option:hover {
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text-primary);
+}
+
+.playlist-sort-option.active {
+  background:
+    linear-gradient(135deg, rgba(255, 180, 93, 0.2), rgba(255, 180, 93, 0.07)),
+    rgba(42, 32, 24, 0.42);
+  color: #ffe0a3;
 }
 
 .playlist-filter-form {

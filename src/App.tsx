@@ -625,6 +625,7 @@ export default function App() {
   const [qualitySelections, setQualitySelections] = useState<Record<string, DownloadQualityLevel>>({});
   const [qualitySelectionTouched, setQualitySelectionTouched] = useState<Record<string, true>>({});
   const [openQualityMenuId, setOpenQualityMenuId] = useState<string | null>(null);
+  const [openPlaylistSortMenu, setOpenPlaylistSortMenu] = useState(false);
   const [openSettingsQualityMenu, setOpenSettingsQualityMenu] = useState<"playback" | "download" | null>(null);
   const [mainTab, setMainTab] = useState<MainTab>("search");
   const [navKey, setNavKey] = useState<NavKey>("discover");
@@ -2507,6 +2508,7 @@ export default function App() {
 
   function handlePlaylistSortChange(nextSortMode: PlaylistSortMode) {
     setPlaylistSortMode(nextSortMode);
+    setOpenPlaylistSortMenu(false);
 
     if (!activePlaylist || loadingPlaylistSongs) {
       return;
@@ -2641,6 +2643,7 @@ export default function App() {
   useEffect(() => {
     function handleWindowClick() {
       setOpenQualityMenuId(null);
+      setOpenPlaylistSortMenu(false);
       setAccountMenuOpen(false);
       closeSongContextMenu();
     }
@@ -4428,13 +4431,39 @@ export default function App() {
                   <div className="playlist-toolbar-controls">
                     <label className="playlist-sort-control">
                       <span>排序</span>
-                      <select value={playlistSortMode} onChange={(event) => handlePlaylistSortChange(event.target.value as PlaylistSortMode)}>
-                        {playlistSortOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="playlist-sort-select" onClick={(event) => event.stopPropagation()}>
+                        <button
+                          type="button"
+                          className="playlist-sort-trigger"
+                          aria-haspopup="listbox"
+                          aria-expanded={openPlaylistSortMenu}
+                          onClick={() => {
+                            setOpenQualityMenuId(null);
+                            setOpenPlaylistSortMenu((current) => !current);
+                          }}
+                        >
+                          <span>{playlistSortOptions.find((option) => option.value === playlistSortMode)?.label ?? "默认顺序"}</span>
+                          <span className={openPlaylistSortMenu ? "quality-caret open" : "quality-caret"}>
+                            <ChevronIcon />
+                          </span>
+                        </button>
+                        {openPlaylistSortMenu ? (
+                          <div className="playlist-sort-menu" role="listbox" aria-label="歌单歌曲排序">
+                            {playlistSortOptions.map((option) => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                role="option"
+                                aria-selected={playlistSortMode === option.value}
+                                className={playlistSortMode === option.value ? "playlist-sort-option active" : "playlist-sort-option"}
+                                onClick={() => handlePlaylistSortChange(option.value)}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
                     </label>
                     <form className="playlist-filter-form" onSubmit={handlePlaylistSearchSubmit}>
                       <input
