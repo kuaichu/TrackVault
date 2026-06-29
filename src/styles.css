@@ -7938,7 +7938,7 @@ body {
   }
 }
 
-/* Album-driven player theme: the cover color sets the expanded player and dock mood. */
+/* Album-driven player theme: cover color is reserved for the expanded player. */
 .app-shell {
   --player-theme-base: 18, 24, 36;
   --player-theme-panel: 12, 18, 28;
@@ -7997,7 +7997,6 @@ body {
     inset 0 0 70px rgba(255, 255, 255, 0.035);
 }
 
-.player-bar.player-dock,
 .player-bar.player-modal-controls {
   background-image:
     linear-gradient(90deg, rgba(var(--player-theme-panel), 0.97), rgba(var(--player-theme-base), 0.93) 52%, rgba(var(--player-theme-panel), 0.98)),
@@ -8014,18 +8013,16 @@ body {
     box-shadow 360ms ease;
 }
 
-.player-bar::before {
+.player-bar.player-modal-controls::before {
   background: linear-gradient(90deg, transparent, rgba(var(--player-theme-accent), 0.26), rgba(var(--player-theme-glow), 0.16), transparent);
 }
 
-.player-bar .dock-icon:hover,
 .player-bar-modal .dock-icon:hover {
   border-color: rgba(var(--player-theme-accent), 0.24);
   background: rgba(var(--player-theme-glow), 0.11);
   color: rgb(var(--player-theme-accent));
 }
 
-.player-bar .dock-icon.primary,
 .player-bar-modal .dock-icon.primary {
   border-color: rgba(var(--player-theme-accent), 0.58);
   background:
@@ -8038,7 +8035,6 @@ body {
     inset 0 1px 0 rgba(255, 255, 255, 0.58);
 }
 
-.player-bar .dock-icon.primary:hover,
 .player-bar-modal .dock-icon.primary:hover {
   border-color: rgba(var(--player-theme-accent), 0.76);
   background:
@@ -8047,37 +8043,111 @@ body {
   color: #07131c;
 }
 
-.player-bar .dock-icon.mode-active,
 .player-modal-controls .dock-icon.mode-active {
   border-color: rgba(var(--player-theme-accent), 0.36);
   background: rgba(var(--player-theme-glow), 0.15);
   color: rgb(var(--player-theme-accent));
 }
 
-.player-bar .dock-icon.primary.locked-playback-button {
+.player-modal-controls .dock-icon.primary.locked-playback-button {
   border-color: rgba(var(--player-theme-accent), 0.22);
   background: rgba(var(--player-theme-glow), 0.12);
   color: rgba(var(--player-theme-accent), 0.74);
 }
 
-.player-bar input[type="range"].range-progress::-webkit-slider-runnable-track {
+.player-modal-controls input[type="range"].range-progress::-webkit-slider-runnable-track {
   background: linear-gradient(90deg, rgb(var(--player-theme-accent)) 0 var(--range-progress, 0%), rgba(var(--player-theme-soft), 0.72) var(--range-progress, 0%) 100%);
 }
 
-.player-bar input[type="range"].range-progress::-webkit-slider-thumb {
+.player-modal-controls input[type="range"].range-progress::-webkit-slider-thumb {
   background: rgb(var(--player-theme-accent));
   box-shadow: 0 0 0 4px rgba(var(--player-theme-glow), 0.12);
 }
 
-.player-bar input[type="range"].range-progress::-moz-range-track {
+.player-modal-controls input[type="range"].range-progress::-moz-range-track {
   background: rgba(var(--player-theme-soft), 0.72);
 }
 
-.player-bar input[type="range"].range-progress::-moz-range-progress {
+.player-modal-controls input[type="range"].range-progress::-moz-range-progress {
   background: rgb(var(--player-theme-accent));
 }
 
-.player-bar input[type="range"].range-progress::-moz-range-thumb {
+.player-modal-controls input[type="range"].range-progress::-moz-range-thumb {
   background: rgb(var(--player-theme-accent));
   box-shadow: 0 0 0 4px rgba(var(--player-theme-glow), 0.12);
+}
+
+/* Main-page dock stays with the app chrome instead of following album gradients. */
+.player-bar.player-dock {
+  background-image:
+    radial-gradient(circle at 18% 0%, rgba(255, 180, 93, 0.08), transparent 34%),
+    linear-gradient(90deg, rgba(11, 17, 27, 0.98), rgba(15, 23, 35, 0.95) 52%, rgba(11, 17, 27, 0.98)) !important;
+  border-color: rgba(255, 255, 255, 0.065);
+  box-shadow:
+    0 -10px 28px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.player-bar.player-dock::before {
+  background: linear-gradient(90deg, transparent, rgba(255, 180, 93, 0.28), rgba(255, 211, 112, 0.14), transparent);
+}
+
+.player-bar.player-dock .dock-icon:hover {
+  border-color: rgba(255, 180, 93, 0.22);
+  background: rgba(255, 180, 93, 0.1);
+  color: #ffd7a4;
+}
+
+.player-bar.player-dock .dock-icon.primary {
+  border-color: rgba(255, 180, 93, 0.5);
+  background:
+    radial-gradient(circle at 35% 24%, rgba(255, 255, 255, 0.5), transparent 31%),
+    linear-gradient(135deg, #ffb24f 0%, #ffd15f 100%);
+  color: #22140b;
+  box-shadow:
+    0 10px 24px rgba(255, 180, 93, 0.22),
+    0 0 0 5px rgba(255, 180, 93, 0.055),
+    inset 0 1px 0 rgba(255, 255, 255, 0.52);
+}
+
+.player-bar.player-dock .dock-icon.primary:hover {
+  border-color: rgba(255, 210, 124, 0.7);
+  background:
+    radial-gradient(circle at 35% 24%, rgba(255, 255, 255, 0.6), transparent 32%),
+    linear-gradient(135deg, #ffc06b 0%, #ffdc7f 100%);
+  color: #22140b;
+}
+
+.player-bar.player-dock .dock-icon.mode-active {
+  border-color: rgba(255, 180, 93, 0.34);
+  background: rgba(255, 180, 93, 0.15);
+  color: #ffd36f;
+}
+
+.player-bar.player-dock .dock-icon.primary.locked-playback-button {
+  border-color: rgba(255, 180, 93, 0.2);
+  background: rgba(255, 180, 93, 0.12);
+  color: rgba(255, 215, 164, 0.76);
+}
+
+.player-bar.player-dock input[type="range"].range-progress::-webkit-slider-runnable-track {
+  background: linear-gradient(90deg, #ffb85f 0 var(--range-progress, 0%), rgba(62, 76, 96, 0.72) var(--range-progress, 0%) 100%);
+}
+
+.player-bar.player-dock input[type="range"].range-progress::-webkit-slider-thumb {
+  background: #ffd08a;
+  box-shadow: 0 0 0 4px rgba(255, 180, 93, 0.12);
+}
+
+.player-bar.player-dock input[type="range"].range-progress::-moz-range-track {
+  background: rgba(62, 76, 96, 0.72);
+}
+
+.player-bar.player-dock input[type="range"].range-progress::-moz-range-progress {
+  background: #ffb85f;
+}
+
+.player-bar.player-dock input[type="range"].range-progress::-moz-range-thumb {
+  background: #ffd08a;
+  box-shadow: 0 0 0 4px rgba(255, 180, 93, 0.12);
 }
