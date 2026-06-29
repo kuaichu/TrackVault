@@ -101,9 +101,10 @@ export async function getSettings(): Promise<AppSettings> {
     const insertStatement = database.prepare(`
       INSERT INTO app_settings (settings_key, settings_json, updated_at)
       VALUES (?, ?, ?)
+      ON CONFLICT(settings_key) DO NOTHING
     `);
     insertStatement.run(settingsKey, JSON.stringify(seedSettings), Date.now());
-    row = { settings_json: JSON.stringify(seedSettings) };
+    row = (selectStatement.get(settingsKey) as { settings_json: string } | undefined) ?? { settings_json: JSON.stringify(seedSettings) };
   }
 
   return normalizeSettings(JSON.parse(row.settings_json) as Partial<AppSettings>);
@@ -206,9 +207,10 @@ export async function getStoredAdminConfig(): Promise<AdminConfig> {
     const insertStatement = database.prepare(`
       INSERT INTO app_settings (settings_key, settings_json, updated_at)
       VALUES (?, ?, ?)
+      ON CONFLICT(settings_key) DO NOTHING
     `);
     insertStatement.run(adminConfigKey, JSON.stringify(defaultAdminConfig), Date.now());
-    row = { settings_json: JSON.stringify(defaultAdminConfig) };
+    row = (selectStatement.get(adminConfigKey) as { settings_json: string } | undefined) ?? { settings_json: JSON.stringify(defaultAdminConfig) };
   }
 
   return normalizeAdminConfig(JSON.parse(row.settings_json) as Partial<AdminConfig>);
@@ -244,9 +246,10 @@ async function getSettingsByKey(settingsKey: string): Promise<AppSettings> {
     const insertStatement = database.prepare(`
       INSERT INTO app_settings (settings_key, settings_json, updated_at)
       VALUES (?, ?, ?)
+      ON CONFLICT(settings_key) DO NOTHING
     `);
     insertStatement.run(settingsKey, JSON.stringify(seedSettings), Date.now());
-    row = { settings_json: JSON.stringify(seedSettings) };
+    row = (selectStatement.get(settingsKey) as { settings_json: string } | undefined) ?? { settings_json: JSON.stringify(seedSettings) };
   }
 
   return normalizeSettings(JSON.parse(row.settings_json) as Partial<AppSettings>);

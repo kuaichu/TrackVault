@@ -4076,7 +4076,6 @@ export default function App() {
     },
     [activePlaylist, playlistSongsLimit, playlistSongsTotal, playlistSearchKeyword]
   );
-  const canGoBackFromCurrentView = viewHistory.length > 0 || isPlaylistSongsView;
   const playbackRatio = playbackDuration > 0 ? Math.min(100, (playbackSeconds / playbackDuration) * 100) : 0;
   const bufferedRatio = playbackDuration > 0 ? Math.min(100, (Math.max(bufferedSeconds, playbackSeconds) / playbackDuration) * 100) : 0;
   const playbackRangeStyle = { "--range-fill": `${playbackRatio}%`, "--range-buffer": `${bufferedRatio}%` } as CSSProperties;
@@ -4106,6 +4105,7 @@ export default function App() {
   const currentQualityLabel = currentTrack ? getSelectedLabel(currentTrack) : "128K";
   const isDiscoverListView = mainTab === "search" && navKey === "discover" && resultSource === "discover";
   const isPlaylistSongsView = mainTab === "search" && navKey === "playlists" && resultSource === "playlist" && Boolean(activePlaylist);
+  const canGoBackFromCurrentView = viewHistory.length > 0 || isPlaylistSongsView;
   const showAdminFallbackControls = false;
   const listHeaderMeta =
     isDiscoverListView
