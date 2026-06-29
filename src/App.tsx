@@ -3049,6 +3049,7 @@ export default function App() {
         : activeMeta;
   const currentQualityLabel = currentTrack ? getSelectedLabel(currentTrack) : "128K";
   const isDiscoverListView = mainTab === "search" && navKey === "discover" && resultSource === "discover";
+  const showAdminFallbackControls = false;
   const listHeaderMeta =
     isDiscoverListView
       ? { count: `推荐新歌 · ${results.length} 首`, note: "来自网易云推荐新歌", action: loadingDiscoverSongs ? "加载中" : "刷新推荐", disabled: loadingDiscoverSongs, onClick: loadDiscoverSongs }
@@ -4643,49 +4644,53 @@ export default function App() {
                 </div>
               </form>
 
-              <div className="form-head">
-                <p className="eyebrow">高级控制</p>
-                <h1>白名单特权与保底凭证</h1>
-              </div>
+              {showAdminFallbackControls ? (
+                <>
+                  <div className="form-head">
+                    <p className="eyebrow">高级控制</p>
+                    <h1>白名单特权与保底凭证</h1>
+                  </div>
 
-              <form className="settings-grid" onSubmit={handleSaveAdminConfig}>
-                <label className="settings-card">
-                  <span>Feature Pass Whitelist</span>
-                  <p>填写允许触发高阶凭证回退的用户 ID，支持逗号分隔或按行输入。</p>
-                  <textarea
-                    value={adminConfig.trustedUserWhitelistText}
-                    onChange={(event) => setAdminConfig((current) => ({ ...current, trustedUserWhitelistText: event.target.value }))}
-                    placeholder={"123456789\n987654321"}
-                  />
-                </label>
+                  <form className="settings-grid" onSubmit={handleSaveAdminConfig}>
+                    <label className="settings-card">
+                      <span>Feature Pass Whitelist</span>
+                      <p>填写允许触发高阶凭证回退的用户 ID，支持逗号分隔或按行输入。</p>
+                      <textarea
+                        value={adminConfig.trustedUserWhitelistText}
+                        onChange={(event) => setAdminConfig((current) => ({ ...current, trustedUserWhitelistText: event.target.value }))}
+                        placeholder={"123456789\n987654321"}
+                      />
+                    </label>
 
-                <label className="settings-card">
-                  <span>System Default Token</span>
-                  <p>{adminConfig.hasSystemDefaultToken ? "已配置全局保底凭证，留空表示保持不变。" : "管理员保底凭证，仅在命中白名单且个人凭证无高阶权限时回退使用。"}</p>
-                  <input
-                    type="password"
-                    value={adminConfigTokenInput}
-                    onChange={(event) => setAdminConfigTokenInput(event.target.value)}
-                    placeholder={adminConfig.hasSystemDefaultToken ? "••••••••••••••••" : "输入新的系统保底凭证"}
-                  />
-                </label>
+                    <label className="settings-card">
+                      <span>System Default Token</span>
+                      <p>{adminConfig.hasSystemDefaultToken ? "已配置全局保底凭证，留空表示保持不变。" : "管理员保底凭证，仅在命中白名单且个人凭证无高阶权限时回退使用。"}</p>
+                      <input
+                        type="password"
+                        value={adminConfigTokenInput}
+                        onChange={(event) => setAdminConfigTokenInput(event.target.value)}
+                        placeholder={adminConfig.hasSystemDefaultToken ? "••••••••••••••••" : "输入新的系统保底凭证"}
+                      />
+                    </label>
 
-                <label className="settings-card">
-                  <span>启用系统保底回退</span>
-                  <p>仅对白名单内且已登录的测试用户生效，普通用户永远只能使用自己的个人凭证。</p>
-                  <input
-                    type="checkbox"
-                    checked={adminConfig.systemFallbackEnabled}
-                    onChange={(event) => setAdminConfig((current) => ({ ...current, systemFallbackEnabled: event.target.checked }))}
-                  />
-                </label>
+                    <label className="settings-card">
+                      <span>启用系统保底回退</span>
+                      <p>仅对白名单内且已登录的测试用户生效，普通用户永远只能使用自己的个人凭证。</p>
+                      <input
+                        type="checkbox"
+                        checked={adminConfig.systemFallbackEnabled}
+                        onChange={(event) => setAdminConfig((current) => ({ ...current, systemFallbackEnabled: event.target.checked }))}
+                      />
+                    </label>
 
-                <div className="form-actions">
-                  <button type="submit" className="primary-button wide" disabled={savingAdminConfig}>
-                    {savingAdminConfig ? "保存中" : "保存高级控制"}
-                  </button>
-                </div>
-              </form>
+                    <div className="form-actions">
+                      <button type="submit" className="primary-button wide" disabled={savingAdminConfig}>
+                        {savingAdminConfig ? "保存中" : "保存高级控制"}
+                      </button>
+                    </div>
+                  </form>
+                </>
+              ) : null}
             </section>
           )}
         </section>
