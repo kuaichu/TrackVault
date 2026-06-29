@@ -7937,3 +7937,147 @@ body {
     inset: 0 0 120px;
   }
 }
+
+/* Album-driven player theme: the cover color sets the expanded player and dock mood. */
+.app-shell {
+  --player-theme-base: 18, 24, 36;
+  --player-theme-panel: 12, 18, 28;
+  --player-theme-soft: 42, 56, 78;
+  --player-theme-glow: 143, 205, 236;
+  --player-theme-accent: 167, 223, 247;
+  --player-cover-image: none;
+}
+
+.player-modal {
+  background: rgb(var(--player-theme-panel));
+  transition:
+    background-color 360ms ease,
+    opacity 300ms ease,
+    transform 360ms cubic-bezier(0.22, 0.82, 0.22, 1);
+}
+
+.player-modal-backdrop {
+  background-image:
+    linear-gradient(180deg, rgba(var(--player-theme-base), 0.2), rgba(var(--player-theme-panel), 0.82)),
+    var(--player-cover-image);
+  filter: blur(88px) brightness(0.5) saturate(1.35);
+  opacity: 0.72;
+  transform: scale(1.2);
+}
+
+.player-modal-shade {
+  background:
+    radial-gradient(circle at 27% 38%, rgba(var(--player-theme-glow), 0.26), transparent 36%),
+    radial-gradient(circle at 76% 18%, rgba(var(--player-theme-soft), 0.22), transparent 38%),
+    radial-gradient(circle at 56% 88%, rgba(var(--player-theme-glow), 0.12), transparent 44%),
+    linear-gradient(180deg, rgba(var(--player-theme-base), 0.88) 0%, rgba(var(--player-theme-panel), 0.82) 58%, rgba(6, 7, 11, 0.78) 100%);
+  backdrop-filter: blur(5px);
+  transition: background 360ms ease;
+}
+
+.player-modal-window {
+  background:
+    linear-gradient(90deg, rgba(var(--player-theme-base), 0.1), rgba(var(--player-theme-panel), 0.16)),
+    transparent;
+}
+
+.player-modal-title h2 {
+  text-shadow: 0 16px 42px rgba(var(--player-theme-glow), 0.16);
+}
+
+.player-meta-row span {
+  color: rgba(var(--player-theme-accent), 0.82);
+}
+
+.vinyl-disc {
+  border-color: rgba(var(--player-theme-glow), 0.12);
+  box-shadow:
+    0 40px 90px rgba(0, 0, 0, 0.58),
+    0 0 0 18px rgba(var(--player-theme-glow), 0.025),
+    inset 0 0 70px rgba(255, 255, 255, 0.035);
+}
+
+.player-bar.player-dock,
+.player-bar.player-modal-controls {
+  background-image:
+    linear-gradient(90deg, rgba(var(--player-theme-panel), 0.97), rgba(var(--player-theme-base), 0.93) 52%, rgba(var(--player-theme-panel), 0.98)),
+    linear-gradient(180deg, rgba(var(--player-theme-glow), 0.08), rgba(255, 255, 255, 0.012)),
+    var(--player-cover-image) !important;
+  border-color: rgba(var(--player-theme-glow), 0.16);
+  box-shadow:
+    0 -10px 28px rgba(0, 0, 0, 0.24),
+    0 -1px 18px rgba(var(--player-theme-glow), 0.075),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition:
+    background-image 360ms ease,
+    border-color 360ms ease,
+    box-shadow 360ms ease;
+}
+
+.player-bar::before {
+  background: linear-gradient(90deg, transparent, rgba(var(--player-theme-accent), 0.26), rgba(var(--player-theme-glow), 0.16), transparent);
+}
+
+.player-bar .dock-icon:hover,
+.player-bar-modal .dock-icon:hover {
+  border-color: rgba(var(--player-theme-accent), 0.24);
+  background: rgba(var(--player-theme-glow), 0.11);
+  color: rgb(var(--player-theme-accent));
+}
+
+.player-bar .dock-icon.primary,
+.player-bar-modal .dock-icon.primary {
+  border-color: rgba(var(--player-theme-accent), 0.58);
+  background:
+    radial-gradient(circle at 35% 24%, rgba(255, 255, 255, 0.54), transparent 31%),
+    linear-gradient(135deg, rgba(var(--player-theme-accent), 0.98), rgba(var(--player-theme-glow), 0.92));
+  color: #07131c;
+  box-shadow:
+    0 10px 24px rgba(var(--player-theme-glow), 0.24),
+    0 0 0 5px rgba(var(--player-theme-glow), 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.58);
+}
+
+.player-bar .dock-icon.primary:hover,
+.player-bar-modal .dock-icon.primary:hover {
+  border-color: rgba(var(--player-theme-accent), 0.76);
+  background:
+    radial-gradient(circle at 35% 24%, rgba(255, 255, 255, 0.64), transparent 32%),
+    linear-gradient(135deg, rgb(var(--player-theme-accent)), rgba(var(--player-theme-glow), 0.96));
+  color: #07131c;
+}
+
+.player-bar .dock-icon.mode-active,
+.player-modal-controls .dock-icon.mode-active {
+  border-color: rgba(var(--player-theme-accent), 0.36);
+  background: rgba(var(--player-theme-glow), 0.15);
+  color: rgb(var(--player-theme-accent));
+}
+
+.player-bar .dock-icon.primary.locked-playback-button {
+  border-color: rgba(var(--player-theme-accent), 0.22);
+  background: rgba(var(--player-theme-glow), 0.12);
+  color: rgba(var(--player-theme-accent), 0.74);
+}
+
+.player-bar input[type="range"].range-progress::-webkit-slider-runnable-track {
+  background: linear-gradient(90deg, rgb(var(--player-theme-accent)) 0 var(--range-progress, 0%), rgba(var(--player-theme-soft), 0.72) var(--range-progress, 0%) 100%);
+}
+
+.player-bar input[type="range"].range-progress::-webkit-slider-thumb {
+  background: rgb(var(--player-theme-accent));
+  box-shadow: 0 0 0 4px rgba(var(--player-theme-glow), 0.12);
+}
+
+.player-bar input[type="range"].range-progress::-moz-range-track {
+  background: rgba(var(--player-theme-soft), 0.72);
+}
+
+.player-bar input[type="range"].range-progress::-moz-range-progress {
+  background: rgb(var(--player-theme-accent));
+}
+
+.player-bar input[type="range"].range-progress::-moz-range-thumb {
+  background: rgb(var(--player-theme-accent));
+  box-shadow: 0 0 0 4px rgba(var(--player-theme-glow), 0.12);
+}

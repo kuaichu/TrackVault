@@ -195,6 +195,167 @@ type SongCachePayload = {
   songs: Song[];
 };
 
+type RgbColor = { r: number; g: number; b: number };
+type HslColor = { h: number; s: number; l: number };
+type PlayerTheme = {
+  base: string;
+  panel: string;
+  soft: string;
+  glow: string;
+  accent: string;
+};
+
+type PlayerThemeStyle = CSSProperties & {
+  "--player-theme-base": string;
+  "--player-theme-panel": string;
+  "--player-theme-soft": string;
+  "--player-theme-glow": string;
+  "--player-theme-accent": string;
+  "--player-cover-image": string;
+};
+
+const defaultPlayerTheme: PlayerTheme = {
+  base: "18, 24, 36",
+  panel: "12, 18, 28",
+  soft: "42, 56, 78",
+  glow: "143, 205, 236",
+  accent: "167, 223, 247"
+};
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function rgbToHsl({ r, g, b }: RgbColor): HslColor {
+  const red = r / 255;
+  const green = g / 255;
+  const blue = b / 255;
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const lightness = (max + min) / 2;
+
+  if (max === min) {
+    return { h: 215, s: 0.12, l: lightness };
+  }
+
+  const delta = max - min;
+  const saturation = lightness > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+  let hue = 0;
+
+  if (max === red) {
+    hue = (green - blue) / delta + (green < blue ? 6 : 0);
+  } else if (max === green) {
+    hue = (blue - red) / delta + 2;
+  } else {
+    hue = (red - green) / delta + 4;
+  }
+
+  return { h: hue * 60, s: saturation, l: lightness };
+}
+
+function hslToRgb({ h, s, l }: HslColor): RgbColor {
+  const hue = (((h % 360) + 360) % 360) / 360;
+
+  if (s <= 0) {
+    const value = Math.round(l * 255);
+    return { r: value, g: value, b: value };
+  }
+
+  const hueToRgb = (p: number, q: number, t: number) => {
+    let nextT = t;
+    if (nextT < 0) nextT += 1;
+    if (nextT > 1) nextT -= 1;
+    if (nextT < 1 / 6) return p + (q - p) * 6 * nextT;
+    if (nextT < 1 / 2) return q;
+    if (nextT < 2 / 3) return p + (q - p) * (2 / 3 - nextT) * 6;
+    return p;
+  };
+
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+
+  return {
+    r: Math.round(hueToRgb(p, q, hue + 1 / 3) * 255),
+    g: Math.round(hueToRgb(p, q, hue) * 255),
+    b: Math.round(hueToRgb(p, q, hue - 1 / 3) * 255)
+  };
+}
+
+function rgbToCss({ r, g, b }: RgbColor) {
+  return `${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}`;
+}
+
+function buildPlayerThemeFromColor(color: RgbColor): PlayerTheme {
+  const hsl = rgbToHsl(color);
+  const saturation = clampNumber(hsl.s, 0.18, 0.62);
+
+  return {
+    base: rgbToCss(hslToRgb({ h: hsl.h, s: saturation * 0.48, l: 0.15 })),
+    panel: rgbToCss(hslToRgb({ h: hsl.h, s: saturation * 0.5, l: 0.12 })),
+    soft: rgbToCss(hslToRgb({ h: hsl.h, s: saturation * 0.6, l: 0.24 })),
+    glow: rgbToCss(hslToRgb({ h: hsl.h, s: saturation * 0.72, l: 0.36 })),
+    accent: rgbToCss(hslToRgb({ h: hsl.h, s: saturation * 0.84, l: 0.62 }))
+  };
+}
+
+function buildFallbackPlayerTheme(seed: string): PlayerTheme {
+  let hash = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = (hash * 31 + seed.charCodeAt(index)) >>> 0;
+  }
+
+  return buildPlayerThemeFromColor(hslToRgb({ h: hash % 360, s: 0.42, l: 0.42 }));
+}
+
+function pickAtmosphereColor(image: HTMLImageElement): RgbColor {
+  const canvas = document.createElement("canvas");
+  const size = 48;
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    throw new Error("Canvas is not available");
+  }
+
+  context.drawImage(image, 0, 0, size, size);
+  const { data } = context.getImageData(0, 0, size, size);
+  let totalWeight = 0;
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+
+  for (let index = 0; index < data.length; index += 4) {
+    const alpha = data[index + 3];
+    if (alpha < 220) {
+      continue;
+    }
+
+    const color = { r: data[index], g: data[index + 1], b: data[index + 2] };
+    const hsl = rgbToHsl(color);
+    if (hsl.l < 0.12 || hsl.l > 0.86) {
+      continue;
+    }
+
+    const chromaWeight = clampNumber(hsl.s * 1.8, 0.08, 1.2);
+    const midLightWeight = 1 - Math.abs(hsl.l - 0.48) * 1.45;
+    const weight = Math.max(0.04, chromaWeight * clampNumber(midLightWeight, 0.25, 1));
+    red += color.r * weight;
+    green += color.g * weight;
+    blue += color.b * weight;
+    totalWeight += weight;
+  }
+
+  if (totalWeight <= 0) {
+    throw new Error("No usable cover pixels");
+  }
+
+  return {
+    r: red / totalWeight,
+    g: green / totalWeight,
+    b: blue / totalWeight
+  };
+}
+
 function loadSearchHistory() {
   try {
     const rawHistory = window.localStorage.getItem(SEARCH_HISTORY_STORAGE_KEY);
@@ -575,6 +736,7 @@ export default function App() {
   const neteaseAuditJobIdRef = useRef("");
   const playlistCompareJobIdRef = useRef("");
   const userProfileCacheRef = useRef<Record<string, { profile: UserProfile; cachedAt: number }>>({});
+  const playerThemeCacheRef = useRef<Record<string, PlayerTheme>>({});
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Song[]>([]);
   const [searchHistory, setSearchHistory] = useState<string[]>(loadSearchHistory);
@@ -660,6 +822,7 @@ export default function App() {
   const [navKey, setNavKey] = useState<NavKey>("discover");
   const [viewHistory, setViewHistory] = useState<ViewState[]>([]);
   const [currentTrack, setCurrentTrack] = useState<Song | null>(initialPlayerState.currentTrack);
+  const [playerTheme, setPlayerTheme] = useState<PlayerTheme>(defaultPlayerTheme);
   const [playQueue, setPlayQueue] = useState<Song[]>(initialPlayerState.playQueue);
   const [playHistory, setPlayHistory] = useState<Song[]>(loadPlayHistory);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("queue");
@@ -2914,6 +3077,57 @@ export default function App() {
   }, [currentTrack?.id, settings.neteaseCookie]);
 
   useEffect(() => {
+    if (!currentTrack?.coverUrl) {
+      setPlayerTheme(defaultPlayerTheme);
+      return;
+    }
+
+    const themeCacheKey = currentTrack.coverUrl;
+    const cachedTheme = playerThemeCacheRef.current[themeCacheKey];
+    if (cachedTheme) {
+      setPlayerTheme(cachedTheme);
+      return;
+    }
+
+    let cancelled = false;
+    const coverImage = new Image();
+    coverImage.crossOrigin = "anonymous";
+    coverImage.decoding = "async";
+
+    coverImage.onload = () => {
+      if (cancelled) {
+        return;
+      }
+
+      try {
+        const nextTheme = buildPlayerThemeFromColor(pickAtmosphereColor(coverImage));
+        playerThemeCacheRef.current[themeCacheKey] = nextTheme;
+        setPlayerTheme(nextTheme);
+      } catch {
+        const fallbackTheme = buildFallbackPlayerTheme(`${currentTrack.title}-${currentTrack.artist}-${currentTrack.coverUrl}`);
+        playerThemeCacheRef.current[themeCacheKey] = fallbackTheme;
+        setPlayerTheme(fallbackTheme);
+      }
+    };
+
+    coverImage.onerror = () => {
+      if (cancelled) {
+        return;
+      }
+
+      const fallbackTheme = buildFallbackPlayerTheme(`${currentTrack.title}-${currentTrack.artist}-${currentTrack.coverUrl}`);
+      playerThemeCacheRef.current[themeCacheKey] = fallbackTheme;
+      setPlayerTheme(fallbackTheme);
+    };
+
+    coverImage.src = currentTrack.coverUrl;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTrack?.coverUrl, currentTrack?.artist, currentTrack?.title]);
+
+  useEffect(() => {
     let cancelled = false;
     playerStateHydratedRef.current = false;
     setPlayerStateReady(false);
@@ -3535,6 +3749,17 @@ export default function App() {
   const bufferedRatio = playbackDuration > 0 ? Math.min(100, (Math.max(bufferedSeconds, playbackSeconds) / playbackDuration) * 100) : 0;
   const playbackRangeStyle = { "--range-fill": `${playbackRatio}%`, "--range-buffer": `${bufferedRatio}%` } as CSSProperties;
   const volumeRangeStyle = { "--range-fill": `${volume}%` } as CSSProperties;
+  const playerThemeStyle = useMemo<PlayerThemeStyle>(
+    () => ({
+      "--player-theme-base": playerTheme.base,
+      "--player-theme-panel": playerTheme.panel,
+      "--player-theme-soft": playerTheme.soft,
+      "--player-theme-glow": playerTheme.glow,
+      "--player-theme-accent": playerTheme.accent,
+      "--player-cover-image": currentTrack?.coverUrl ? `url("${currentTrack.coverUrl}")` : "none"
+    }),
+    [currentTrack?.coverUrl, playerTheme]
+  );
   const activeMeta = navText[navKey];
   const contentMeta =
     mainTab === "settings"
@@ -3778,27 +4003,13 @@ export default function App() {
     }
   }
 
-  function getPlayerBarBackgroundStyle() {
-    if (!currentTrack?.coverUrl) {
-      return undefined;
-    }
-
-    return {
-      backgroundImage: `
-        linear-gradient(90deg, rgba(8, 12, 19, 0.92), rgba(11, 15, 22, 0.76) 48%, rgba(8, 12, 19, 0.9)),
-        linear-gradient(180deg, rgba(255, 180, 93, 0.08), rgba(255, 255, 255, 0.015)),
-        url("${currentTrack.coverUrl}")
-      `
-    };
-  }
-
   function renderPlayerBar(mode: "dock" | "modal") {
     const isModalBar = mode === "modal";
     const playerBarClass = `player-bar ${isModalBar ? "player-bar-modal player-modal-controls" : "player-bar-dock player-dock"}`;
     const trackCover = <CoverArt song={currentTrack} className="dock-cover player-bar-cover" />;
 
     return (
-      <footer className={playerBarClass} style={getPlayerBarBackgroundStyle()}>
+      <footer className={playerBarClass}>
         <div className="dock-track player-bar-track">
           {isModalBar ? (
             <div className="dock-cover-button player-bar-cover-frame" aria-hidden="true">
@@ -4014,7 +4225,7 @@ export default function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" style={playerThemeStyle}>
       <audio ref={audioRef} preload="none" />
 
       <main className="app-layout">
