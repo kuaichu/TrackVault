@@ -20,6 +20,7 @@ import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./se
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
 import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, getTaskFileForDownload, resolveDirectDownload, resolveSongStream } from "./task-store.js";
 import { checkNeteaseQrLogin, loginWithNeteaseCellphone, sendNeteaseCaptcha, startNeteaseQrLogin } from "./netease-auth.js";
+import { getUserProfile } from "./user-provider.js";
 import { formatTransferExport } from "./playlist-transfer/export-formatters.js";
 import { buildNeteaseImportedPlaylistAudit } from "./playlist-transfer/netease-import-audit.js";
 import { cancelNeteaseImportAuditJob, formatNeteaseImportAuditJobExport, getNeteaseImportAuditJob, startNeteaseImportAuditJob } from "./playlist-transfer/netease-import-audit-job.js";
@@ -199,6 +200,16 @@ app.get("/api/comments/songs/:id", async (request, response) => {
   } catch (error) {
     response.status(502).json({
       message: error instanceof Error ? error.message : "获取评论失败"
+    });
+  }
+});
+
+app.get("/api/users/:id", async (request, response) => {
+  try {
+    response.json({ user: await getUserProfile(request.params.id) });
+  } catch (error) {
+    response.status(502).json({
+      message: error instanceof Error ? error.message : "获取用户信息失败"
     });
   }
 });

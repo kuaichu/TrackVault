@@ -1,0 +1,173 @@
+import { createRequire } from "node:module";
+import { getSettings } from "./settings-store.js";
+import type { UserProfile, UserProfilePlaylist } from "./types.js";
+
+const require = createRequire(import.meta.url);
+const { user_detail, user_playlist } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
+
+type RawUserProfile = {
+  userId?: number;
+  nickname?: string;
+  avatarUrl?: string;
+  backgroundUrl?: string;
+  signature?: string;
+  follows?: number;
+  followeds?: number;
+  eventCount?: number;
+  playlistCount?: number;
+  gender?: number;
+  province?: number;
+  city?: number;
+  birthday?: number;
+  createTime?: number;
+  vipType?: number;
+};
+
+type UserDetailBody = {
+  code?: number;
+  message?: string;
+  msg?: string;
+  level?: number;
+  listenSongs?: number;
+  profile?: RawUserProfile;
+};
+
+type RawUserPlaylist = {
+  id?: number;
+  name?: string;
+  coverImgUrl?: string;
+  trackCount?: number;
+  playCount?: number;
+  subscribed?: boolean;
+  creator?: {
+    userId?: number;
+  };
+};
+
+function formatImageUrl(url: string | undefined, size = 240) {
+  const trimmed = url?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  return `${trimmed}?param=${size}y${size}`;
+}
+
+function toNumber(value: number | undefined) {
+  return Math.max(0, Number.isFinite(value) ? Number(value) : 0);
+}
+
+function formatGender(gender: number | undefined): UserProfile["gender"] {
+  if (gender === 1) {
+    return "male";
+  }
+
+  if (gender === 2) {
+    return "female";
+  }
+
+  return "unknown";
+}
+
+function formatDateText(timestamp: number | undefined) {
+  if (!timestamp || timestamp <= 0) {
+    return undefined;
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date(timestamp));
+}
+
+function formatAgeText(timestamp: number | undefined) {
+  if (!timestamp || timestamp <= 0) {
+    return undefined;
+  }
+
+  const birthday = new Date(timestamp);
+  const now = new Date();
+  let age = now.getFullYear() - birthday.getFullYear();
+  const hasBirthdayPassed =
+    now.getMonth() > birthday.getMonth() ||
+    (now.getMonth() === birthday.getMonth() && now.getDate() >= birthday.getDate());
+
+  if (!hasBirthdayPassed) {
+    age -= 1;
+  }
+
+  if (age <= 0 || age > 120) {
+    return undefined;
+  }
+
+  return `${age} 岁`;
+}
+
+function mapPlaylist(playlist: RawUserPlaylist, userId: string): UserProfilePlaylist | null {
+  if (!playlist.id) {
+    return null;
+  }
+
+  const creatorId = playlist.creator?.userId ? String(playlist.creator.userId) : "";
+
+  return {
+    id: String(playlist.id),
+    name: playlist.name?.trim() || "未命名歌单",
+    coverUrl: formatImageUrl(playlist.coverImgUrl, 120),
+    trackCount: toNumber(playlist.trackCount),
+    playCount: toNumber(playlist.playCount),
+    owned: creatorId ? creatorId === userId : !playlist.subscribed
+  };
+}
+
+export async function getUserProfile(userId: string): Promise<UserProfile> {
+  const safeUserId = userId.trim();
+  if (!safeUserId) {
+    throw new Error("缺少用户 ID。");
+  }
+
+  const settings = await getSettings();
+  const cookie = settings.neteaseCookie.trim();
+  const requestConfig = cookie ? { cookie } : {};
+  const [detailResponse, playlistResponse] = await Promise.all([
+    user_detail({ uid: safeUserId, ...requestConfig }),
+    user_playlist({ uid: safeUserId, limit: 6, offset: 0, ...requestConfig }).catch(() => ({ body: {} }))
+  ]);
+
+  const detailBody = detailResponse.body as UserDetailBody;
+  if (typeof detailBody.code === "number" && detailBody.code !== 200) {
+    throw new Error(detailBody.message ?? detailBody.msg ?? `获取用户信息失败：${detailBody.code}`);
+  }
+
+  const profile = detailBody.profile;
+  if (!profile) {
+    throw new Error("没有读取到用户资料。");
+  }
+
+  const rawPlaylists = ((playlistResponse.body as { playlist?: RawUserPlaylist[] }).playlist ?? []) as RawUserPlaylist[];
+  const playlists = rawPlaylists
+    .map((playlist) => mapPlaylist(playlist, safeUserId))
+    .filter((playlist): playlist is UserProfilePlaylist => Boolean(playlist));
+
+  return {
+    id: String(profile.userId ?? safeUserId),
+    nickname: profile.nickname?.trim() || `UID ${safeUserId}`,
+    avatarUrl: formatImageUrl(profile.avatarUrl, 240),
+    backgroundUrl: formatImageUrl(profile.backgroundUrl, 720),
+    signature: profile.signature?.trim() || "这个人还没有写签名。",
+    level: toNumber(detailBody.level),
+    listenSongs: toNumber(detailBody.listenSongs),
+    follows: toNumber(profile.follows),
+    followeds: toNumber(profile.followeds),
+    eventCount: toNumber(profile.eventCount),
+    playlistCount: toNumber(profile.playlistCount),
+    gender: formatGender(profile.gender),
+    province: profile.province,
+    city: profile.city,
+    ageText: formatAgeText(profile.birthday),
+    createdAtText: formatDateText(profile.createTime),
+    vipType: profile.vipType,
+    playlists
+  };
+}

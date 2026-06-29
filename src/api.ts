@@ -32,6 +32,7 @@ import type {
   TransferExportFormat,
   TransferExportResult,
   TransferImportRequest,
+  UserProfile,
   UserPlaylist
 } from "./types";
 
@@ -372,6 +373,17 @@ export async function getSongComments(songId: string, page = 1, limit = 20): Pro
   }
 
   return (await response.json()) as SongCommentsPage;
+}
+
+export async function getUserProfile(userId: string): Promise<UserProfile> {
+  const response = await apiFetch(`/api/users/${encodeURIComponent(userId)}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取用户信息失败");
+  }
+
+  const data = (await response.json()) as { user: UserProfile };
+  return data.user;
 }
 
 export async function getArtistProfile(artistId: string): Promise<ArtistProfile> {

@@ -26,6 +26,7 @@ import {
   getPlaylistSongs,
   getPlaylists,
   getSongComments,
+  getUserProfile,
   getSearchHistory,
   getLyrics,
   getSettings,
@@ -53,7 +54,7 @@ import {
   startPlaylistTransferRunJob,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserPlaylist } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserPlaylist, UserProfile } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
@@ -133,6 +134,7 @@ type RightPanelTab = "queue" | "lyrics" | "comments";
 type ResultSource = "search" | "playlist" | "cloud" | "daily" | "discover" | "artist" | "album";
 type PlaylistSortMode = "default" | "title-asc" | "title-desc" | "artist-asc" | "artist-desc";
 type SongContextMenuState = { song: Song; x: number; y: number };
+type UserProfileTarget = { id: string; fallbackName?: string; fallbackAvatarUrl?: string };
 type NeteaseLoginMode = "qr" | "cellphone" | "cookie";
 type ViewSnapshot = {
   results: Song[];
@@ -356,6 +358,30 @@ function formatFileSize(size?: number) {
   }
 
   return `${(size / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function formatCompactCount(count: number) {
+  if (count >= 100000000) {
+    return `${(count / 100000000).toFixed(1).replace(/\.0$/, "")} 亿`;
+  }
+
+  if (count >= 10000) {
+    return `${(count / 10000).toFixed(1).replace(/\.0$/, "")} 万`;
+  }
+
+  return count.toLocaleString();
+}
+
+function formatGenderLabel(gender: UserProfile["gender"]) {
+  if (gender === "male") {
+    return "男";
+  }
+
+  if (gender === "female") {
+    return "女";
+  }
+
+  return "未知";
 }
 
 function getDailyRecommendDateLabel(now = new Date()) {
@@ -669,6 +695,10 @@ export default function App() {
   const [commentRefreshKey, setCommentRefreshKey] = useState(0);
   const [loadingComments, setLoadingComments] = useState(false);
   const [commentsError, setCommentsError] = useState("");
+  const [userProfileTarget, setUserProfileTarget] = useState<UserProfileTarget | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [loadingUserProfile, setLoadingUserProfile] = useState(false);
+  const [userProfileError, setUserProfileError] = useState("");
   const [volume, setVolume] = useState(initialPlayerState.volume);
   const [playerError, setPlayerError] = useState("");
   const [likedSongIds, setLikedSongIds] = useState<string[]>([]);
@@ -1773,6 +1803,38 @@ export default function App() {
   function handleRefreshSongComments() {
     pendingCommentScrollTopRef.current = commentsScrollRef.current?.scrollTop ?? 0;
     setCommentRefreshKey((key) => key + 1);
+  }
+
+  function openUserProfile(target: UserProfileTarget) {
+    if (!target.id.trim()) {
+      setMessage("这个用户暂时没有可用的网易云 ID。");
+      return;
+    }
+
+    setAccountMenuOpen(false);
+    setUserProfileTarget(target);
+    setUserProfile(null);
+    setUserProfileError("");
+  }
+
+  function closeUserProfile() {
+    setUserProfileTarget(null);
+    setUserProfile(null);
+    setUserProfileError("");
+  }
+
+  function openMyUserProfile() {
+    const profile = session.profile;
+    if (!profile?.id || profile.provider !== "netease") {
+      setMessage("当前不是网易云登录态，暂时没有可查看的网易云个人资料。");
+      return;
+    }
+
+    openUserProfile({
+      id: profile.id,
+      fallbackName: profile.displayName,
+      fallbackAvatarUrl: profile.avatarUrl
+    });
   }
 
   function handleSelectSong(song: Song) {
@@ -3062,6 +3124,37 @@ export default function App() {
     };
   }, [rightPanelTab, commentTrack?.id, commentPage, commentRefreshKey]);
 
+  useEffect(() => {
+    if (!userProfileTarget) {
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingUserProfile(true);
+    setUserProfileError("");
+
+    getUserProfile(userProfileTarget.id)
+      .then((data) => {
+        if (!cancelled) {
+          setUserProfile(data);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setUserProfileError(error instanceof Error ? error.message : "获取用户信息失败");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingUserProfile(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userProfileTarget?.id]);
+
   const activeLyricIndex = useMemo(() => {
     if (lyrics.length === 0) {
       return -1;
@@ -3464,6 +3557,37 @@ export default function App() {
     commentTrack && currentTrack?.id !== commentTrack.id
       ? `${commentTrack.title} · ${commentTrack.artist}`
       : "当前播放歌曲";
+  const userProfileDisplay = userProfile ?? null;
+  const userProfileName = userProfileDisplay?.nickname ?? userProfileTarget?.fallbackName ?? "网易云用户";
+  const userProfileAvatarUrl = userProfileDisplay?.avatarUrl ?? userProfileTarget?.fallbackAvatarUrl;
+
+  const renderCommentRow = (comment: SongCommentsPage["comments"][number], keyPrefix = "") => (
+    <article key={`${keyPrefix}${comment.id}`} className="comment-row">
+      <button
+        type="button"
+        className="comment-author"
+        onClick={() => openUserProfile({ id: comment.userId, fallbackName: comment.nickname, fallbackAvatarUrl: comment.avatarUrl })}
+        title={`查看 ${comment.nickname} 的资料`}
+      >
+        {comment.avatarUrl ? <img src={comment.avatarUrl} alt="" className="comment-avatar" loading="lazy" /> : <span className="comment-avatar placeholder">{comment.nickname.slice(0, 1)}</span>}
+      </button>
+      <div className="comment-copy">
+        <div className="comment-meta">
+          <button
+            type="button"
+            className="comment-name-button"
+            onClick={() => openUserProfile({ id: comment.userId, fallbackName: comment.nickname, fallbackAvatarUrl: comment.avatarUrl })}
+          >
+            {comment.nickname}
+          </button>
+          <span>{comment.timeText}</span>
+        </div>
+        <p className="comment-content">{renderCommentContent(comment.content)}</p>
+        {comment.replyContent ? <p className="comment-reply">{renderCommentContent(comment.replyContent)}</p> : null}
+        {comment.likedCount > 0 ? <span className="comment-like">{comment.likedCount} 赞</span> : null}
+      </div>
+    </article>
+  );
 
   const renderArtistMeta = (song: Song) => {
     const artists = getSongArtists(song);
@@ -3777,6 +3901,10 @@ export default function App() {
             {accountIsLoggedIn && accountMenuOpen ? (
               <div className="identity-popover" role="menu" aria-label="账号操作">
                 <p className="identity-popover-note">VIP 到期: 2026-07-28</p>
+                <button type="button" role="menuitem" onClick={openMyUserProfile}>
+                  <span aria-hidden="true">i</span>
+                  个人信息
+                </button>
                 <button type="button" role="menuitem" onClick={() => void handleStartQrLogin()}>
                   <span aria-hidden="true">⌁</span>
                   切换账号
@@ -5294,18 +5422,7 @@ export default function App() {
                               </div>
                               <div className="comments-list">
                                 {activeSongComments.hotComments.map((comment) => (
-                                  <article key={`hot-${comment.id}`} className="comment-row">
-                                    {comment.avatarUrl ? <img src={comment.avatarUrl} alt="" className="comment-avatar" loading="lazy" /> : <span className="comment-avatar placeholder">{comment.nickname.slice(0, 1)}</span>}
-                                    <div className="comment-copy">
-                                      <div className="comment-meta">
-                                        <strong>{comment.nickname}</strong>
-                                        <span>{comment.timeText}</span>
-                                      </div>
-                                      <p className="comment-content">{renderCommentContent(comment.content)}</p>
-                                      {comment.replyContent ? <p className="comment-reply">{renderCommentContent(comment.replyContent)}</p> : null}
-                                      {comment.likedCount > 0 ? <span className="comment-like">{comment.likedCount} 赞</span> : null}
-                                    </div>
-                                  </article>
+                                  renderCommentRow(comment, "hot-")
                                 ))}
                               </div>
                             </section>
@@ -5320,18 +5437,7 @@ export default function App() {
                             ) : (
                               <div className="comments-list">
                                 {activeSongComments.comments.map((comment) => (
-                                  <article key={comment.id} className="comment-row">
-                                    {comment.avatarUrl ? <img src={comment.avatarUrl} alt="" className="comment-avatar" loading="lazy" /> : <span className="comment-avatar placeholder">{comment.nickname.slice(0, 1)}</span>}
-                                    <div className="comment-copy">
-                                      <div className="comment-meta">
-                                        <strong>{comment.nickname}</strong>
-                                        <span>{comment.timeText}</span>
-                                      </div>
-                                      <p className="comment-content">{renderCommentContent(comment.content)}</p>
-                                      {comment.replyContent ? <p className="comment-reply">{renderCommentContent(comment.replyContent)}</p> : null}
-                                      {comment.likedCount > 0 ? <span className="comment-like">{comment.likedCount} 赞</span> : null}
-                                    </div>
-                                  </article>
+                                  renderCommentRow(comment)
                                 ))}
                               </div>
                             )}
@@ -5356,6 +5462,88 @@ export default function App() {
           </section>
         </aside>
       </main>
+
+      {userProfileTarget ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="用户资料" onClick={closeUserProfile}>
+          <section className="user-profile-card" onClick={(event) => event.stopPropagation()}>
+            <div className="user-profile-hero">
+              {userProfileDisplay?.backgroundUrl ? <img src={userProfileDisplay.backgroundUrl} alt="" className="user-profile-bg" /> : null}
+              <div className="user-profile-shade" />
+              <button type="button" className="modal-close user-profile-close" onClick={closeUserProfile} aria-label="关闭用户资料">
+                ×
+              </button>
+              <div className="user-profile-identity">
+                <div className="user-profile-avatar">
+                  {userProfileAvatarUrl ? <img src={userProfileAvatarUrl} alt={userProfileName} /> : <span>{userProfileName.slice(0, 1)}</span>}
+                </div>
+                <div className="user-profile-title">
+                  <span>网易云用户</span>
+                  <h2>{userProfileName}</h2>
+                </div>
+              </div>
+            </div>
+
+            <div className="user-profile-body">
+              {loadingUserProfile ? <div className="empty-box">正在读取用户资料...</div> : null}
+              {!loadingUserProfile && userProfileError ? <div className="empty-box">{userProfileError}</div> : null}
+              {!loadingUserProfile && !userProfileError && userProfileDisplay ? (
+                <>
+                  <p className="user-profile-signature">{userProfileDisplay.signature}</p>
+                  <div className="user-profile-stats">
+                    <div>
+                      <strong>{userProfileDisplay.level}</strong>
+                      <span>等级</span>
+                    </div>
+                    <div>
+                      <strong>{formatCompactCount(userProfileDisplay.listenSongs)}</strong>
+                      <span>听歌</span>
+                    </div>
+                    <div>
+                      <strong>{formatCompactCount(userProfileDisplay.followeds)}</strong>
+                      <span>粉丝</span>
+                    </div>
+                    <div>
+                      <strong>{formatCompactCount(userProfileDisplay.follows)}</strong>
+                      <span>关注</span>
+                    </div>
+                  </div>
+
+                  <div className="user-profile-meta">
+                    <span>{formatGenderLabel(userProfileDisplay.gender)}</span>
+                    {userProfileDisplay.ageText ? <span>{userProfileDisplay.ageText}</span> : null}
+                    {userProfileDisplay.createdAtText ? <span>{userProfileDisplay.createdAtText} 加入</span> : null}
+                    <span>{formatCompactCount(userProfileDisplay.eventCount)} 动态</span>
+                    <span>{formatCompactCount(userProfileDisplay.playlistCount)} 歌单</span>
+                  </div>
+
+                  {userProfileDisplay.playlists.length > 0 ? (
+                    <section className="user-profile-playlists">
+                      <div className="user-profile-section-head">
+                        <h3>公开歌单</h3>
+                        <span>{userProfileDisplay.playlists.length} 个</span>
+                      </div>
+                      <div className="user-profile-playlist-list">
+                        {userProfileDisplay.playlists.map((playlist) => (
+                          <div key={playlist.id} className="user-profile-playlist">
+                            <div className="user-profile-playlist-cover">
+                              {playlist.coverUrl ? <img src={playlist.coverUrl} alt="" loading="lazy" /> : <span>{playlist.name.slice(0, 1)}</span>}
+                            </div>
+                            <div>
+                              <strong>{playlist.name}</strong>
+                              <span>{playlist.trackCount} 首 · 播放 {formatCompactCount(playlist.playCount)}</span>
+                            </div>
+                            <em>{playlist.owned ? "创建" : "收藏"}</em>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {qrLoginOpen ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="网易云扫码登录" onClick={closeQrLogin}>

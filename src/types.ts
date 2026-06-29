@@ -93,6 +93,36 @@ export type SongCommentsPage = {
   comments: SongComment[];
 };
 
+export type UserProfilePlaylist = {
+  id: string;
+  name: string;
+  coverUrl?: string;
+  trackCount: number;
+  playCount: number;
+  owned: boolean;
+};
+
+export type UserProfile = {
+  id: string;
+  nickname: string;
+  avatarUrl?: string;
+  backgroundUrl?: string;
+  signature: string;
+  level: number;
+  listenSongs: number;
+  follows: number;
+  followeds: number;
+  eventCount: number;
+  playlistCount: number;
+  gender: "male" | "female" | "unknown";
+  province?: number;
+  city?: number;
+  ageText?: string;
+  createdAtText?: string;
+  vipType?: number;
+  playlists: UserProfilePlaylist[];
+};
+
 export type UserPlaylist = {
   id: string;
   name: string;
