@@ -1444,6 +1444,119 @@ input[type="range"] {
   color: #ffd0d0;
 }
 
+.song-context-menu {
+  position: fixed;
+  z-index: 90;
+  width: 236px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(24, 31, 45, 0.98), rgba(14, 19, 30, 0.98)),
+    var(--panel-bg-solid);
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(22px);
+  animation: context-menu-in 120ms ease-out;
+}
+
+.song-context-head {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px 10px;
+  min-width: 0;
+}
+
+.song-context-head strong,
+.song-context-head span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.song-context-head strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.song-context-head span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.song-context-menu button {
+  width: 100%;
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.song-context-menu button:hover:not(:disabled) {
+  background: rgba(255, 180, 93, 0.12);
+  color: #ffe0a3;
+}
+
+.song-context-menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.song-context-menu button.danger {
+  color: #ffb8b8;
+}
+
+.song-context-menu button.danger:hover:not(:disabled) {
+  background: rgba(255, 103, 103, 0.13);
+  color: #ffd0d0;
+}
+
+.song-context-icon {
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  color: currentColor;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.song-context-icon .player-svg,
+.song-context-icon .action-svg {
+  width: 18px;
+  height: 18px;
+}
+
+.song-context-divider {
+  height: 1px;
+  margin: 6px 8px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+@keyframes context-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .wide {
   padding-left: 16px;
   padding-right: 16px;

@@ -1,4 +1,4 @@
-import { type CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, FormEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   addSongToPlaylist,
   checkNeteaseCookie,
@@ -99,6 +99,7 @@ type NavKey = "discover" | "search" | "daily" | "playlists" | "transfer" | "clou
 type RightPanelTab = "queue" | "lyrics";
 type ResultSource = "search" | "playlist" | "cloud" | "daily" | "discover" | "artist" | "album";
 type PlaylistSortMode = "default" | "title-asc" | "title-desc" | "artist-asc" | "artist-desc";
+type SongContextMenuState = { song: Song; x: number; y: number };
 type NeteaseLoginMode = "qr" | "cellphone" | "cookie";
 type ViewSnapshot = {
   results: Song[];
@@ -613,6 +614,7 @@ export default function App() {
   const [likedSongIds, setLikedSongIds] = useState<string[]>([]);
   const [togglingLike, setTogglingLike] = useState(false);
   const [playlistPickerSong, setPlaylistPickerSong] = useState<Song | null>(null);
+  const [songContextMenu, setSongContextMenu] = useState<SongContextMenuState | null>(null);
   const [playlistPickerLoading, setPlaylistPickerLoading] = useState(false);
   const [playlistPickerError, setPlaylistPickerError] = useState("");
   const [addingToPlaylistId, setAddingToPlaylistId] = useState<string | null>(null);
@@ -1688,6 +1690,41 @@ export default function App() {
     setMessage(accountIsLoggedIn ? `已选中：${song.title}。双击歌曲或点击试听开始播放。` : `已选中：${song.title}。登录网易云账号后可播放。`);
   }
 
+  function handleOpenSongContextMenu(event: MouseEvent<HTMLElement>, song: Song) {
+    event.preventDefault();
+    event.stopPropagation();
+    handleSelectSong(song);
+
+    const menuWidth = 236;
+    const menuHeight = resultSource === "playlist" && activePlaylist?.owned ? 330 : 286;
+    const x = Math.min(event.clientX, Math.max(12, window.innerWidth - menuWidth - 12));
+    const y = Math.min(event.clientY, Math.max(12, window.innerHeight - menuHeight - 12));
+
+    setSongContextMenu({ song, x, y });
+  }
+
+  function closeSongContextMenu() {
+    setSongContextMenu(null);
+  }
+
+  function getSongShareUrl(song: Song) {
+    return `https://music.163.com/#/song?id=${encodeURIComponent(song.id)}`;
+  }
+
+  async function handleCopySongLink(song: Song) {
+    try {
+      await navigator.clipboard.writeText(getSongShareUrl(song));
+      setMessage(`已复制链接：${song.title}`);
+    } catch {
+      setMessage("复制链接失败，请检查浏览器剪贴板权限。");
+    }
+  }
+
+  function runSongContextAction(action: () => void | Promise<void>) {
+    closeSongContextMenu();
+    void action();
+  }
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     await runSearch(query);
@@ -2302,6 +2339,25 @@ export default function App() {
     }
   }
 
+  function handleQueueSongNext(song: Song) {
+    setPlayQueue((current) => {
+      const baseQueue = current.length > 0 ? current : visibleSongs;
+      const dedupedQueue = baseQueue.filter((item) => item.id !== song.id);
+      const currentIndex = dedupedQueue.findIndex((item) => item.id === currentTrack?.id);
+
+      if (currentIndex < 0) {
+        return [song, ...dedupedQueue].slice(0, 100);
+      }
+
+      return [
+        ...dedupedQueue.slice(0, currentIndex + 1),
+        song,
+        ...dedupedQueue.slice(currentIndex + 1)
+      ].slice(0, 100);
+    });
+    setMessage(`已加入下一首播放：${song.title}`);
+  }
+
   function handleRemoveFromQueue(songId: string) {
     setPlayQueue((current) => {
       const nextQueue = current.filter((song) => song.id !== songId);
@@ -2376,22 +2432,22 @@ export default function App() {
     void loadPlaylistSongs(activePlaylist, 1, playlistSearchKeyword, nextSortMode);
   }
 
-  async function handleRemoveSelectedPlaylistSongs() {
-    if (!activePlaylist || !activePlaylist.owned || removingPlaylistSongs || selectedVisibleSongs.length === 0) {
+  async function handleRemovePlaylistSongs(songIds: string[]) {
+    if (!activePlaylist || !activePlaylist.owned || removingPlaylistSongs || songIds.length === 0) {
       return;
     }
 
-    const songIds = selectedVisibleSongs.map((song) => song.id);
-    const confirmed = window.confirm(`确定从「${activePlaylist.name}」移除 ${songIds.length} 首歌吗？不会删除歌曲本身。`);
+    const safeSongIds = [...new Set(songIds)];
+    const confirmed = window.confirm(`确定从「${activePlaylist.name}」移除 ${safeSongIds.length} 首歌吗？不会删除歌曲本身。`);
     if (!confirmed) {
       return;
     }
 
     setRemovingPlaylistSongs(true);
-    setMessage(`正在从「${activePlaylist.name}」移除 ${songIds.length} 首歌...`);
+    setMessage(`正在从「${activePlaylist.name}」移除 ${safeSongIds.length} 首歌...`);
 
     try {
-      const result = await removeSongsFromPlaylist(activePlaylist.id, songIds);
+      const result = await removeSongsFromPlaylist(activePlaylist.id, safeSongIds);
       const removedCount = Math.max(0, result.removedCount);
       const updatedPlaylist = {
         ...activePlaylist,
@@ -2423,6 +2479,10 @@ export default function App() {
     } finally {
       setRemovingPlaylistSongs(false);
     }
+  }
+
+  async function handleRemoveSelectedPlaylistSongs() {
+    await handleRemovePlaylistSongs(selectedVisibleSongs.map((song) => song.id));
   }
 
   function markLyricsManualScroll() {
@@ -2499,11 +2559,34 @@ export default function App() {
     function handleWindowClick() {
       setOpenQualityMenuId(null);
       setAccountMenuOpen(false);
+      closeSongContextMenu();
     }
 
     window.addEventListener("click", handleWindowClick);
     return () => window.removeEventListener("click", handleWindowClick);
   }, []);
+
+  useEffect(() => {
+    if (!songContextMenu) {
+      return;
+    }
+
+    function handleDismissContextMenu(event: KeyboardEvent | Event) {
+      if (event instanceof KeyboardEvent && event.key !== "Escape") {
+        return;
+      }
+
+      closeSongContextMenu();
+    }
+
+    window.addEventListener("keydown", handleDismissContextMenu);
+    window.addEventListener("scroll", handleDismissContextMenu, true);
+
+    return () => {
+      window.removeEventListener("keydown", handleDismissContextMenu);
+      window.removeEventListener("scroll", handleDismissContextMenu, true);
+    };
+  }, [songContextMenu]);
 
   useEffect(() => {
     void refreshSettings().then((nextSettings) => {
@@ -4295,6 +4378,7 @@ export default function App() {
                     className={currentTrack?.id === song.id ? "result-row active" : "result-row"}
                     onClick={() => handleSelectSong(song)}
                     onDoubleClick={() => handlePreview(song)}
+                    onContextMenu={(event) => handleOpenSongContextMenu(event, song)}
                   >
                     <label className="result-check-cell" onClick={(event) => event.stopPropagation()}>
                       <input
@@ -4375,7 +4459,7 @@ export default function App() {
                   <div className="empty-box">暂无播放历史。试听或播放一首歌后会出现在这里。</div>
                 ) : (
                   playHistory.map((song, index) => (
-                    <article key={song.id} className={currentTrack?.id === song.id ? "history-row active" : "history-row"} onClick={() => handlePreview(song)}>
+                    <article key={song.id} className={currentTrack?.id === song.id ? "history-row active" : "history-row"} onClick={() => handlePreview(song)} onContextMenu={(event) => handleOpenSongContextMenu(event, song)}>
                       <span className="queue-index">{String(index + 1).padStart(2, "0")}</span>
                       <CoverArt song={song} className="result-cover" />
                       <div className="history-copy">
@@ -4509,6 +4593,7 @@ export default function App() {
                       className={currentTrack?.id === song.id ? "result-row active" : "result-row"}
                       onClick={() => handleSelectSong(song)}
                       onDoubleClick={() => handlePreview(song)}
+                      onContextMenu={(event) => handleOpenSongContextMenu(event, song)}
                     >
                       <label className="result-check-cell" onClick={(event) => event.stopPropagation()}>
                         <input
@@ -4844,6 +4929,7 @@ export default function App() {
                       className={[currentTrack?.id === song.id ? "play-queue-row active" : "play-queue-row", playbackLocked ? "locked-playback-row" : ""].filter(Boolean).join(" ")}
                       title={playbackLocked ? "登录后播放" : undefined}
                       onClick={() => handlePreview(song)}
+                      onContextMenu={(event) => handleOpenSongContextMenu(event, song)}
                     >
                       <span className="queue-index">{String(index + 1).padStart(2, "0")}</span>
                       <div className="queue-song-copy">
@@ -5100,6 +5186,52 @@ export default function App() {
               </button>
             </div>
           </section>
+        </div>
+      ) : null}
+
+      {songContextMenu ? (
+        <div
+          className="song-context-menu"
+          role="menu"
+          aria-label={`${songContextMenu.song.title} 操作菜单`}
+          style={{ left: songContextMenu.x, top: songContextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <div className="song-context-head">
+            <strong>{songContextMenu.song.title}</strong>
+            <span>{songContextMenu.song.artist}</span>
+          </div>
+          <button type="button" role="menuitem" disabled={playbackLocked} onClick={() => runSongContextAction(() => handlePreview(songContextMenu.song))}>
+            <span className="song-context-icon"><PlayerIcon name="play" /></span>
+            播放
+          </button>
+          <button type="button" role="menuitem" onClick={() => runSongContextAction(() => handleQueueSongNext(songContextMenu.song))}>
+            <span className="song-context-icon"><PlayerIcon name="next" /></span>
+            下一首播放
+          </button>
+          <div className="song-context-divider" />
+          <button type="button" role="menuitem" disabled={Boolean(addingToPlaylistId)} onClick={() => runSongContextAction(() => handleOpenPlaylistPicker(songContextMenu.song))}>
+            <span className="song-context-icon"><PlaylistAddIcon /></span>
+            收藏到歌单
+          </button>
+          <button type="button" role="menuitem" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => runSongContextAction(() => handleDownload(songContextMenu.song))}>
+            <span className="song-context-icon"><DownloadIcon /></span>
+            下载
+          </button>
+          <button type="button" role="menuitem" onClick={() => runSongContextAction(() => handleCopySongLink(songContextMenu.song))}>
+            <span className="song-context-icon">↗</span>
+            复制链接
+          </button>
+          {resultSource === "playlist" && activePlaylist?.owned ? (
+            <>
+              <div className="song-context-divider" />
+              <button type="button" role="menuitem" className="danger" disabled={removingPlaylistSongs} onClick={() => runSongContextAction(() => handleRemovePlaylistSongs([songContextMenu.song.id]))}>
+                <span className="song-context-icon">×</span>
+                从歌单移除
+              </button>
+            </>
+          ) : null}
         </div>
       ) : null}
 
