@@ -1150,6 +1150,8 @@ export default function App() {
   const accountBadgeLabel = accountVipEnabled ? "黑胶 VIP" : "标准";
   const accountStatusLabel = session.loggedIn || accountProfile?.provider === "netease" ? accountBadgeLabel : "未登录";
   const accountIsLoggedIn = session.loggedIn || accountProfile?.provider === "netease";
+  const neteasePlatformStatusLabel = accountIsLoggedIn ? (accountVipEnabled ? "黑胶" : "标准") : "未登录";
+  const qqMusicPlatformStatusLabel = "待接";
   const hasNeteaseDownloadAuth = accountIsLoggedIn;
   const playbackLocked = !accountIsLoggedIn;
   const hasPlaybackQueue = playQueue.length > 0 || results.length > 0;
@@ -5578,26 +5580,62 @@ export default function App() {
               )}
               <div className="identity-copy">
                 <strong>{accountDisplayName}</strong>
-                <span className={accountVipEnabled ? "identity-status active" : "identity-status"}>
-                  {accountStatusLabel}
+              </div>
+              <div className="identity-platforms" aria-label="平台账号状态">
+                <span className={accountIsLoggedIn ? "identity-platform-chip active" : "identity-platform-chip"}>
+                  <b>网易</b>
+                  <em>{neteasePlatformStatusLabel}</em>
+                </span>
+                <span className="identity-platform-chip muted">
+                  <b>QQ</b>
+                  <em>{qqMusicPlatformStatusLabel}</em>
                 </span>
               </div>
             </button>
 
             {accountIsLoggedIn && accountMenuOpen ? (
-              <div className="identity-popover" role="menu" aria-label="账号操作">
-                <p className="identity-popover-note">VIP 到期: 2026-07-28</p>
-                <button type="button" role="menuitem" onClick={openMyUserProfile}>
-                  <span aria-hidden="true">i</span>
-                  个人信息
-                </button>
-                <button type="button" role="menuitem" onClick={() => void handleStartQrLogin()}>
-                  <span aria-hidden="true">⌁</span>
-                  切换账号
-                </button>
-                <button type="button" role="menuitem" className="danger" onClick={() => void handleClearCookie()}>
-                  <span aria-hidden="true">↩</span>
-                  退出登录
+              <div className="identity-popover account-center-popover" role="menu" aria-label="账号中心">
+                <div className="account-center-head">
+                  <strong>账号中心</strong>
+                  <span>双平台音源策略预留</span>
+                </div>
+
+                <section className="platform-account-card active" aria-label="网易云音乐账号">
+                  <div className="platform-account-main">
+                    <span className="platform-account-mark netease" aria-hidden="true">网</span>
+                    <div className="platform-account-copy">
+                      <strong>网易云音乐</strong>
+                      <span>{accountDisplayName} · {accountProviderLabel}</span>
+                    </div>
+                    <span className={accountVipEnabled ? "platform-account-state vip" : "platform-account-state"}>
+                      {accountStatusLabel}
+                    </span>
+                  </div>
+                  <p>当前用于搜索、播放与下载；双平台接入后按 VIP 与版权自动择源。</p>
+                  <div className="platform-account-actions">
+                    <button type="button" role="menuitem" onClick={openMyUserProfile}>
+                      个人信息
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => void handleStartQrLogin()}>
+                      重新登录
+                    </button>
+                  </div>
+                </section>
+
+                <section className="platform-account-card pending" aria-label="QQ音乐账号预留">
+                  <div className="platform-account-main">
+                    <span className="platform-account-mark qq" aria-hidden="true">Q</span>
+                    <div className="platform-account-copy">
+                      <strong>QQ 音乐</strong>
+                      <span>待接入后参与音源选择</span>
+                    </div>
+                    <span className="platform-account-state muted">待接入</span>
+                  </div>
+                  <p>后续用于聚合搜索、版本区分与版权补位。</p>
+                </section>
+
+                <button type="button" role="menuitem" className="account-center-danger" onClick={() => void handleClearCookie()}>
+                  退出网易云账号
                 </button>
               </div>
             ) : null}
