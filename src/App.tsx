@@ -4364,6 +4364,12 @@ export default function App() {
   const userProfileDisplay = userProfile ?? null;
   const userProfileName = userProfileDisplay?.nickname ?? userProfileTarget?.fallbackName ?? "网易云用户";
   const userProfileAvatarUrl = userProfileDisplay?.avatarUrl ?? userProfileTarget?.fallbackAvatarUrl;
+  const userProfileOwnedPlaylists = userProfileDisplay?.playlists.filter((playlist) => playlist.owned) ?? [];
+  const userProfileCollectedPlaylists = userProfileDisplay?.playlists.filter((playlist) => !playlist.owned) ?? [];
+  const userProfilePlaylistGroups = [
+    { key: "owned", title: "创建的歌单", playlists: userProfileOwnedPlaylists },
+    { key: "collected", title: "收藏的歌单", playlists: userProfileCollectedPlaylists }
+  ].filter((group) => group.playlists.length > 0);
   const isUserProfileHome = userProfileView === "profile";
   const userProfileSubTitle = userProfileView === "events" ? "动态" : userProfileView === "followeds" ? "粉丝" : "关注";
   const userProfileSubCount =
@@ -6622,23 +6628,35 @@ export default function App() {
                             <span>{userProfileDisplay.playlists.length} 个</span>
                           </div>
                           <div className="user-profile-playlist-list">
-                            {userProfileDisplay.playlists.map((playlist) => (
-                              <button
-                                key={playlist.id}
-                                type="button"
-                                className="user-profile-playlist"
-                                onClick={() => openProfilePlaylist(playlist)}
-                                title={`打开歌单：${playlist.name}`}
-                              >
-                                <div className="user-profile-playlist-cover">
-                                  {playlist.coverUrl ? <img src={playlist.coverUrl} alt="" loading="lazy" /> : <span>{playlist.name.slice(0, 1)}</span>}
-                                </div>
-                                <div>
-                                  <strong>{playlist.name}</strong>
-                                  <span>{playlist.trackCount} 首 · 播放 {formatCompactCount(playlist.playCount)}</span>
-                                </div>
-                                <em className={playlist.owned ? "owned" : "collected"}>{playlist.owned ? "创建" : "收藏"}</em>
-                              </button>
+                            {userProfilePlaylistGroups.map((group) => (
+                              <div key={group.key} className="user-profile-playlist-group">
+                                {userProfilePlaylistGroups.length > 1 ? (
+                                  <div className={`user-profile-playlist-divider ${group.key}`}>
+                                    <span>
+                                      {group.title}
+                                      <small>{group.playlists.length} 个</small>
+                                    </span>
+                                  </div>
+                                ) : null}
+                                {group.playlists.map((playlist) => (
+                                  <button
+                                    key={playlist.id}
+                                    type="button"
+                                    className="user-profile-playlist"
+                                    onClick={() => openProfilePlaylist(playlist)}
+                                    title={`打开歌单：${playlist.name}`}
+                                  >
+                                    <div className="user-profile-playlist-cover">
+                                      {playlist.coverUrl ? <img src={playlist.coverUrl} alt="" loading="lazy" /> : <span>{playlist.name.slice(0, 1)}</span>}
+                                    </div>
+                                    <div>
+                                      <strong>{playlist.name}</strong>
+                                      <span>{playlist.trackCount} 首 · 播放 {formatCompactCount(playlist.playCount)}</span>
+                                    </div>
+                                    <em className={playlist.owned ? "owned" : "collected"}>{playlist.owned ? "创建" : "收藏"}</em>
+                                  </button>
+                                ))}
+                              </div>
                             ))}
                           </div>
                         </section>

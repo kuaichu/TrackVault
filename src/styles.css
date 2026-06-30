@@ -889,7 +889,63 @@ input[type="range"] {
 
 .user-profile-playlist-list {
   display: grid;
+  gap: 12px;
+}
+
+.user-profile-playlist-group {
+  display: grid;
   gap: 8px;
+}
+
+.user-profile-playlist-divider {
+  display: grid;
+  grid-template-columns: minmax(16px, 1fr) auto minmax(16px, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin: 2px 2px 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.user-profile-playlist-divider::before,
+.user-profile-playlist-divider::after {
+  content: "";
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.11));
+}
+
+.user-profile-playlist-divider::after {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.11), transparent);
+}
+
+.user-profile-playlist-divider span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  white-space: nowrap;
+}
+
+.user-profile-playlist-divider small {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.user-profile-playlist-divider.owned span {
+  border-color: rgba(255, 180, 93, 0.18);
+  background: rgba(255, 155, 87, 0.1);
+  color: #ffd7a4;
+}
+
+.user-profile-playlist-divider.collected span {
+  border-color: rgba(101, 151, 255, 0.18);
+  background: rgba(101, 151, 255, 0.09);
+  color: #b9ccff;
 }
 
 .user-social-list {
