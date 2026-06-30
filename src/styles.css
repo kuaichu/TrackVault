@@ -2245,6 +2245,7 @@ input[type="range"] {
   top: calc(100% + 8px);
   left: 0;
   z-index: 80;
+  box-sizing: border-box;
   width: max(100%, 248px);
   max-height: min(52vh, 260px);
   padding: 7px;
@@ -2255,6 +2256,15 @@ input[type="range"] {
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.34);
   scrollbar-width: thin;
+}
+
+.floating-quality-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 240;
+  width: 248px;
+  max-height: 260px;
 }
 
 .quality-option {

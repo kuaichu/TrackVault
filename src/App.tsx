@@ -1,4 +1,5 @@
 import { type CSSProperties, FormEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   addSongToPlaylist,
   checkNeteaseCookie,
@@ -155,6 +156,10 @@ const playlistSortOptions: Array<{ value: PlaylistSortMode; label: string }> = [
 ];
 const PLAYLIST_SORT_MENU_ESTIMATED_HEIGHT = 214;
 const FLOATING_MENU_MARGIN = 12;
+const QUALITY_MENU_MIN_WIDTH = 248;
+const QUALITY_MENU_MAX_HEIGHT = 260;
+const QUALITY_MENU_OPTION_HEIGHT = 47;
+const QUALITY_MENU_VERTICAL_PADDING = 14;
 const defaultSettings: AppSettings = {
   accountName: "本地账号",
   vipEnabled: false,
@@ -911,6 +916,10 @@ export default function App() {
   const playerStateSyncTimerRef = useRef<number | null>(null);
   const playerStateHydratedRef = useRef(false);
   const playlistSortTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const qualityMenuAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const qualityMenuOptionCountRef = useRef(0);
+  const settingsQualityMenuAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const settingsQualityMenuOptionCountRef = useRef(0);
   const qrCheckFailureCountRef = useRef(0);
   const qrAutoRefreshPendingRef = useRef(false);
   const qrAutoRefreshCountRef = useRef(0);
@@ -999,9 +1008,11 @@ export default function App() {
   const [qualitySelections, setQualitySelections] = useState<Record<string, DownloadQualityLevel>>({});
   const [qualitySelectionTouched, setQualitySelectionTouched] = useState<Record<string, true>>({});
   const [openQualityMenuId, setOpenQualityMenuId] = useState<string | null>(null);
+  const [qualityMenuStyle, setQualityMenuStyle] = useState<FloatingMenuStyle | null>(null);
   const [openPlaylistSortMenu, setOpenPlaylistSortMenu] = useState(false);
   const [playlistSortMenuStyle, setPlaylistSortMenuStyle] = useState<FloatingMenuStyle | null>(null);
   const [openSettingsQualityMenu, setOpenSettingsQualityMenu] = useState<"playback" | "download" | null>(null);
+  const [settingsQualityMenuStyle, setSettingsQualityMenuStyle] = useState<FloatingMenuStyle | null>(null);
   const [mainTab, setMainTab] = useState<MainTab>("search");
   const [navKey, setNavKey] = useState<NavKey>("discover");
   const [viewHistory, setViewHistory] = useState<ViewState[]>([]);
@@ -3472,6 +3483,80 @@ export default function App() {
     void loadPlaylistSongs(activePlaylist, 1, "", playlistSortMode);
   }
 
+  function getQualityMenuBoundaryBottom(trigger: HTMLElement) {
+    const dock = document.querySelector<HTMLElement>(".player-dock");
+    const dockRect = dock?.getBoundingClientRect();
+
+    if (dockRect && dockRect.top > trigger.getBoundingClientRect().bottom) {
+      return Math.max(FLOATING_MENU_MARGIN, dockRect.top - FLOATING_MENU_MARGIN);
+    }
+
+    return window.innerHeight - FLOATING_MENU_MARGIN;
+  }
+
+  function getFloatingQualityMenuStyle(trigger: HTMLElement, optionCount: number, minWidth = QUALITY_MENU_MIN_WIDTH): FloatingMenuStyle {
+    const rect = trigger.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const boundaryTop = FLOATING_MENU_MARGIN;
+    const boundaryBottom = getQualityMenuBoundaryBottom(trigger);
+    const width = Math.min(Math.max(rect.width, minWidth), Math.max(minWidth, viewportWidth - FLOATING_MENU_MARGIN * 2));
+    const estimatedHeight = Math.min(
+      QUALITY_MENU_MAX_HEIGHT,
+      QUALITY_MENU_VERTICAL_PADDING + Math.max(1, optionCount) * QUALITY_MENU_OPTION_HEIGHT
+    );
+    const availableBelow = boundaryBottom - rect.bottom - 8;
+    const availableAbove = rect.top - boundaryTop - 8;
+    const shouldOpenUp = availableBelow < estimatedHeight && availableAbove > availableBelow;
+    const availableSpace = Math.max(96, shouldOpenUp ? availableAbove : availableBelow);
+    const maxHeight = Math.max(96, Math.min(QUALITY_MENU_MAX_HEIGHT, estimatedHeight, availableSpace));
+    const top = shouldOpenUp
+      ? Math.max(boundaryTop, rect.top - maxHeight - 8)
+      : Math.min(rect.bottom + 8, boundaryBottom - maxHeight);
+    const left = Math.min(
+      Math.max(FLOATING_MENU_MARGIN, rect.left),
+      Math.max(FLOATING_MENU_MARGIN, viewportWidth - width - FLOATING_MENU_MARGIN)
+    );
+
+    return { top, left, width, maxHeight };
+  }
+
+  function updateQualityMenuStyle(trigger = qualityMenuAnchorRef.current) {
+    if (!trigger || !document.body.contains(trigger)) {
+      setOpenQualityMenuId(null);
+      setQualityMenuStyle(null);
+      return;
+    }
+
+    setQualityMenuStyle(getFloatingQualityMenuStyle(trigger, qualityMenuOptionCountRef.current));
+  }
+
+  function updateSettingsQualityMenuStyle(trigger = settingsQualityMenuAnchorRef.current) {
+    if (!trigger || !document.body.contains(trigger)) {
+      setOpenSettingsQualityMenu(null);
+      setSettingsQualityMenuStyle(null);
+      return;
+    }
+
+    setSettingsQualityMenuStyle(getFloatingQualityMenuStyle(trigger, settingsQualityMenuOptionCountRef.current));
+  }
+
+  function toggleSettingsQualityMenu(menu: "playback" | "download", trigger: HTMLButtonElement, optionCount: number) {
+    setOpenQualityMenuId(null);
+    setQualityMenuStyle(null);
+    setOpenPlaylistSortMenu(false);
+
+    if (openSettingsQualityMenu === menu) {
+      setOpenSettingsQualityMenu(null);
+      setSettingsQualityMenuStyle(null);
+      return;
+    }
+
+    settingsQualityMenuAnchorRef.current = trigger;
+    settingsQualityMenuOptionCountRef.current = optionCount;
+    setSettingsQualityMenuStyle(getFloatingQualityMenuStyle(trigger, optionCount));
+    setOpenSettingsQualityMenu(menu);
+  }
+
   function updatePlaylistSortMenuStyle(trigger = playlistSortTriggerRef.current) {
     if (!trigger) {
       return;
@@ -3499,6 +3584,9 @@ export default function App() {
 
   function togglePlaylistSortMenu(trigger: HTMLButtonElement) {
     setOpenQualityMenuId(null);
+    setQualityMenuStyle(null);
+    setOpenSettingsQualityMenu(null);
+    setSettingsQualityMenuStyle(null);
 
     if (openPlaylistSortMenu) {
       setOpenPlaylistSortMenu(false);
@@ -3632,6 +3720,9 @@ export default function App() {
   useEffect(() => {
     function handleWindowClick() {
       setOpenQualityMenuId(null);
+      setQualityMenuStyle(null);
+      setOpenSettingsQualityMenu(null);
+      setSettingsQualityMenuStyle(null);
       setOpenPlaylistSortMenu(false);
       setAccountMenuOpen(false);
       closeSongContextMenu();
@@ -3640,6 +3731,62 @@ export default function App() {
     window.addEventListener("click", handleWindowClick);
     return () => window.removeEventListener("click", handleWindowClick);
   }, []);
+
+  useEffect(() => {
+    if (!openQualityMenuId) {
+      setQualityMenuStyle(null);
+      return;
+    }
+
+    function handleFloatingQualityMenuUpdate() {
+      updateQualityMenuStyle();
+    }
+
+    function handleFloatingQualityMenuKeydown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpenQualityMenuId(null);
+        setQualityMenuStyle(null);
+      }
+    }
+
+    window.addEventListener("resize", handleFloatingQualityMenuUpdate);
+    window.addEventListener("scroll", handleFloatingQualityMenuUpdate, true);
+    window.addEventListener("keydown", handleFloatingQualityMenuKeydown);
+
+    return () => {
+      window.removeEventListener("resize", handleFloatingQualityMenuUpdate);
+      window.removeEventListener("scroll", handleFloatingQualityMenuUpdate, true);
+      window.removeEventListener("keydown", handleFloatingQualityMenuKeydown);
+    };
+  }, [openQualityMenuId]);
+
+  useEffect(() => {
+    if (!openSettingsQualityMenu) {
+      setSettingsQualityMenuStyle(null);
+      return;
+    }
+
+    function handleFloatingSettingsQualityMenuUpdate() {
+      updateSettingsQualityMenuStyle();
+    }
+
+    function handleFloatingSettingsQualityMenuKeydown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpenSettingsQualityMenu(null);
+        setSettingsQualityMenuStyle(null);
+      }
+    }
+
+    window.addEventListener("resize", handleFloatingSettingsQualityMenuUpdate);
+    window.addEventListener("scroll", handleFloatingSettingsQualityMenuUpdate, true);
+    window.addEventListener("keydown", handleFloatingSettingsQualityMenuKeydown);
+
+    return () => {
+      window.removeEventListener("resize", handleFloatingSettingsQualityMenuUpdate);
+      window.removeEventListener("scroll", handleFloatingSettingsQualityMenuUpdate, true);
+      window.removeEventListener("keydown", handleFloatingSettingsQualityMenuKeydown);
+    };
+  }, [openSettingsQualityMenu]);
 
   useEffect(() => {
     if (!openPlaylistSortMenu) {
@@ -4784,6 +4931,7 @@ export default function App() {
       [song.id]: true
     }));
     setOpenQualityMenuId(null);
+    setQualityMenuStyle(null);
 
     if (accountIsLoggedIn && isCurrentTrack) {
       window.setTimeout(() => {
@@ -4808,7 +4956,20 @@ export default function App() {
           aria-label={options.ariaLabel ?? `选择 ${song.title} 的音质`}
           onClick={(event) => {
             event.stopPropagation();
-            setOpenQualityMenuId((current) => (current === menuKey ? null : menuKey));
+            setOpenSettingsQualityMenu(null);
+            setSettingsQualityMenuStyle(null);
+            setOpenPlaylistSortMenu(false);
+
+            if (openQualityMenuId === menuKey) {
+              setOpenQualityMenuId(null);
+              setQualityMenuStyle(null);
+              return;
+            }
+
+            qualityMenuAnchorRef.current = event.currentTarget;
+            qualityMenuOptionCountRef.current = song.availableQualities.length;
+            setQualityMenuStyle(getFloatingQualityMenuStyle(event.currentTarget, song.availableQualities.length));
+            setOpenQualityMenuId(menuKey);
           }}
         >
           <span>{getSelectedLabel(song)}</span>
@@ -4817,8 +4978,8 @@ export default function App() {
           </span>
         </button>
 
-        {isOpen ? (
-          <div className="quality-menu" onClick={(event) => event.stopPropagation()}>
+        {isOpen && qualityMenuStyle ? createPortal(
+          <div className="quality-menu floating-quality-menu" style={qualityMenuStyle} onClick={(event) => event.stopPropagation()}>
             {song.availableQualities.map((quality) => {
               const isActive = quality.level === getSelectedLevel(song);
 
@@ -4833,7 +4994,8 @@ export default function App() {
                 </button>
               );
             })}
-          </div>
+          </div>,
+          document.body
         ) : null}
       </div>
     );
@@ -6469,7 +6631,10 @@ export default function App() {
                       type="button"
                       className="quality-trigger settings-quality-trigger"
                       aria-expanded={openSettingsQualityMenu === "playback"}
-                      onClick={() => setOpenSettingsQualityMenu((current) => (current === "playback" ? null : "playback"))}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleSettingsQualityMenu("playback", event.currentTarget, playbackQualityOptions.length);
+                      }}
                     >
                       <span>{playbackQualityOptions.find((option) => option.level === settings.defaultPlaybackQuality)?.label ?? "128K"}</span>
                       <span className={openSettingsQualityMenu === "playback" ? "quality-caret open" : "quality-caret"}>
@@ -6477,8 +6642,8 @@ export default function App() {
                       </span>
                     </button>
 
-                    {openSettingsQualityMenu === "playback" ? (
-                      <div className="quality-menu settings-quality-menu">
+                    {openSettingsQualityMenu === "playback" && settingsQualityMenuStyle ? createPortal(
+                      <div className="quality-menu floating-quality-menu settings-quality-menu" style={settingsQualityMenuStyle} onClick={(event) => event.stopPropagation()}>
                         {playbackQualityOptions.map((option) => (
                           <button
                             key={option.level}
@@ -6488,12 +6653,14 @@ export default function App() {
                               setSettings((current) => ({ ...current, defaultPlaybackQuality: option.level }));
                               applyQualityDefaults(results, option.level);
                               setOpenSettingsQualityMenu(null);
+                              setSettingsQualityMenuStyle(null);
                             }}
                           >
                             {renderQualityOptionContent(option.level, option.label)}
                           </button>
                         ))}
-                      </div>
+                      </div>,
+                      document.body
                     ) : null}
                   </div>
                 </div>
@@ -6511,7 +6678,10 @@ export default function App() {
                       type="button"
                       className="quality-trigger settings-quality-trigger"
                       aria-expanded={openSettingsQualityMenu === "download"}
-                      onClick={() => setOpenSettingsQualityMenu((current) => (current === "download" ? null : "download"))}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleSettingsQualityMenu("download", event.currentTarget, settingsQualityOptions.length);
+                      }}
                     >
                       <span>{settingsQualityOptions.find((option) => option.level === settings.defaultDownloadQuality)?.label ?? "Hi-Res"}</span>
                       <span className={openSettingsQualityMenu === "download" ? "quality-caret open" : "quality-caret"}>
@@ -6519,8 +6689,8 @@ export default function App() {
                       </span>
                     </button>
 
-                    {openSettingsQualityMenu === "download" ? (
-                      <div className="quality-menu settings-quality-menu">
+                    {openSettingsQualityMenu === "download" && settingsQualityMenuStyle ? createPortal(
+                      <div className="quality-menu floating-quality-menu settings-quality-menu" style={settingsQualityMenuStyle} onClick={(event) => event.stopPropagation()}>
                         {settingsQualityOptions.map((option) => (
                           <button
                             key={option.level}
@@ -6529,12 +6699,14 @@ export default function App() {
                             onClick={() => {
                               setSettings((current) => ({ ...current, defaultDownloadQuality: option.level }));
                               setOpenSettingsQualityMenu(null);
+                              setSettingsQualityMenuStyle(null);
                             }}
                           >
                             {renderQualityOptionContent(option.level, option.label)}
                           </button>
                         ))}
-                      </div>
+                      </div>,
+                      document.body
                     ) : null}
                   </div>
                 </div>
