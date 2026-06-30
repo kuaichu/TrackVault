@@ -28,6 +28,8 @@ import type {
   PlaylistTransferJob,
   PlaylistTransferRunJob,
   Song,
+  SongAudioProbe,
+  SongAudioProbeMode,
   SongComment,
   SongCommentRepliesPage,
   SongCommentsPage,
@@ -433,6 +435,24 @@ export async function getSongCommentReplies(songId: string, commentId: string, t
   }
 
   return (await response.json()) as SongCommentRepliesPage;
+}
+
+export async function getSongAudioProbe(song: Song, level: DownloadQualityLevel, mode: SongAudioProbeMode): Promise<SongAudioProbe> {
+  const response = await apiFetch("/api/songs/audio-probe", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ song, level, mode })
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "检测实际音源失败");
+  }
+
+  const data = (await response.json()) as { probe: SongAudioProbe };
+  return data.probe;
 }
 
 export async function setSongCommentLiked(songId: string, commentId: string, liked: boolean): Promise<boolean> {

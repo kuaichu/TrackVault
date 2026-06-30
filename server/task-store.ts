@@ -9,7 +9,7 @@ import { getCurrentUserKey } from "./account-store.js";
 import { getDatabase, isSqliteAvailable, readJsonStore, updateJsonStore } from "./database.js";
 import { buildMediaCredentialPlan, extractClientSessionIdFromUserKey } from "./media-security.js";
 import { getSettings } from "./settings-store.js";
-import type { DownloadQualityLevel, DownloadTask, NeteaseCookieCheckResult, Song } from "./types.js";
+import type { DownloadQualityLevel, DownloadTask, NeteaseCookieCheckResult, Song, SongAudioProbe, SongAudioProbeMode } from "./types.js";
 
 const require = createRequire(import.meta.url);
 const neteaseApi = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi") & {
@@ -380,6 +380,23 @@ function getActualQualityLabel(match: SongUrlItem) {
   return type || bitrateLabel || "未知音质";
 }
 
+function buildSongAudioProbe(song: Song, mode: SongAudioProbeMode, requestedLevel: DownloadQualityLevel, match: SongUrlItem): SongAudioProbe {
+  const actualBitrate = Number(match.br ?? 0);
+
+  return {
+    songId: song.id,
+    mode,
+    requestedLevel,
+    requestedLabel: getQualityLabel(requestedLevel),
+    actualLabel: getActualQualityLabel(match),
+    actualLevel: match.level ?? null,
+    actualBitrate: Number.isFinite(actualBitrate) && actualBitrate > 0 ? actualBitrate : null,
+    actualType: match.type?.replace(/^\./, "").toUpperCase() ?? null,
+    actualDuration: match.time ? formatDuration(Number(match.time)) : null,
+    trial: isTrialClip(song, match)
+  };
+}
+
 function assertResolvedQualityMatchesRequest(song: Song, requestedLevel: DownloadQualityLevel, match: SongUrlItem) {
   const requestedLabel = getQualityLabel(requestedLevel);
   const actualBitrate = Number(match.br ?? 0);
@@ -572,6 +589,85 @@ async function resolveSongDownloadWithPlan(song: Song, level: DownloadQualityLev
   throw primaryError ?? new Error("当前账号没有可用的下载凭证。");
 }
 
+async function resolveSongPlaybackProbeWithPlan(song: Song, level: DownloadQualityLevel, plan: Awaited<ReturnType<typeof buildMediaCredentialPlan>>) {
+  let primaryMatch: ResolvedSongStream | null = null;
+  let primaryError: Error | null = null;
+
+  if (plan.primaryCookie) {
+    try {
+      primaryMatch = await resolveSongAudio(song.id, level, plan.primaryCookie);
+      if (!isTrialClip(song, primaryMatch) || !plan.fallbackCookie) {
+        return primaryMatch;
+      }
+    } catch (error) {
+      primaryError = error instanceof Error ? error : new Error("媒体流检测失败");
+      if (!plan.fallbackCookie) {
+        throw primaryError;
+      }
+    }
+  }
+
+  if (plan.fallbackCookie) {
+    try {
+      return await resolveSongAudio(song.id, level, plan.fallbackCookie);
+    } catch (error) {
+      if (primaryMatch) {
+        return primaryMatch;
+      }
+
+      throw error instanceof Error ? error : primaryError ?? new Error("媒体流检测失败");
+    }
+  }
+
+  throw primaryError ?? new Error("当前账号没有可用的媒体访问凭证。");
+}
+
+function shouldTryFallbackForDownloadProbe(song: Song, level: DownloadQualityLevel, match: SongUrlItem) {
+  if (isTrialClip(song, match)) {
+    return true;
+  }
+
+  try {
+    assertResolvedQualityMatchesRequest(song, level, match);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+async function resolveSongDownloadProbeWithPlan(song: Song, level: DownloadQualityLevel, plan: Awaited<ReturnType<typeof buildMediaCredentialPlan>>) {
+  let primaryMatch: ResolvedSongStream | null = null;
+  let primaryError: Error | null = null;
+
+  if (plan.primaryCookie) {
+    try {
+      primaryMatch = await resolveSongAudio(song.id, level, plan.primaryCookie, true);
+      if (!shouldTryFallbackForDownloadProbe(song, level, primaryMatch) || !plan.fallbackCookie) {
+        return primaryMatch;
+      }
+    } catch (error) {
+      primaryError = error instanceof Error ? error : new Error("下载音源检测失败");
+      if (!plan.fallbackCookie) {
+        throw primaryError;
+      }
+    }
+  }
+
+  if (plan.fallbackCookie) {
+    try {
+      return await resolveSongAudio(song.id, level, plan.fallbackCookie, true);
+    } catch (error) {
+      if (primaryMatch) {
+        return primaryMatch;
+      }
+
+      throw error instanceof Error ? error : primaryError ?? new Error("下载音源检测失败");
+    }
+  }
+
+  throw primaryError ?? new Error("当前账号没有可用的下载凭证。");
+}
+
 export async function resolveSongStream(
   songId: string,
   level: DownloadQualityLevel,
@@ -585,6 +681,16 @@ export async function resolveSongStream(
 export async function assertDownloadAccess(song: Song, level: DownloadQualityLevel, userCookieOverride?: string) {
   const plan = await buildMediaCredentialPlan({ userCookieOverride });
   await resolveSongDownloadWithPlan(song, level, plan);
+}
+
+export async function probeSongAudio(song: Song, level: DownloadQualityLevel, mode: SongAudioProbeMode, userCookieOverride?: string): Promise<SongAudioProbe> {
+  const plan = await buildMediaCredentialPlan({ userCookieOverride });
+  const match =
+    mode === "download"
+      ? await resolveSongDownloadProbeWithPlan(song, level, plan)
+      : await resolveSongPlaybackProbeWithPlan(song, level, plan);
+
+  return buildSongAudioProbe(song, mode, level, match);
 }
 
 export async function resolveDirectDownload(song: Song, level: DownloadQualityLevel, userCookieOverride?: string): Promise<DirectDownloadResolution> {

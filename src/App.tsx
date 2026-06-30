@@ -30,6 +30,7 @@ import {
   getPlaylists,
   getSongCommentReplies,
   getSongComments,
+  getSongAudioProbe,
   getUserEvents,
   getUserProfile,
   getUserSocialList,
@@ -63,7 +64,7 @@ import {
   replyToSongComment,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, SongComment, SongCommentRepliesPage, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
@@ -686,7 +687,7 @@ function MusicGlyph() {
 
 function PreviewIcon() {
   return (
-    <svg aria-hidden="true" viewBox="0 0 24 24" className="action-svg">
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="action-svg preview-action-svg">
       <path d="M8 5.75v12.5L18 12 8 5.75Z" />
     </svg>
   );
@@ -720,6 +721,16 @@ function LockIcon() {
       <path d="M7.5 10.5V8.75a4.5 4.5 0 1 1 9 0v1.75" />
       <rect x="5.5" y="10.5" width="13" height="9" rx="2.75" ry="2.75" />
       <path d="M12 14.25v2.5" />
+    </svg>
+  );
+}
+
+function InfoIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="action-svg">
+      <circle cx="12" cy="12" r="7.25" />
+      <path d="M12 11.25v4.5" />
+      <path d="M12 8.15h.01" />
     </svg>
   );
 }
@@ -1110,6 +1121,13 @@ export default function App() {
   const [commentReplyDrafts, setCommentReplyDrafts] = useState<Record<string, string>>({});
   const [postingCommentId, setPostingCommentId] = useState<string | null>(null);
   const [commentActionError, setCommentActionError] = useState("");
+  const [songDetailSong, setSongDetailSong] = useState<Song | null>(null);
+  const [songDetailLyrics, setSongDetailLyrics] = useState<LyricLine[]>([]);
+  const [songDetailComments, setSongDetailComments] = useState<SongCommentsPage | null>(null);
+  const [songDetailPlaybackProbe, setSongDetailPlaybackProbe] = useState<SongAudioProbe | null>(null);
+  const [songDetailDownloadProbe, setSongDetailDownloadProbe] = useState<SongAudioProbe | null>(null);
+  const [loadingSongDetail, setLoadingSongDetail] = useState(false);
+  const [songDetailError, setSongDetailError] = useState("");
   const [userProfileTarget, setUserProfileTarget] = useState<UserProfileTarget | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loadingUserProfile, setLoadingUserProfile] = useState(false);
@@ -1191,6 +1209,84 @@ export default function App() {
 
   function getPreferredQualityForLevel(song: Song, level: DownloadQualityLevel) {
     return song.availableQualities.find((quality) => quality.level === level)?.level ?? song.availableQualities.at(-1)?.level ?? "standard";
+  }
+
+  function getHighestQualityLabel(song: Song) {
+    return song.availableQualities.at(-1)?.label ?? song.quality ?? "未知";
+  }
+
+  function getSongSourceMeta(song: Song) {
+    switch (song.source) {
+      case "netease-cloud":
+        return {
+          title: "网易云云盘",
+          detail: "试听和下载会跟随云盘实际文件；云盘只有 128K 时，选择 FLAC/Hi-Res 也不会自动升档。",
+          badge: "云"
+        };
+      case "netease-daily":
+        return { title: "每日推荐", detail: "来自网易云每日推荐，音源解析仍按当前账号权限与版权返回。", badge: "日" };
+      case "netease-discover":
+        return { title: "系统推荐", detail: "来自发现音乐推荐流，实际播放/下载音质以网易云返回为准。", badge: "推" };
+      case "netease-personal-radar":
+        return { title: "私人雷达", detail: "来自私人雷达推荐，播放失败时通常和账号权限或版权有关。", badge: "雷" };
+      case "netease-personal-roaming":
+        return { title: "私人漫游", detail: "来自私人漫游推荐，实际可用音质会在下方检测。", badge: "漫" };
+      case "netease-heartbeat":
+        return { title: "心动模式", detail: "来自心动模式续播，优先保持当前播放语境。", badge: "心" };
+      case "netease-artist":
+        return { title: "歌手页", detail: "来自歌手热门歌曲列表，音质取决于曲库和账号权限。", badge: "歌" };
+      case "netease-album":
+        return { title: "专辑页", detail: "来自专辑曲目，版本以当前专辑条目为准。", badge: "专" };
+      default:
+        return { title: "网易云曲库", detail: "来自网易云搜索或歌单条目，实际音质需解析后确认。", badge: "网" };
+    }
+  }
+
+  function getProbeStatusText(probe: SongAudioProbe | null, fallbackLabel: string) {
+    if (!probe) {
+      return `待检测 · 将请求 ${fallbackLabel}`;
+    }
+
+    const bitrateLabel = probe.actualBitrate ? ` · ${Math.round(probe.actualBitrate / 1000)}Kbps` : "";
+    const durationLabel = probe.actualDuration ? ` · ${probe.actualDuration}` : "";
+    const trialLabel = probe.trial ? " · 试听片段" : "";
+    return `${probe.actualLabel}${bitrateLabel}${durationLabel}${trialLabel}，请求 ${probe.requestedLabel}`;
+  }
+
+  function probeMeetsRequestedQuality(probe: SongAudioProbe | null) {
+    if (!probe || probe.requestedLevel === "standard") {
+      return true;
+    }
+
+    const bitrate = probe.actualBitrate ?? 0;
+    const actualType = probe.actualType?.toLowerCase() ?? "";
+    const actualLevel = probe.actualLevel?.toLowerCase() ?? "";
+
+    if (probe.requestedLevel === "lossless") {
+      return actualType === "flac" || actualType === "wav" || actualLevel === "lossless" || bitrate >= 700000;
+    }
+
+    if (probe.requestedLevel === "hires") {
+      return actualLevel === "hires" || bitrate >= 900000;
+    }
+
+    if (probe.requestedLevel === "exhigh") {
+      return actualLevel === "exhigh" || !bitrate || bitrate >= 300000;
+    }
+
+    return true;
+  }
+
+  function getProbeToneClass(probe: SongAudioProbe | null) {
+    if (!probe) {
+      return "";
+    }
+
+    if (probe.trial || !probeMeetsRequestedQuality(probe)) {
+      return "warning";
+    }
+
+    return "ok";
   }
 
   function createQualitySelectionMap(songs: Song[], level = settings.defaultPlaybackQuality) {
@@ -2392,6 +2488,21 @@ export default function App() {
     setMessage(`正在查看评论：${song.title}`);
   }
 
+  function openSongDetail(song: Song) {
+    closeSongContextMenu();
+    setSongDetailSong(song);
+    setMessage(`正在查看歌曲详情：${song.title}`);
+  }
+
+  function closeSongDetail() {
+    setSongDetailSong(null);
+    setSongDetailLyrics([]);
+    setSongDetailComments(null);
+    setSongDetailPlaybackProbe(null);
+    setSongDetailDownloadProbe(null);
+    setSongDetailError("");
+  }
+
   function handleRefreshSongComments() {
     pendingCommentScrollTopRef.current = commentsScrollRef.current?.scrollTop ?? 0;
     setCommentRefreshKey((key) => key + 1);
@@ -2804,7 +2915,7 @@ export default function App() {
     handleSelectSong(song);
 
     const menuWidth = 236;
-    const menuHeight = resultSource === "playlist" && activePlaylist?.owned ? 330 : 286;
+    const menuHeight = resultSource === "playlist" && activePlaylist?.owned ? 370 : 326;
     const x = Math.min(event.clientX, Math.max(12, window.innerWidth - menuWidth - 12));
     const y = Math.min(event.clientY, Math.max(12, window.innerHeight - menuHeight - 12));
 
@@ -4406,6 +4517,75 @@ export default function App() {
   }, [rightPanelTab, commentTrack?.id, commentPage, commentRefreshKey]);
 
   useEffect(() => {
+    if (!songDetailSong) {
+      return;
+    }
+
+    let cancelled = false;
+    const playbackLevel = getSelectedLevel(songDetailSong);
+    const downloadLevel = getDownloadLevel(songDetailSong);
+
+    setLoadingSongDetail(true);
+    setSongDetailError("");
+    setSongDetailLyrics([]);
+    setSongDetailComments(null);
+    setSongDetailPlaybackProbe(null);
+    setSongDetailDownloadProbe(null);
+
+    const loadDetail = async () => {
+      const [lyricsResult, commentsResult, playbackProbeResult, downloadProbeResult] = await Promise.allSettled([
+        getLyrics(songDetailSong.id),
+        getSongComments(songDetailSong.id, 1, 6),
+        accountIsLoggedIn
+          ? getSongAudioProbe(songDetailSong, playbackLevel, "playback")
+          : Promise.reject(new Error("登录后检测实际播放音源")),
+        accountIsLoggedIn
+          ? getSongAudioProbe(songDetailSong, downloadLevel, "download")
+          : Promise.reject(new Error("登录后检测实际下载音源"))
+      ]);
+
+      if (cancelled) {
+        return;
+      }
+
+      const detailErrors: string[] = [];
+
+      if (lyricsResult.status === "fulfilled") {
+        setSongDetailLyrics(lyricsResult.value.lines);
+      } else {
+        detailErrors.push(lyricsResult.reason instanceof Error ? lyricsResult.reason.message : "歌词读取失败");
+      }
+
+      if (commentsResult.status === "fulfilled") {
+        setSongDetailComments(commentsResult.value);
+      } else {
+        detailErrors.push(commentsResult.reason instanceof Error ? commentsResult.reason.message : "评论读取失败");
+      }
+
+      if (playbackProbeResult.status === "fulfilled") {
+        setSongDetailPlaybackProbe(playbackProbeResult.value);
+      } else {
+        detailErrors.push(playbackProbeResult.reason instanceof Error ? playbackProbeResult.reason.message : "播放音源检测失败");
+      }
+
+      if (downloadProbeResult.status === "fulfilled") {
+        setSongDetailDownloadProbe(downloadProbeResult.value);
+      } else {
+        detailErrors.push(downloadProbeResult.reason instanceof Error ? downloadProbeResult.reason.message : "下载音源检测失败");
+      }
+
+      setSongDetailError(detailErrors.join(" / "));
+      setLoadingSongDetail(false);
+    };
+
+    void loadDetail();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [songDetailSong?.id, qualitySelections, qualitySelectionTouched, settings.defaultPlaybackQuality, settings.defaultDownloadQuality, accountIsLoggedIn]);
+
+  useEffect(() => {
     if (!userProfileTarget) {
       return;
     }
@@ -4827,6 +5007,18 @@ export default function App() {
             ? { title: activePlaylist.owned ? "我的歌单" : "歌单", subtitle: activePlaylist.name }
         : activeMeta;
   const currentQualityLabel = currentTrack ? getSelectedLabel(currentTrack) : "128K";
+  const songDetailSourceMeta = songDetailSong ? getSongSourceMeta(songDetailSong) : null;
+  const songDetailPlaybackLevel: DownloadQualityLevel = songDetailSong ? getSelectedLevel(songDetailSong) : "standard";
+  const songDetailPlaybackLabel = songDetailSong ? getDownloadLevelLabel(songDetailSong, songDetailPlaybackLevel) : "";
+  const songDetailDownloadLevel: DownloadQualityLevel = songDetailSong ? getDownloadLevel(songDetailSong) : "standard";
+  const songDetailDownloadLabel = songDetailSong ? getDownloadLevelLabel(songDetailSong, songDetailDownloadLevel) : "";
+  const songDetailHighestLabel = songDetailSong ? getHighestQualityLabel(songDetailSong) : "";
+  const songDetailLyricsPreview = songDetailLyrics.filter((line) => line.text.trim()).slice(0, 5);
+  const songDetailCommentsPreview = songDetailComments
+    ? [...songDetailComments.hotComments, ...songDetailComments.comments]
+        .filter((comment, index, list) => list.findIndex((item) => item.id === comment.id) === index)
+        .slice(0, 3)
+    : [];
   const isDiscoverListView = mainTab === "search" && navKey === "discover" && resultSource === "discover";
   const isPlaylistSongsView = mainTab === "search" && navKey === "playlists" && resultSource === "playlist" && Boolean(activePlaylist);
   const isDetailResultView = mainTab === "search" && (navKey === "artist" || navKey === "album");
@@ -6599,6 +6791,15 @@ export default function App() {
                     <div className="row-actions">
                       <button
                         type="button"
+                        className="row-icon-button subtle"
+                        aria-label={`查看 ${song.title} 的歌曲详情`}
+                        title="歌曲详情"
+                        onClick={(event) => { event.stopPropagation(); openSongDetail(song); }}
+                      >
+                        <InfoIcon />
+                      </button>
+                      <button
+                        type="button"
                         className={playbackLocked ? "row-icon-button locked-playback-button" : "row-icon-button"}
                         aria-label={playbackLocked ? `登录后试听 ${song.title}` : `试听 ${song.title}`}
                         title={playbackLocked ? "登录后试听" : "试听"}
@@ -6873,6 +7074,15 @@ export default function App() {
                       {renderQualitySelect(song)}
 
                       <div className="row-actions" onClick={(event) => event.stopPropagation()}>
+                        <button
+                          type="button"
+                          className="row-icon-button subtle"
+                          aria-label={`查看 ${song.title} 的歌曲详情`}
+                          title="歌曲详情"
+                          onClick={() => openSongDetail(song)}
+                        >
+                          <InfoIcon />
+                        </button>
                         <button
                           type="button"
                           className={playbackLocked ? "row-icon-button locked-playback-button" : "row-icon-button"}
@@ -7604,6 +7814,183 @@ export default function App() {
         </div>
       ) : null}
 
+      {songDetailSong && songDetailSourceMeta ? (() => {
+        const detailSong = songDetailSong;
+        const sourceMeta = songDetailSourceMeta;
+
+        return (
+          <div className="modal-backdrop song-detail-backdrop" role="dialog" aria-modal="true" aria-label={`${detailSong.title} 歌曲详情`} onClick={closeSongDetail}>
+            <section className="song-detail-card" onClick={(event) => event.stopPropagation()}>
+              <header className="song-detail-hero">
+                {detailSong.coverUrl ? <img className="song-detail-hero-bg" src={detailSong.coverUrl} alt="" /> : null}
+                <div className="song-detail-hero-shade" aria-hidden="true" />
+                <button type="button" className="modal-close song-detail-close" onClick={closeSongDetail} aria-label="关闭歌曲详情">
+                  ×
+                </button>
+                <div className="song-detail-identity">
+                  <CoverArt song={detailSong} className="song-detail-cover" />
+                  <div className="song-detail-title">
+                    <p className="eyebrow">Song Detail</p>
+                    <h2>{detailSong.title}</h2>
+                    <span>{detailSong.artist} · {detailSong.album} · {detailSong.duration}</span>
+                  </div>
+                </div>
+              </header>
+
+              <div className="song-detail-body">
+                <div className="song-detail-actions" aria-label="歌曲操作">
+                  <button
+                    type="button"
+                    className="row-icon-button"
+                    disabled={playbackLocked}
+                    title={playbackLocked ? "登录后试听" : "试听"}
+                    onClick={() => handlePreview(detailSong)}
+                  >
+                    <PreviewIcon />
+                  </button>
+                  <button
+                    type="button"
+                    className="row-icon-button"
+                    title="查看评论"
+                    onClick={() => {
+                      closeSongDetail();
+                      openSongComments(detailSong);
+                    }}
+                  >
+                    <span className="song-detail-action-text">评</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="row-icon-button playlist-add-button"
+                    disabled={Boolean(addingToPlaylistId)}
+                    title={accountIsLoggedIn ? "收藏到歌单" : "登录后收藏到歌单"}
+                    onClick={() => {
+                      closeSongDetail();
+                      void handleOpenPlaylistPicker(detailSong);
+                    }}
+                  >
+                    <PlaylistAddIcon />
+                  </button>
+                  <button
+                    type="button"
+                    className="row-icon-button accent"
+                    disabled={Boolean(directDownloadingSongId || batchDownloading)}
+                    title={hasNeteaseDownloadAuth ? "下载" : "登录后下载"}
+                    onClick={() => {
+                      closeSongDetail();
+                      void handleDownload(detailSong);
+                    }}
+                  >
+                    <DownloadIcon />
+                  </button>
+                  <button
+                    type="button"
+                    className="row-icon-button subtle"
+                    title="复制网易云链接"
+                    onClick={() => void handleCopySongLink(detailSong)}
+                  >
+                    ↗
+                  </button>
+                </div>
+
+                <section className="song-detail-source">
+                  <span className="song-detail-source-badge">{sourceMeta.badge}</span>
+                  <div>
+                    <strong>{sourceMeta.title}</strong>
+                    <p>{sourceMeta.detail}</p>
+                  </div>
+                </section>
+
+                <section className="song-detail-quality-grid" aria-label="音源与音质">
+                  <article className="song-detail-quality-card">
+                    <span>列表最高</span>
+                    <strong>{songDetailHighestLabel}</strong>
+                    <small>当前条目可选规格</small>
+                  </article>
+                  <article className="song-detail-quality-card">
+                    <span>播放请求</span>
+                    <strong>{songDetailPlaybackLabel}</strong>
+                    <small>跟随当前下拉选择</small>
+                  </article>
+                  <article className={`song-detail-quality-card ${getProbeToneClass(songDetailPlaybackProbe)}`}>
+                    <span>实际播放</span>
+                    <strong>{songDetailPlaybackProbe?.actualLabel ?? (loadingSongDetail ? "检测中" : "未检测")}</strong>
+                    <small>{loadingSongDetail && !songDetailPlaybackProbe ? "正在解析网易云返回" : getProbeStatusText(songDetailPlaybackProbe, songDetailPlaybackLabel)}</small>
+                  </article>
+                  <article className="song-detail-quality-card">
+                    <span>下载请求</span>
+                    <strong>{songDetailDownloadLabel}</strong>
+                    <small>{qualitySelectionTouched[detailSong.id] ? "跟随当前下拉选择" : "跟随默认下载音质"}</small>
+                  </article>
+                  <article className={`song-detail-quality-card ${getProbeToneClass(songDetailDownloadProbe)}`}>
+                    <span>实际下载</span>
+                    <strong>{songDetailDownloadProbe?.actualLabel ?? (loadingSongDetail ? "检测中" : "未检测")}</strong>
+                    <small>{loadingSongDetail && !songDetailDownloadProbe ? "正在解析下载地址" : getProbeStatusText(songDetailDownloadProbe, songDetailDownloadLabel)}</small>
+                  </article>
+                </section>
+
+                {songDetailError ? <p className="song-detail-error">{songDetailError}</p> : null}
+
+                <section className="song-detail-preview-grid">
+                  <div className="song-detail-preview-panel">
+                    <div className="song-detail-section-head">
+                      <strong>歌词预览</strong>
+                      <span>{songDetailLyrics.length > 0 ? `${songDetailLyrics.length} 行` : loadingSongDetail ? "读取中" : "无歌词"}</span>
+                    </div>
+                    {songDetailLyricsPreview.length > 0 ? (
+                      <div className="song-detail-lyrics">
+                        {songDetailLyricsPreview.map((line) => (
+                          <p key={`${line.time}-${line.text}`}>{renderCommentContent(line.text)}</p>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="song-detail-empty">{loadingSongDetail ? "正在读取歌词..." : "暂时没有歌词内容。"}</div>
+                    )}
+                  </div>
+
+                  <div className="song-detail-preview-panel">
+                    <div className="song-detail-section-head">
+                      <strong>评论预览</strong>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          closeSongDetail();
+                          openSongComments(detailSong);
+                        }}
+                      >
+                        打开
+                      </button>
+                    </div>
+                    {songDetailCommentsPreview.length > 0 ? (
+                      <div className="song-detail-comments">
+                        {songDetailCommentsPreview.map((comment) => (
+                          <article key={comment.id} className="song-detail-comment">
+                            <button
+                              type="button"
+                              className="song-detail-comment-avatar"
+                              onClick={() => openUserProfile({ id: comment.userId, fallbackName: comment.nickname, fallbackAvatarUrl: comment.avatarUrl })}
+                              title={`查看 ${comment.nickname} 的资料`}
+                            >
+                              {comment.avatarUrl ? <img src={comment.avatarUrl} alt="" loading="lazy" /> : <span>{comment.nickname.slice(0, 1)}</span>}
+                            </button>
+                            <div>
+                              <strong>{comment.nickname}</strong>
+                              <p>{renderCommentContent(comment.content)}</p>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="song-detail-empty">{loadingSongDetail ? "正在读取评论..." : "暂时没有评论预览。"}</div>
+                    )}
+                  </div>
+                </section>
+              </div>
+            </section>
+          </div>
+        );
+      })() : null}
+
       {qrLoginOpen ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="网易云扫码登录" onClick={closeQrLogin}>
           <section className="qr-login-card" onClick={(event) => event.stopPropagation()}>
@@ -7866,6 +8253,10 @@ export default function App() {
           <button type="button" role="menuitem" onClick={() => runSongContextAction(() => openSongComments(songContextMenu.song))}>
             <span className="song-context-icon">评</span>
             查看评论
+          </button>
+          <button type="button" role="menuitem" onClick={() => runSongContextAction(() => openSongDetail(songContextMenu.song))}>
+            <span className="song-context-icon"><InfoIcon /></span>
+            歌曲详情
           </button>
           <div className="song-context-divider" />
           <button type="button" role="menuitem" disabled={Boolean(addingToPlaylistId)} onClick={() => runSongContextAction(() => handleOpenPlaylistPicker(songContextMenu.song))}>

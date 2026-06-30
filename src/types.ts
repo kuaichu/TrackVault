@@ -109,6 +109,21 @@ export type SongCommentsPage = {
   comments: SongComment[];
 };
 
+export type SongAudioProbeMode = "playback" | "download";
+
+export type SongAudioProbe = {
+  songId: string;
+  mode: SongAudioProbeMode;
+  requestedLevel: DownloadQualityLevel;
+  requestedLabel: string;
+  actualLabel: string;
+  actualLevel?: string | null;
+  actualBitrate?: number | null;
+  actualType?: string | null;
+  actualDuration?: string | null;
+  trial: boolean;
+};
+
 export type UserProfilePlaylist = {
   id: string;
   name: string;

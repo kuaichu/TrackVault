@@ -21,7 +21,7 @@ import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getPersonalRadioSongs } from "./personal-radio-provider.js";
 import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./settings-store.js";
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
-import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, getTaskFileForDownload, resolveDirectDownload, resolveSongStream } from "./task-store.js";
+import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, getTaskFileForDownload, probeSongAudio, resolveDirectDownload, resolveSongStream } from "./task-store.js";
 import { checkNeteaseQrLogin, loginWithNeteaseCellphone, sendNeteaseCaptcha, startNeteaseQrLogin } from "./netease-auth.js";
 import { getUserEvents, getUserMutualFollow, getUserProfile, getUserSocialList, setUserFollowed } from "./user-provider.js";
 import { formatTransferExport } from "./playlist-transfer/export-formatters.js";
@@ -266,6 +266,26 @@ app.post("/api/comments/songs/:id/:commentId/replies", async (request, response)
   } catch (error) {
     response.status(401).json({
       message: error instanceof Error ? error.message : "回复评论失败"
+    });
+  }
+});
+
+app.post("/api/songs/audio-probe", async (request, response) => {
+  const song = request.body?.song as Song | undefined;
+  const level = typeof request.body?.level === "string" ? request.body.level : "standard";
+  const mode = request.body?.mode === "download" ? "download" : "playback";
+  const userCookieOverride = typeof request.headers["x-user-cookie"] === "string" ? request.headers["x-user-cookie"] : undefined;
+
+  if (!song?.id || !song?.title || !song?.artist) {
+    response.status(400).json({ message: "缺少歌曲信息" });
+    return;
+  }
+
+  try {
+    response.json({ probe: await probeSongAudio(song, level as DownloadQualityLevel, mode, userCookieOverride) });
+  } catch (error) {
+    response.status(error instanceof MediaAccessError ? error.status : 502).json({
+      message: error instanceof Error ? error.message : "检测实际音源失败"
     });
   }
 });
