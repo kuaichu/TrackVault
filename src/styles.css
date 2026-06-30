@@ -8070,7 +8070,7 @@ body {
 }
 
 .sidebar .nav-button:hover {
-  transform: translateX(1px);
+  transform: none;
 }
 
 .sidebar .nav-button.active {
