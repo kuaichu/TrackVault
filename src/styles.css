@@ -2612,6 +2612,26 @@ input[type="range"] {
   margin-bottom: 22px;
 }
 
+.settings-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.settings-panel {
+  padding: 18px 24px;
+}
+
+.settings-save-button {
+  flex: 0 0 auto;
+  min-width: 112px;
+  min-height: 38px;
+  padding: 10px 16px;
+  box-shadow: 0 12px 28px rgba(255, 151, 88, 0.18);
+}
+
 .form-grid {
   display: grid;
   gap: 14px;
@@ -2619,7 +2639,8 @@ input[type="range"] {
 
 .settings-grid {
   display: grid;
-  gap: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .settings-card {
@@ -2629,6 +2650,70 @@ input[type="range"] {
   border-radius: 18px;
   background: rgba(20, 27, 39, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.preference-card {
+  align-content: start;
+  min-height: 142px;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 20px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012)),
+    rgba(14, 21, 33, 0.76);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    0 16px 34px rgba(0, 0, 0, 0.14);
+}
+
+.preference-card-accent {
+  border-color: rgba(255, 180, 93, 0.14);
+  background:
+    linear-gradient(135deg, rgba(255, 180, 93, 0.1), rgba(255, 180, 93, 0.018) 42%, rgba(255, 255, 255, 0.014)),
+    rgba(14, 21, 33, 0.78);
+}
+
+.preference-card-quiet {
+  min-height: 132px;
+}
+
+.settings-card-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
+}
+
+.settings-card-head div {
+  min-width: 0;
+}
+
+.settings-card-head small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.settings-card-head > strong {
+  min-width: 54px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 180, 93, 0.16);
+  background: rgba(255, 180, 93, 0.08);
+  color: #ffd7a4;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.preference-card-quiet .settings-card-head > strong {
+  border-color: rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
 }
 
 .settings-card span {
@@ -2653,6 +2738,20 @@ input[type="range"] {
   color: var(--text-primary);
   padding: 13px 14px;
   outline: none;
+}
+
+.preference-card input {
+  min-height: 44px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
+    rgba(9, 15, 24, 0.62);
+  border-color: rgba(255, 255, 255, 0.075);
+  font-weight: 650;
+}
+
+.preference-card input:focus {
+  border-color: rgba(255, 180, 93, 0.28);
+  box-shadow: 0 0 0 3px rgba(255, 180, 93, 0.08);
 }
 
 .settings-card textarea {
@@ -2688,9 +2787,12 @@ input[type="range"] {
 .settings-quality-trigger {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.07);
-  background: var(--panel-bg-solid);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
+    rgba(9, 15, 24, 0.62);
   color: var(--text-primary);
-  padding: 13px 14px;
+  min-height: 44px;
+  padding: 11px 14px;
   outline: none;
   transition:
     border-color 160ms ease,
@@ -2717,6 +2819,46 @@ input[type="range"] {
   max-height: 236px;
   overflow: auto;
   backdrop-filter: blur(18px);
+}
+
+.concurrency-options {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.concurrency-option {
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
+    rgba(9, 15, 24, 0.62);
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.concurrency-option:hover {
+  border-color: rgba(255, 180, 93, 0.22);
+  color: #ffd7a4;
+  transform: translateY(-1px);
+}
+
+.concurrency-option.active {
+  border-color: rgba(255, 180, 93, 0.32);
+  background:
+    linear-gradient(180deg, rgba(255, 180, 93, 0.18), rgba(255, 180, 93, 0.055)),
+    rgba(20, 27, 39, 0.88);
+  color: #ffd7a4;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .form-grid textarea {
@@ -5041,6 +5183,10 @@ input[type="range"] {
     max-width: calc(100vw - 32px);
   }
 
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
   .results-head,
   .result-row {
     grid-template-columns: 24px minmax(140px, 1.1fr) minmax(150px, 1fr) 58px 102px 92px;
@@ -5087,6 +5233,7 @@ input[type="range"] {
   .content-header,
   .content-actions,
   .search-form,
+  .settings-head,
   .inline-row,
   .form-actions,
   .queue-header {
@@ -5097,6 +5244,23 @@ input[type="range"] {
 
   .content-actions {
     margin-top: 0;
+  }
+
+  .preference-card,
+  .preference-card-quiet {
+    min-height: auto;
+  }
+
+  .settings-card-head {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-card-head > strong {
+    justify-self: start;
+  }
+
+  .settings-save-button {
+    width: 100%;
   }
 
   .sidebar,

@@ -6342,22 +6342,24 @@ export default function App() {
               </form>
             </section>
           ) : (
-            <section className="form-panel">
-              <div className="form-head">
-                <p className="eyebrow">下载偏好</p>
-                <h1>服务器下载任务与文件保存</h1>
+            <section className="form-panel settings-panel">
+              <div className="form-head settings-head">
+                <div>
+                  <p className="eyebrow">偏好中心</p>
+                  <h1>下载与播放偏好</h1>
+                </div>
+                <button type="submit" form="preferences-form" className="primary-button settings-save-button" disabled={savingSettings}>{savingSettings ? "保存中" : "保存更改"}</button>
               </div>
 
-              <form className="settings-grid" onSubmit={handleSaveSettings}>
-                <label className="settings-card">
-                  <span>服务器下载目录</span>
-                  <p>保存服务器下载任务产物的目录，浏览器直连下载不会写入这里。</p>
-                  <input value={settings.downloadDirectory} onChange={(event) => setSettings((current) => ({ ...current, downloadDirectory: event.target.value }))} placeholder="downloads" />
-                </label>
-
-                <div className="settings-card">
-                  <span>默认播放音质</span>
-                  <p>用于试听、双击播放和底部播放器，默认按 128K 启动，手动改过的歌曲仍以手动选择为准。</p>
+              <form id="preferences-form" className="settings-grid" onSubmit={handleSaveSettings}>
+                <div className="settings-card preference-card preference-card-accent">
+                  <div className="settings-card-head">
+                    <div>
+                      <span>试听音质</span>
+                      <small>双击播放和底部播放器默认使用</small>
+                    </div>
+                    <strong>{playbackQualityOptions.find((option) => option.level === settings.defaultPlaybackQuality)?.label ?? "128K"}</strong>
+                  </div>
                   <div className="settings-quality-select">
                     <button
                       type="button"
@@ -6392,9 +6394,14 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="settings-card">
-                  <span>默认下载音质</span>
-                  <p>直连下载和服务器下载任务都会优先使用该音质；如果你手动改过某首歌的音质，会优先按手动选择下载。</p>
+                <div className="settings-card preference-card">
+                  <div className="settings-card-head">
+                    <div>
+                      <span>下载音质</span>
+                      <small>直连下载和服务器任务默认使用</small>
+                    </div>
+                    <strong>{settingsQualityOptions.find((option) => option.level === settings.defaultDownloadQuality)?.label ?? "Hi-Res"}</strong>
+                  </div>
                   <div className="settings-quality-select">
                     <button
                       type="button"
@@ -6428,28 +6435,39 @@ export default function App() {
                   </div>
                 </div>
 
-                <label className="settings-card">
-                  <span>同时下载任务数限制</span>
-                  <p>控制服务器下载任务并发，范围 1-5。浏览器直连下载不受这个设置影响。</p>
-                  <input
-                    type="number"
-                    min="1"
-                    max="5"
-                    step="1"
-                    value={settings.maxConcurrentDownloads}
-                    onChange={(event) => {
-                      const nextValue = Number(event.target.value);
-                      setSettings((current) => ({
-                        ...current,
-                        maxConcurrentDownloads: Number.isFinite(nextValue) ? Math.min(5, Math.max(1, Math.round(nextValue))) : current.maxConcurrentDownloads
-                      }));
-                    }}
-                  />
+                <label className="settings-card preference-card preference-card-quiet">
+                  <div className="settings-card-head">
+                    <div>
+                      <span>任务目录</span>
+                      <small>服务器下载产物保存位置</small>
+                    </div>
+                    <strong>路径</strong>
+                  </div>
+                  <input value={settings.downloadDirectory} onChange={(event) => setSettings((current) => ({ ...current, downloadDirectory: event.target.value }))} placeholder="downloads" />
                 </label>
 
-                <div className="form-actions">
-                  <button type="submit" className="primary-button wide" disabled={savingSettings}>{savingSettings ? "保存中" : "保存设置"}</button>
+                <div className="settings-card preference-card preference-card-quiet">
+                  <div className="settings-card-head">
+                    <div>
+                      <span>并发任务</span>
+                      <small>仅影响服务器下载队列</small>
+                    </div>
+                    <strong>{settings.maxConcurrentDownloads}</strong>
+                  </div>
+                  <div className="concurrency-options" role="group" aria-label="同时下载任务数">
+                    {[1, 2, 3, 4, 5].map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={settings.maxConcurrentDownloads === value ? "concurrency-option active" : "concurrency-option"}
+                        onClick={() => setSettings((current) => ({ ...current, maxConcurrentDownloads: value }))}
+                      >
+                        {value}
+                      </button>
+                    ))}
+                  </div>
                 </div>
+
               </form>
 
               {showAdminFallbackControls ? (
