@@ -3058,6 +3058,9 @@ input[type="range"] {
 .playlist-card-action {
   justify-self: end;
   align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 6px 10px;
   border-radius: 999px;
   border: 1px solid rgba(255, 180, 93, 0.2);
@@ -3066,6 +3069,12 @@ input[type="range"] {
   font-size: 12px;
   font-weight: 900;
   white-space: nowrap;
+}
+
+.playlist-card-action .operation-icon {
+  width: 13px;
+  height: 13px;
+  flex-basis: 13px;
 }
 
 .playlist-card.active .playlist-card-action {

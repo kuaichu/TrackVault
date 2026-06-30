@@ -672,7 +672,7 @@ function LockIcon() {
   );
 }
 
-type OperationIconName = "batch" | "close" | "download" | "playlist" | "refresh" | "trash";
+type OperationIconName = "batch" | "close" | "download" | "enter" | "playlist" | "refresh" | "trash";
 
 function OperationIcon({ name }: { name: OperationIconName }) {
   const paths: Record<OperationIconName, JSX.Element> = {
@@ -696,6 +696,12 @@ function OperationIcon({ name }: { name: OperationIconName }) {
         <path d="M12 4.75v9.5" />
         <path d="m8 10.75 4 4 4-4" />
         <path d="M5.75 19.25h12.5" />
+      </>
+    ),
+    enter: (
+      <>
+        <path d="M5.5 12h12" />
+        <path d="m13.5 7.5 4.5 4.5-4.5 4.5" />
       </>
     ),
     playlist: (
@@ -4757,7 +4763,10 @@ export default function App() {
           <span>{playlist.owned ? "我创建" : playlist.creatorName}</span>
           <p>{playlist.trackCount} 首 · 播放 {playlist.playCount.toLocaleString()}</p>
         </div>
-        <span className="playlist-card-action">{isLoadingThisPlaylist ? "载入中" : isActivePlaylist ? "当前" : "进入"}</span>
+        <span className="playlist-card-action">
+          {isLoadingThisPlaylist || isActivePlaylist ? null : <OperationIcon name="enter" />}
+          <span>{isLoadingThisPlaylist ? "载入中" : isActivePlaylist ? "当前" : "进入"}</span>
+        </span>
       </button>
     );
   };
@@ -5654,8 +5663,16 @@ export default function App() {
                   <p className="eyebrow">我的歌单</p>
                   <h2>网易云账号歌单</h2>
                 </div>
-                <button type="button" className="secondary-button" disabled={loadingPlaylists} onClick={() => void loadUserPlaylists()}>
-                  {loadingPlaylists ? "读取中" : "刷新歌单"}
+                <button
+                  type="button"
+                  className="secondary-button operation-button"
+                  disabled={loadingPlaylists}
+                  onClick={() => void loadUserPlaylists()}
+                  title={loadingPlaylists ? "正在读取歌单" : "刷新歌单"}
+                  aria-label={loadingPlaylists ? "正在读取歌单" : "刷新歌单"}
+                >
+                  <OperationIcon name="refresh" />
+                  <span>{loadingPlaylists ? "读取" : "刷新"}</span>
                 </button>
               </header>
 
