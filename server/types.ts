@@ -32,6 +32,10 @@ export type Song = {
   source: string;
 };
 
+export type PersonalRadioKind = "radar" | "roaming";
+
+export type PlaybackMode = "sequential" | "shuffle" | "repeat-one" | "heartbeat";
+
 export type ArtistProfile = {
   id: string;
   name: string;
@@ -304,7 +308,7 @@ export type PersistedPlayerState = {
   playQueue: Song[];
   playbackSeconds: number;
   volume: number;
-  playbackMode?: "sequential" | "shuffle";
+  playbackMode?: PlaybackMode;
 };
 
 export type NeteaseCookieCheckResult = {

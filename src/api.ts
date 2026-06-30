@@ -13,6 +13,7 @@ import type {
   NeteaseImportAuditJob,
   NeteaseImportAuditRequest,
   NeteaseCookieCheckResult,
+  PersonalRadioKind,
   NeteaseQrCheckResult,
   NeteaseQrStartResult,
   NeteaseTransferImportResult,
@@ -361,6 +362,34 @@ export async function getDailyRecommendSongs(): Promise<Song[]> {
   if (!response.ok) {
     const data = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new Error(data?.message ?? "获取每日推荐失败");
+  }
+
+  const data = (await response.json()) as { songs: Song[] };
+  return data.songs;
+}
+
+export async function getPersonalRadioSongs(kind: PersonalRadioKind): Promise<Song[]> {
+  const response = await apiFetch(`/api/recommend/personal-radio?kind=${encodeURIComponent(kind)}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取私人推荐失败");
+  }
+
+  const data = (await response.json()) as { songs: Song[] };
+  return data.songs;
+}
+
+export async function getHeartbeatSongs(songId: string, playlistId: string, startSongId = songId, count = 6): Promise<Song[]> {
+  const params = new URLSearchParams({
+    id: songId,
+    pid: playlistId,
+    sid: startSongId,
+    count: String(count)
+  });
+  const response = await apiFetch(`/api/playmode/heartbeat?${params.toString()}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取心动模式歌曲失败");
   }
 
   const data = (await response.json()) as { songs: Song[] };

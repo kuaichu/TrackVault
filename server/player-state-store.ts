@@ -1,6 +1,6 @@
 import { getCurrentUserKey } from "./account-store.js";
 import { getDatabase, isSqliteAvailable, readJsonStore, updateJsonStore } from "./database.js";
-import type { PersistedPlayerState, Song } from "./types.js";
+import type { PersistedPlayerState, PlaybackMode, Song } from "./types.js";
 
 const defaultPlayerState: PersistedPlayerState = {
   currentTrack: null,
@@ -27,6 +27,10 @@ function normalizeSong(song: Song): Song {
   };
 }
 
+function normalizePlaybackMode(mode: unknown): PlaybackMode {
+  return mode === "shuffle" || mode === "repeat-one" || mode === "heartbeat" ? mode : "sequential";
+}
+
 function normalizePlayerState(input: Partial<PersistedPlayerState>): PersistedPlayerState {
   const playQueue = Array.isArray(input.playQueue)
     ? input.playQueue.filter((song): song is Song => Boolean(song?.id && song?.title && song?.artist)).slice(0, 200).map(normalizeSong)
@@ -42,7 +46,7 @@ function normalizePlayerState(input: Partial<PersistedPlayerState>): PersistedPl
     playQueue,
     playbackSeconds: Number.isFinite(input.playbackSeconds) ? Math.max(0, Number(input.playbackSeconds)) : 0,
     volume: Number.isFinite(input.volume) ? Math.min(100, Math.max(0, Math.round(Number(input.volume)))) : 72,
-    playbackMode: input.playbackMode === "shuffle" ? "shuffle" : "sequential"
+    playbackMode: normalizePlaybackMode(input.playbackMode)
   };
 }
 

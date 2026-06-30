@@ -24,6 +24,8 @@ import {
   getCloudSongs,
   getDailyRecommendSongs,
   getDiscoverSongs,
+  getHeartbeatSongs,
+  getPersonalRadioSongs,
   getPlaylistSongs,
   getPlaylists,
   getSongCommentReplies,
@@ -61,7 +63,7 @@ import {
   replyToSongComment,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, SongComment, SongCommentRepliesPage, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, SongComment, SongCommentRepliesPage, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
@@ -246,6 +248,7 @@ const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
   volume: 72,
   playbackMode: "sequential"
 };
+const playbackModeOrder: PlaybackMode[] = ["sequential", "shuffle", "repeat-one", "heartbeat"];
 const QR_LOGIN_DEFAULT_MESSAGE = "打开网易云音乐 App 扫码登录。";
 const CELLPHONE_LOGIN_DEFAULT_MESSAGE = "请输入手机号并发送验证码登录。";
 const COOKIE_LOGIN_DEFAULT_MESSAGE = "粘贴网页登录后的 MUSIC_U Cookie。";
@@ -514,11 +517,15 @@ function loadPlayerState(): PersistedPlayerState {
       playQueue: queue,
       playbackSeconds,
       volume,
-      playbackMode: parsedState.playbackMode === "shuffle" ? "shuffle" : "sequential"
+      playbackMode: normalizePlaybackMode(parsedState.playbackMode)
     };
   } catch {
     return DEFAULT_PLAYER_STATE;
   }
+}
+
+function normalizePlaybackMode(mode: unknown): PlaybackMode {
+  return mode === "shuffle" || mode === "repeat-one" || mode === "heartbeat" ? mode : "sequential";
 }
 
 function savePlayerStateLocal(state: PersistedPlayerState) {
@@ -535,7 +542,7 @@ function hasPersistedPlayerState(state: PersistedPlayerState) {
       state.playQueue.length > 0 ||
       state.playbackSeconds > 0 ||
       state.volume !== DEFAULT_PLAYER_STATE.volume ||
-      state.playbackMode === "shuffle"
+      normalizePlaybackMode(state.playbackMode) !== DEFAULT_PLAYER_STATE.playbackMode
   );
 }
 
@@ -799,11 +806,17 @@ function ChevronIcon() {
   );
 }
 
-type PlayerIconName = "heart" | "more" | "next" | "pause" | "play" | "previous" | "queue" | "shuffle" | "volume";
+type PlayerIconName = "heart" | "heartbeat" | "more" | "next" | "pause" | "play" | "previous" | "queue" | "repeat" | "repeatOne" | "sequence" | "shuffle" | "volume";
 
 function PlayerIcon({ name }: { name: PlayerIconName }) {
   const paths: Record<PlayerIconName, JSX.Element> = {
     heart: <path d="M12 20.2 5.4 13.9C2.1 10.8 4 5.4 8.4 5.4c1.5 0 2.8.7 3.6 1.8.8-1.1 2.1-1.8 3.6-1.8 4.4 0 6.3 5.4 3 8.5L12 20.2Z" />,
+    heartbeat: (
+      <>
+        <path d="M12 20.2 5.4 13.9C2.1 10.8 4 5.4 8.4 5.4c1.5 0 2.8.7 3.6 1.8.8-1.1 2.1-1.8 3.6-1.8 4.4 0 6.3 5.4 3 8.5L12 20.2Z" />
+        <path d="M6.5 12h2.2l1.3-2.4 2.1 5 1.3-2.6h4.1" />
+      </>
+    ),
     more: (
       <>
         <path d="M6.5 12h.01" />
@@ -835,6 +848,31 @@ function PlayerIcon({ name }: { name: PlayerIconName }) {
         <path d="M5 7h10" />
         <path d="M5 12h14" />
         <path d="M5 17h8" />
+      </>
+    ),
+    repeat: (
+      <>
+        <path d="M17 5.5 20 8.5 17 11.5" />
+        <path d="M4 8.5h16" />
+        <path d="M7 18.5 4 15.5 7 12.5" />
+        <path d="M20 15.5H4" />
+      </>
+    ),
+    repeatOne: (
+      <>
+        <path d="M17 5.5 20 8.5 17 11.5" />
+        <path d="M4 8.5h16" />
+        <path d="M7 18.5 4 15.5 7 12.5" />
+        <path d="M20 15.5H4" />
+        <path d="M12 11.2v4.6" />
+      </>
+    ),
+    sequence: (
+      <>
+        <path d="M5 7.5h10.5" />
+        <path d="m13.5 4.8 3 2.7-3 2.7" />
+        <path d="M5 16.5h10.5" />
+        <path d="m13.5 13.8 3 2.7-3 2.7" />
       </>
     ),
     shuffle: (
@@ -874,6 +912,18 @@ function CoverArt({ song, className }: { song: Song | null; className: string })
       )}
     </div>
   );
+}
+
+const playbackModeMeta: Record<PlaybackMode, { label: string; icon: PlayerIconName; message: string }> = {
+  sequential: { label: "顺序播放", icon: "sequence", message: "已切换到顺序播放" },
+  shuffle: { label: "随机播放", icon: "shuffle", message: "已切换到随机播放" },
+  "repeat-one": { label: "单曲循环", icon: "repeatOne", message: "已切换到单曲循环" },
+  heartbeat: { label: "心动模式", icon: "heartbeat", message: "已切换到心动模式" }
+};
+
+function getNextPlaybackMode(mode: PlaybackMode) {
+  const currentIndex = playbackModeOrder.indexOf(mode);
+  return playbackModeOrder[(currentIndex + 1) % playbackModeOrder.length] ?? "sequential";
 }
 
 function renderCommentContent(content: string) {
@@ -985,6 +1035,7 @@ export default function App() {
   const [loadingCloudSongs, setLoadingCloudSongs] = useState(false);
   const [loadingDailySongs, setLoadingDailySongs] = useState(false);
   const [loadingDiscoverSongs, setLoadingDiscoverSongs] = useState(false);
+  const [loadingPersonalRadioKind, setLoadingPersonalRadioKind] = useState<PersonalRadioKind | null>(null);
   const [removingPlaylistSongs, setRemovingPlaylistSongs] = useState(false);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
   const [activePlaylist, setActivePlaylist] = useState<UserPlaylist | null>(null);
@@ -1018,6 +1069,7 @@ export default function App() {
   const [navKey, setNavKey] = useState<NavKey>("discover");
   const [viewHistory, setViewHistory] = useState<ViewState[]>([]);
   const [currentTrack, setCurrentTrack] = useState<Song | null>(initialPlayerState.currentTrack);
+  const [playbackSourcePlaylistId, setPlaybackSourcePlaylistId] = useState<string | null>(null);
   const [playerTheme, setPlayerTheme] = useState<PlayerTheme>(defaultPlayerTheme);
   const [playQueue, setPlayQueue] = useState<Song[]>(initialPlayerState.playQueue);
   const [playHistory, setPlayHistory] = useState<Song[]>(loadPlayHistory);
@@ -1046,7 +1098,7 @@ export default function App() {
   const [playbackSeconds, setPlaybackSeconds] = useState(initialPlayerState.playbackSeconds);
   const [playbackDuration, setPlaybackDuration] = useState(0);
   const [bufferedSeconds, setBufferedSeconds] = useState(0);
-  const [playbackMode, setPlaybackMode] = useState<"sequential" | "shuffle">(initialPlayerState.playbackMode === "shuffle" ? "shuffle" : "sequential");
+  const [playbackMode, setPlaybackMode] = useState<PlaybackMode>(normalizePlaybackMode(initialPlayerState.playbackMode));
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
   const [loadingLyrics, setLoadingLyrics] = useState(false);
   const [lyricsError, setLyricsError] = useState("");
@@ -1399,6 +1451,47 @@ export default function App() {
       setMessage(error instanceof Error ? error.message : "获取发现音乐失败");
     } finally {
       setLoadingDiscoverSongs(false);
+    }
+  }
+
+  async function loadPersonalRadio(kind: PersonalRadioKind) {
+    const cookieOk = await ensureNeteaseCookieHealthy();
+    if (!cookieOk) {
+      return;
+    }
+
+    const requestId = listRequestIdRef.current + 1;
+    listRequestIdRef.current = requestId;
+    const label = kind === "roaming" ? "私人漫游" : "私人雷达";
+    navigateTopLevel("discover");
+    setActivePlaylist(null);
+    setActiveArtist(null);
+    setActiveAlbum(null);
+    setResultSource("discover");
+    setResults([]);
+    setLoadingPersonalRadioKind(kind);
+    setMessage(`正在加载${label}`);
+
+    try {
+      const songs = await getPersonalRadioSongs(kind);
+      if (requestId !== listRequestIdRef.current) {
+        return;
+      }
+
+      setResults(songs);
+      setPlayQueue(songs);
+      setResultSource("discover");
+      applyQualityDefaults(songs);
+      setMessage(`${label} · 共 ${songs.length} 首歌`);
+    } catch (error) {
+      if (requestId !== listRequestIdRef.current) {
+        return;
+      }
+      setMessage(error instanceof Error ? error.message : `获取${label}失败`);
+    } finally {
+      if (requestId === listRequestIdRef.current) {
+        setLoadingPersonalRadioKind(null);
+      }
     }
   }
 
@@ -2188,6 +2281,13 @@ export default function App() {
     const shouldReload = currentUrl !== nextUrl;
 
     setCurrentTrack(song);
+    setPlaybackSourcePlaylistId(
+      resultSource === "playlist" && activePlaylist
+        ? activePlaylist.id
+        : song.source === "netease-heartbeat"
+          ? playbackSourcePlaylistId
+          : null
+    );
     addToPlayHistory(song);
     setPlayerError("");
 
@@ -3359,12 +3459,12 @@ export default function App() {
     return playQueue.length > 0 ? playQueue : results;
   }
 
-  function getNextSongFromQueue(queue: Song[], options: { excludeSongId?: string; mode?: "sequential" | "shuffle" } = {}) {
+  function getNextSongFromQueue(queue: Song[], options: { excludeSongId?: string; mode?: PlaybackMode } = {}) {
     if (queue.length === 0) {
       return null;
     }
 
-    if (options.mode === "shuffle") {
+    if (options.mode === "shuffle" || options.mode === "heartbeat") {
       const candidates = options.excludeSongId ? queue.filter((song) => song.id !== options.excludeSongId) : queue;
       const nextPool = candidates.length > 0 ? candidates : queue;
       return nextPool[Math.floor(Math.random() * nextPool.length)] ?? null;
@@ -3374,16 +3474,68 @@ export default function App() {
     return currentIndex >= 0 && currentIndex < queue.length - 1 ? queue[currentIndex + 1] : queue[0];
   }
 
+  function getHeartbeatPlaylistId() {
+    if (playbackSourcePlaylistId) {
+      return playbackSourcePlaylistId;
+    }
+
+    return resultSource === "playlist" && activePlaylist ? activePlaylist.id : null;
+  }
+
+  function appendHeartbeatSongsToQueue(songs: Song[]) {
+    if (songs.length === 0) {
+      return;
+    }
+
+    setPlayQueue((current) => {
+      const baseQueue = current.length > 0 ? current : getActivePlaybackQueue();
+      const existingIds = new Set(baseQueue.map((song) => song.id));
+      const additions = songs.filter((song) => !existingIds.has(song.id));
+      return [...baseQueue, ...additions].slice(0, 120);
+    });
+  }
+
+  async function resolveNextPlaybackSong(queue: Song[]) {
+    if (playbackMode !== "heartbeat" || !currentTrack) {
+      return getNextSongFromQueue(queue, {
+        excludeSongId: currentTrack?.id,
+        mode: playbackMode
+      });
+    }
+
+    const heartbeatPlaylistId = getHeartbeatPlaylistId();
+    if (heartbeatPlaylistId) {
+      try {
+        const heartbeatSongs = await getHeartbeatSongs(currentTrack.id, heartbeatPlaylistId, currentTrack.id, 6);
+        appendHeartbeatSongsToQueue(heartbeatSongs);
+        return heartbeatSongs[0] ?? getNextSongFromQueue(queue, { excludeSongId: currentTrack.id, mode: "heartbeat" });
+      } catch (error) {
+        setMessage(error instanceof Error ? `${error.message} 已按随机播放继续。` : "心动模式暂时不可用，已按随机播放继续。");
+      }
+    } else {
+      setMessage("心动模式需要从歌单歌曲开始，当前已按随机播放继续。");
+    }
+
+    return getNextSongFromQueue(queue, {
+      excludeSongId: currentTrack.id,
+      mode: "heartbeat"
+    });
+  }
+
   function handleTogglePlaybackMode() {
     setPlaybackMode((current) => {
-      const nextMode = current === "shuffle" ? "sequential" : "shuffle";
-      setMessage(nextMode === "shuffle" ? "已切换到随机播放" : "已切换到顺序播放");
+      const nextMode = getNextPlaybackMode(current);
+      setMessage(playbackModeMeta[nextMode].message);
       return nextMode;
     });
   }
 
-  function handleNextTrack() {
-    if (!requirePlaybackAuth()) {
+  async function playNextTrack(options: { fromEnded?: boolean } = {}) {
+    if (!options.fromEnded && !requirePlaybackAuth()) {
+      return;
+    }
+
+    if (options.fromEnded && !accountIsLoggedIn) {
       return;
     }
 
@@ -3392,13 +3544,14 @@ export default function App() {
       return;
     }
 
-    const nextSong = getNextSongFromQueue(queue, {
-      excludeSongId: currentTrack?.id,
-      mode: playbackMode
-    });
-    if (nextSong) {
+    const nextSong = await resolveNextPlaybackSong(queue);
+    if (nextSong && accountIsLoggedIn) {
       syncAudioForSong(nextSong, true);
     }
+  }
+
+  function handleNextTrack() {
+    void playNextTrack();
   }
 
   function handleQueueSongNext(song: Song) {
@@ -4006,7 +4159,7 @@ export default function App() {
           setPlayQueue(remotePlayerState.playQueue);
           setPlaybackSeconds(remotePlayerState.playbackSeconds);
           setVolume(remotePlayerState.volume);
-          setPlaybackMode(remotePlayerState.playbackMode === "shuffle" ? "shuffle" : "sequential");
+          setPlaybackMode(normalizePlaybackMode(remotePlayerState.playbackMode));
           savePlayerStateLocal(remotePlayerState);
         } else {
           const localPlayerState = loadPlayerState();
@@ -4420,17 +4573,19 @@ export default function App() {
 
     const handleEnded = () => {
       setIsPlaying(false);
-      const queue = getActivePlaybackQueue();
-      const nextSong = getNextSongFromQueue(queue, {
-        excludeSongId: currentTrack?.id,
-        mode: playbackMode
-      });
 
-      if (nextSong) {
-        if (accountIsLoggedIn) {
-          window.setTimeout(() => syncAudioForSong(nextSong, true), 0);
-        }
+      if (playbackMode === "repeat-one" && currentTrack && accountIsLoggedIn) {
+        audio.currentTime = 0;
+        playbackSecondsRef.current = 0;
+        setPlaybackSeconds(0);
+        void audio.play().catch(() => {
+          setIsPlaying(false);
+          setPlayerError("单曲循环重播失败，请重新点一次播放。");
+        });
+        return;
       }
+
+      void playNextTrack({ fromEnded: true });
     };
 
     const handleError = () => {
@@ -4462,7 +4617,7 @@ export default function App() {
       audio.removeEventListener("ended", handleEnded);
       audio.removeEventListener("error", handleError);
     };
-  }, [currentTrack?.id, playbackMode, playQueue, results]);
+  }, [accountIsLoggedIn, activePlaylist?.id, currentTrack?.id, playbackMode, playbackSourcePlaylistId, playQueue, resultSource, results]);
 
   useEffect(() => {
     const nextPlayerState: PersistedPlayerState = {
@@ -4653,13 +4808,24 @@ export default function App() {
   const isDetailResultView = mainTab === "search" && (navKey === "artist" || navKey === "album");
   const canGoBackFromCurrentView = isPlaylistSongsView || (isDetailResultView && viewHistory.length > 0);
   const showAdminFallbackControls = false;
+  const activeDiscoverFeedLabel =
+    loadingPersonalRadioKind === "radar"
+      ? "私人雷达"
+      : loadingPersonalRadioKind === "roaming"
+        ? "私人漫游"
+        : results.some((song) => song.source === "netease-personal-radar")
+          ? "私人雷达"
+          : results.some((song) => song.source === "netease-personal-roaming")
+            ? "私人漫游"
+            : "推荐新歌";
+  const discoverListBusy = loadingDiscoverSongs || Boolean(loadingPersonalRadioKind);
   const listHeaderMeta =
     isDiscoverListView
-      ? { count: `推荐新歌 · ${results.length} 首`, note: "来自网易云推荐新歌", action: loadingDiscoverSongs ? "加载中" : "刷新推荐", disabled: loadingDiscoverSongs, onClick: loadDiscoverSongs }
+      ? { count: `${activeDiscoverFeedLabel} · ${results.length} 首`, note: activeDiscoverFeedLabel === "推荐新歌" ? "来自网易云推荐新歌" : "来自网易云私人 FM", action: discoverListBusy ? "加载中" : "刷新推荐", disabled: discoverListBusy, onClick: loadDiscoverSongs }
       : null;
   const resultListLoading =
     navKey === "discover"
-      ? loadingDiscoverSongs
+      ? discoverListBusy
       : navKey === "cloud"
         ? loadingCloudSongs
         : navKey === "daily"
@@ -4669,7 +4835,11 @@ export default function App() {
             : loadingArtist;
   const resultLoadingMessage =
     navKey === "discover"
-      ? "正在加载发现音乐..."
+      ? loadingPersonalRadioKind === "roaming"
+        ? "正在加载私人漫游..."
+        : loadingPersonalRadioKind === "radar"
+          ? "正在加载私人雷达..."
+          : "正在加载发现音乐..."
       : navKey === "cloud"
         ? "正在读取云盘音乐..."
         : navKey === "daily"
@@ -5082,6 +5252,8 @@ export default function App() {
     const isModalBar = mode === "modal";
     const playerBarClass = `player-bar ${isModalBar ? "player-bar-modal player-modal-controls" : "player-bar-dock player-dock"}`;
     const trackCover = <CoverArt song={currentTrack} className="dock-cover player-bar-cover" />;
+    const playbackModeButtonMeta = playbackModeMeta[playbackMode];
+    const nextPlaybackModeMeta = playbackModeMeta[getNextPlaybackMode(playbackMode)];
 
     return (
       <footer className={playerBarClass}>
@@ -5126,7 +5298,15 @@ export default function App() {
 
         <div className="dock-controls player-bar-controls">
           <div className="control-buttons">
-            <button type="button" className={playbackMode === "shuffle" ? "dock-icon mode-active" : "dock-icon"} aria-label={playbackMode === "shuffle" ? "关闭随机播放" : "开启随机播放"} title={playbackMode === "shuffle" ? "随机播放已开启" : "开启随机播放"} onClick={handleTogglePlaybackMode}><PlayerIcon name="shuffle" /></button>
+            <button
+              type="button"
+              className={playbackMode === "sequential" ? "dock-icon" : "dock-icon mode-active"}
+              aria-label={`当前${playbackModeButtonMeta.label}，点击切换到${nextPlaybackModeMeta.label}`}
+              title={`当前${playbackModeButtonMeta.label}，点击切换到${nextPlaybackModeMeta.label}`}
+              onClick={handleTogglePlaybackMode}
+            >
+              <PlayerIcon name={playbackModeButtonMeta.icon} />
+            </button>
             <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后上一首" : "上一首"} title={playbackLocked ? "登录后播放" : "上一首"} disabled={playbackLocked || !currentTrack} onClick={handleReplay}><PlayerIcon name="previous" /></button>
             <button type="button" className={playbackLocked ? "dock-icon primary locked-playback-button" : "dock-icon primary"} onClick={handleTogglePlayback} disabled={playbackLocked || (!currentTrack && !hasPlaybackQueue)} aria-label={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"} title={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"}>{playbackLocked ? <LockIcon /> : <PlayerIcon name={isPlaying ? "pause" : "play"} />}</button>
             <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后下一首" : "下一首"} title={playbackLocked ? "登录后播放" : "下一首"} disabled={playbackLocked || !hasPlaybackQueue} onClick={handleNextTrack}><PlayerIcon name="next" /></button>
@@ -6145,6 +6325,55 @@ export default function App() {
                       ) : null}
                     </form>
                   </div>
+                </div>
+              ) : null}
+              {isDiscoverListView ? (
+                <div className="discover-mix-strip" aria-label="发现音乐快捷入口">
+                  <button
+                    type="button"
+                    className={loadingDailySongs ? "discover-mix-card busy" : "discover-mix-card"}
+                    disabled={loadingDailySongs || discoverListBusy}
+                    onClick={() => void loadDailySongs()}
+                    title="每日推荐"
+                  >
+                    <span className="discover-mix-mark calendar-mark" aria-hidden="true">
+                      <b>30</b>
+                    </span>
+                    <span className="discover-mix-copy">
+                      <strong>每日推荐</strong>
+                      <small>{loadingDailySongs ? "读取中" : "今日推荐歌曲"}</small>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={loadingPersonalRadioKind === "radar" ? "discover-mix-card radar busy" : "discover-mix-card radar"}
+                    disabled={loadingDailySongs || discoverListBusy}
+                    onClick={() => void loadPersonalRadio("radar")}
+                    title="私人雷达"
+                  >
+                    <span className="discover-mix-mark" aria-hidden="true">
+                      <PlayerIcon name="heartbeat" />
+                    </span>
+                    <span className="discover-mix-copy">
+                      <strong>私人雷达</strong>
+                      <small>{loadingPersonalRadioKind === "radar" ? "读取中" : "近期口味续播"}</small>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={loadingPersonalRadioKind === "roaming" ? "discover-mix-card roaming busy" : "discover-mix-card roaming"}
+                    disabled={loadingDailySongs || discoverListBusy}
+                    onClick={() => void loadPersonalRadio("roaming")}
+                    title="私人漫游"
+                  >
+                    <span className="discover-mix-mark" aria-hidden="true">
+                      <PlayerIcon name="shuffle" />
+                    </span>
+                    <span className="discover-mix-copy">
+                      <strong>私人漫游</strong>
+                      <small>{loadingPersonalRadioKind === "roaming" ? "读取中" : "探索相邻风格"}</small>
+                    </span>
+                  </button>
                 </div>
               ) : null}
               {visibleSongs.length > 0 ? (

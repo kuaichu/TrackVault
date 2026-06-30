@@ -9,6 +9,7 @@ import { getCurrentUserKey, getSession, loginSession, logoutSession } from "./ac
 import { getCloudSongs } from "./cloud-provider.js";
 import { getSongCommentReplies, getSongComments, replyToSongComment, setSongCommentLiked } from "./comment-provider.js";
 import { getDiscoverSongs } from "./discover-provider.js";
+import { getHeartbeatSongs } from "./heartbeat-provider.js";
 import { getArtistProfile, resolveArtistIdByName } from "./artist-provider.js";
 import { getPlayHistory, getSearchHistory, removeSearchHistory, savePlayHistory, saveSearchHistory } from "./history-store.js";
 import { getSongLyrics } from "./lyric-provider.js";
@@ -17,6 +18,7 @@ import { addSongToUserPlaylist, getPlaylistSongs, getUserPlaylists, removeSongsF
 import { searchProvider } from "./provider.js";
 import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
+import { getPersonalRadioSongs } from "./personal-radio-provider.js";
 import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./settings-store.js";
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
 import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, getTaskFileForDownload, resolveDirectDownload, resolveSongStream } from "./task-store.js";
@@ -32,7 +34,7 @@ import { checkNeteaseProviderTrackAvailability, createNeteasePlaylistFromTrackId
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
 import { createPlaylistTransferJob, getNeteaseImportTrackIds } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
-import type { AdminConfigUpdate, AppSettings, DownloadQualityLevel, DownloadRequest, Song } from "./types.js";
+import type { AdminConfigUpdate, AppSettings, DownloadQualityLevel, DownloadRequest, PersonalRadioKind, Song } from "./types.js";
 import type { PlaylistCompareResult, PlaylistCompareStatus } from "./playlist-transfer/playlist-compare.js";
 import type { MatchCandidate, TransferImportRequest, TransferTargetProvider, TransferTrack } from "./playlist-transfer/types.js";
 
@@ -179,6 +181,33 @@ app.get("/api/recommend/daily", async (_request, response) => {
   } catch (error) {
     response.status(401).json({
       message: error instanceof Error ? error.message : "获取每日推荐失败"
+    });
+  }
+});
+
+app.get("/api/recommend/personal-radio", async (request, response) => {
+  const kind = request.query.kind === "roaming" ? "roaming" : "radar";
+
+  try {
+    response.json({ kind, songs: await getPersonalRadioSongs(kind as PersonalRadioKind) });
+  } catch (error) {
+    response.status(401).json({
+      message: error instanceof Error ? error.message : "获取私人推荐失败"
+    });
+  }
+});
+
+app.get("/api/playmode/heartbeat", async (request, response) => {
+  const songId = typeof request.query.id === "string" ? request.query.id : "";
+  const playlistId = typeof request.query.pid === "string" ? request.query.pid : "";
+  const startSongId = typeof request.query.sid === "string" ? request.query.sid : undefined;
+  const count = Number(request.query.count);
+
+  try {
+    response.json({ songs: await getHeartbeatSongs({ songId, playlistId, startSongId, count: Number.isFinite(count) ? count : undefined }) });
+  } catch (error) {
+    response.status(songId && playlistId ? 401 : 400).json({
+      message: error instanceof Error ? error.message : "获取心动模式歌曲失败"
     });
   }
 });
