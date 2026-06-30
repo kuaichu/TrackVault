@@ -672,6 +672,67 @@ function LockIcon() {
   );
 }
 
+type OperationIconName = "batch" | "close" | "download" | "playlist" | "refresh" | "trash";
+
+function OperationIcon({ name }: { name: OperationIconName }) {
+  const paths: Record<OperationIconName, JSX.Element> = {
+    batch: (
+      <>
+        <path d="M5.5 7.25h13" />
+        <path d="M5.5 12h13" />
+        <path d="M5.5 16.75h8" />
+        <path d="M17 15.5v4" />
+        <path d="M15 17.5h4" />
+      </>
+    ),
+    close: (
+      <>
+        <path d="m7.25 7.25 9.5 9.5" />
+        <path d="m16.75 7.25-9.5 9.5" />
+      </>
+    ),
+    download: (
+      <>
+        <path d="M12 4.75v9.5" />
+        <path d="m8 10.75 4 4 4-4" />
+        <path d="M5.75 19.25h12.5" />
+      </>
+    ),
+    playlist: (
+      <>
+        <path d="M5.5 7.5h8.5" />
+        <path d="M5.5 12h7" />
+        <path d="M5.5 16.5h5" />
+        <path d="M16.5 11.5v6" />
+        <path d="M13.5 14.5h6" />
+      </>
+    ),
+    refresh: (
+      <>
+        <path d="M17.5 7.2A7 7 0 0 0 5.9 10" />
+        <path d="M17.5 4.5v2.7h-2.7" />
+        <path d="M6.5 16.8A7 7 0 0 0 18.1 14" />
+        <path d="M6.5 19.5v-2.7h2.7" />
+      </>
+    ),
+    trash: (
+      <>
+        <path d="M5.75 7.5h12.5" />
+        <path d="M9.25 7.5V5.75h5.5V7.5" />
+        <path d="M8.25 10v7.25c0 .8.7 1.5 1.5 1.5h4.5c.8 0 1.5-.7 1.5-1.5V10" />
+        <path d="M10.5 11.5v4.75" />
+        <path d="M13.5 11.5v4.75" />
+      </>
+    )
+  };
+
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="operation-icon">
+      {paths[name]}
+    </svg>
+  );
+}
+
 function ChevronIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" className="quality-chevron">
@@ -5057,8 +5118,16 @@ export default function App() {
                   <strong>{listHeaderMeta.count}</strong>
                   <span>{listHeaderMeta.note}</span>
                 </div>
-                <button type="button" className="secondary-button" disabled={listHeaderMeta.disabled} onClick={() => void listHeaderMeta.onClick()}>
-                  {listHeaderMeta.action}
+                <button
+                  type="button"
+                  className="secondary-button operation-button"
+                  disabled={listHeaderMeta.disabled}
+                  onClick={() => void listHeaderMeta.onClick()}
+                  title={listHeaderMeta.action}
+                  aria-label={listHeaderMeta.action}
+                >
+                  <OperationIcon name="refresh" />
+                  <span>{listHeaderMeta.disabled ? "加载" : "刷新"}</span>
                 </button>
               </div>
             ) : null}
@@ -5760,39 +5829,45 @@ export default function App() {
                       <>
                         <button
                           type="button"
-                          className={!hasNeteaseDownloadAuth ? "secondary-button compact locked-action-button" : "secondary-button compact"}
+                          className={!hasNeteaseDownloadAuth ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
                           disabled={batchDownloading || selectedVisibleSongs.length === 0}
                           onClick={() => void handleBatchDownload(selectedVisibleSongs, "已选歌曲")}
+                          title="直连下载已选歌曲"
                         >
-                          {!hasNeteaseDownloadAuth ? <LockIcon /> : null}
-                          {batchDownloading ? "启动中" : "直连下载已选"}
+                          {!hasNeteaseDownloadAuth ? <LockIcon /> : <OperationIcon name="download" />}
+                          <span>{batchDownloading ? "启动" : "下载"}</span>
                         </button>
                         <button
                           type="button"
-                          className={!accountIsLoggedIn ? "secondary-button compact locked-action-button" : "secondary-button compact"}
+                          className={!accountIsLoggedIn ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
                           disabled={Boolean(addingToPlaylistId) || selectedVisibleSongs.length === 0}
                           onClick={() => void handleOpenPlaylistPickerForSongs(selectedVisibleSongs)}
+                          title="收藏已选歌曲"
                         >
-                          {!accountIsLoggedIn ? <LockIcon /> : null}
-                          收藏已选
+                          {!accountIsLoggedIn ? <LockIcon /> : <OperationIcon name="playlist" />}
+                          <span>收藏</span>
                         </button>
                         {resultSource === "playlist" && activePlaylist?.owned ? (
                           <button
                             type="button"
-                            className="secondary-button compact danger-button"
+                            className="secondary-button compact operation-button danger-button"
                             disabled={removingPlaylistSongs || loadingPlaylistSongs || selectedVisibleSongs.length === 0}
                             onClick={() => void handleRemoveSelectedPlaylistSongs()}
+                            title="从歌单移除已选歌曲"
                           >
-                            {removingPlaylistSongs ? "移除中" : "从歌单移除"}
+                            <OperationIcon name="trash" />
+                            <span>{removingPlaylistSongs ? "移除中" : "移除"}</span>
                           </button>
                         ) : null}
-                        <button type="button" className="secondary-button compact" onClick={exitBatchSelectionMode}>
-                          退出批量
+                        <button type="button" className="secondary-button compact operation-button" onClick={exitBatchSelectionMode} title="退出批量操作">
+                          <OperationIcon name="close" />
+                          <span>退出</span>
                         </button>
                       </>
                     ) : (
-                      <button type="button" className="secondary-button compact" onClick={enterBatchSelectionMode}>
-                        批量操作
+                      <button type="button" className="secondary-button compact operation-button" onClick={enterBatchSelectionMode} title="批量操作">
+                        <OperationIcon name="batch" />
+                        <span>批量</span>
                       </button>
                     )}
                   </div>
@@ -6007,29 +6082,33 @@ export default function App() {
                         <>
                           <button
                             type="button"
-                            className={!hasNeteaseDownloadAuth ? "secondary-button compact locked-action-button" : "secondary-button compact"}
+                            className={!hasNeteaseDownloadAuth ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
                             disabled={batchDownloading || selectedVisibleSongs.length === 0}
                             onClick={() => void handleBatchDownload(selectedVisibleSongs, "已选歌曲")}
+                            title="直连下载已选歌曲"
                           >
-                            {!hasNeteaseDownloadAuth ? <LockIcon /> : null}
-                            {batchDownloading ? "启动中" : "直连下载已选"}
+                            {!hasNeteaseDownloadAuth ? <LockIcon /> : <OperationIcon name="download" />}
+                            <span>{batchDownloading ? "启动" : "下载"}</span>
                           </button>
                           <button
                             type="button"
-                            className={!accountIsLoggedIn ? "secondary-button compact locked-action-button" : "secondary-button compact"}
+                            className={!accountIsLoggedIn ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
                             disabled={Boolean(addingToPlaylistId) || selectedVisibleSongs.length === 0}
                             onClick={() => void handleOpenPlaylistPickerForSongs(selectedVisibleSongs)}
+                            title="收藏已选歌曲"
                           >
-                            {!accountIsLoggedIn ? <LockIcon /> : null}
-                            收藏已选
+                            {!accountIsLoggedIn ? <LockIcon /> : <OperationIcon name="playlist" />}
+                            <span>收藏</span>
                           </button>
-                          <button type="button" className="secondary-button compact" onClick={exitBatchSelectionMode}>
-                            退出批量
+                          <button type="button" className="secondary-button compact operation-button" onClick={exitBatchSelectionMode} title="退出批量操作">
+                            <OperationIcon name="close" />
+                            <span>退出</span>
                           </button>
                         </>
                       ) : (
-                        <button type="button" className="secondary-button compact" onClick={enterBatchSelectionMode}>
-                          批量操作
+                        <button type="button" className="secondary-button compact operation-button" onClick={enterBatchSelectionMode} title="批量操作">
+                          <OperationIcon name="batch" />
+                          <span>批量</span>
                         </button>
                       )}
                     </div>
