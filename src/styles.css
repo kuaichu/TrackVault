@@ -2922,13 +2922,22 @@ input[type="range"] {
 
 .playlist-card {
   display: grid;
-  grid-template-columns: 62px minmax(0, 1fr);
+  grid-template-columns: 62px minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
+  width: 100%;
   padding: 12px;
   border-radius: 16px;
   background: rgba(17, 24, 35, 0.74);
   border: 1px solid rgba(255, 255, 255, 0.05);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    transform 180ms ease;
 }
 
 .playlist-card.active {
@@ -2936,11 +2945,29 @@ input[type="range"] {
   background: rgba(255, 155, 87, 0.08);
 }
 
+.playlist-card:hover,
+.playlist-card:focus-visible {
+  border-color: rgba(255, 180, 93, 0.24);
+  background: rgba(255, 155, 87, 0.075);
+  transform: translateY(-1px);
+}
+
+.playlist-card:focus-visible {
+  outline: 2px solid rgba(255, 180, 93, 0.22);
+  outline-offset: 2px;
+}
+
+.playlist-card:disabled {
+  cursor: wait;
+  opacity: 0.82;
+  transform: none;
+}
+
 .playlist-cover {
   width: 62px;
   height: 62px;
   border-radius: 14px;
-  grid-row: span 2;
+  grid-row: 1;
 }
 
 .artist-cover {
@@ -2971,9 +2998,23 @@ input[type="range"] {
   color: var(--text-secondary);
 }
 
-.playlist-card .primary-button {
-  grid-column: 2;
-  justify-self: start;
+.playlist-card-action {
+  justify-self: end;
+  align-self: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 180, 93, 0.2);
+  background: rgba(255, 155, 87, 0.11);
+  color: #ffd7a4;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.playlist-card.active .playlist-card-action {
+  border-color: rgba(255, 180, 93, 0.28);
+  background: rgba(255, 155, 87, 0.18);
+  color: #ffe2b3;
 }
 
 .utility-panel {

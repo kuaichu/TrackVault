@@ -4664,32 +4664,42 @@ export default function App() {
     );
   }
 
-  const renderPlaylistCard = (playlist: UserPlaylist) => (
-    <article key={playlist.id} className={selectedPlaylistId === playlist.id ? "playlist-card active" : "playlist-card"}>
-      <CoverArt
-        song={{
-          id: playlist.id,
-          title: playlist.name,
-          artist: playlist.creatorName,
-          album: "歌单",
-          coverUrl: playlist.coverUrl,
-          duration: "00:00",
-          quality: "歌单",
-          availableQualities: [{ level: "standard", label: "128K" }],
-          source: "netease"
-        }}
-        className="playlist-cover"
-      />
-      <div className="playlist-copy">
-        <strong>{playlist.name}</strong>
-        <span>{playlist.owned ? "我创建" : playlist.creatorName}</span>
-        <p>{playlist.trackCount} 首 · 播放 {playlist.playCount.toLocaleString()}</p>
-      </div>
-      <button type="button" className="primary-button" disabled={loadingPlaylistSongs && selectedPlaylistId === playlist.id} onClick={() => void loadPlaylistSongs(playlist, 1, "")}>
-        {loadingPlaylistSongs && selectedPlaylistId === playlist.id ? "载入中" : "打开"}
+  const renderPlaylistCard = (playlist: UserPlaylist) => {
+    const isLoadingThisPlaylist = loadingPlaylistSongs && selectedPlaylistId === playlist.id;
+    const isActivePlaylist = selectedPlaylistId === playlist.id;
+
+    return (
+      <button
+        key={playlist.id}
+        type="button"
+        className={isActivePlaylist ? "playlist-card active" : "playlist-card"}
+        disabled={isLoadingThisPlaylist}
+        onClick={() => void loadPlaylistSongs(playlist, 1, "")}
+        title={`打开歌单：${playlist.name}`}
+      >
+        <CoverArt
+          song={{
+            id: playlist.id,
+            title: playlist.name,
+            artist: playlist.creatorName,
+            album: "歌单",
+            coverUrl: playlist.coverUrl,
+            duration: "00:00",
+            quality: "歌单",
+            availableQualities: [{ level: "standard", label: "128K" }],
+            source: "netease"
+          }}
+          className="playlist-cover"
+        />
+        <div className="playlist-copy">
+          <strong>{playlist.name}</strong>
+          <span>{playlist.owned ? "我创建" : playlist.creatorName}</span>
+          <p>{playlist.trackCount} 首 · 播放 {playlist.playCount.toLocaleString()}</p>
+        </div>
+        <span className="playlist-card-action">{isLoadingThisPlaylist ? "载入中" : isActivePlaylist ? "当前" : "进入"}</span>
       </button>
-    </article>
-  );
+    );
+  };
 
   function seekPlayback(nextTime: number) {
     const audio = audioRef.current;
