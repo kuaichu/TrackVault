@@ -198,6 +198,7 @@ type FloatingMenuStyle = Pick<CSSProperties, "top" | "left" | "width" | "maxHeig
 type SongContextMenuState = { song: Song; x: number; y: number };
 type UserProfileTarget = { id: string; fallbackName?: string; fallbackAvatarUrl?: string };
 type NeteaseLoginMode = "qr" | "cellphone" | "cookie";
+type DiscoverFeedKind = "recommend" | "daily" | PersonalRadioKind;
 type ViewSnapshot = {
   results: Song[];
   playQueue: Song[];
@@ -212,6 +213,7 @@ type ViewSnapshot = {
   playlistSongsTotal: number;
   playlistSearchInput: string;
   playlistSearchKeyword: string;
+  discoverFeedKind: DiscoverFeedKind;
   cloudMeta: { count: number; size: number; maxSize: number };
   qualitySelections: Record<string, DownloadQualityLevel>;
   qualitySelectionTouched: Record<string, true>;
@@ -249,6 +251,12 @@ const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
   playbackMode: "sequential"
 };
 const playbackModeOrder: PlaybackMode[] = ["sequential", "shuffle", "repeat-one", "heartbeat"];
+const discoverFeedLabels: Record<DiscoverFeedKind, string> = {
+  recommend: "推荐新歌",
+  daily: "每日推荐",
+  radar: "私人雷达",
+  roaming: "私人漫游"
+};
 const QR_LOGIN_DEFAULT_MESSAGE = "打开网易云音乐 App 扫码登录。";
 const CELLPHONE_LOGIN_DEFAULT_MESSAGE = "请输入手机号并发送验证码登录。";
 const COOKIE_LOGIN_DEFAULT_MESSAGE = "粘贴网页登录后的 MUSIC_U Cookie。";
@@ -1036,6 +1044,7 @@ export default function App() {
   const [loadingDailySongs, setLoadingDailySongs] = useState(false);
   const [loadingDiscoverSongs, setLoadingDiscoverSongs] = useState(false);
   const [loadingPersonalRadioKind, setLoadingPersonalRadioKind] = useState<PersonalRadioKind | null>(null);
+  const [discoverFeedKind, setDiscoverFeedKind] = useState<DiscoverFeedKind>("recommend");
   const [removingPlaylistSongs, setRemovingPlaylistSongs] = useState(false);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
   const [activePlaylist, setActivePlaylist] = useState<UserPlaylist | null>(null);
@@ -1244,6 +1253,7 @@ export default function App() {
           playlistSongsTotal,
           playlistSearchInput,
           playlistSearchKeyword,
+          discoverFeedKind,
           cloudMeta,
           qualitySelections,
           qualitySelectionTouched,
@@ -1292,6 +1302,7 @@ export default function App() {
     setPlaylistSongsTotal(previousView.snapshot.playlistSongsTotal);
     setPlaylistSearchInput(previousView.snapshot.playlistSearchInput);
     setPlaylistSearchKeyword(previousView.snapshot.playlistSearchKeyword);
+    setDiscoverFeedKind(previousView.snapshot.discoverFeedKind);
     setCloudMeta(previousView.snapshot.cloudMeta);
     setQualitySelections(previousView.snapshot.qualitySelections);
     setQualitySelectionTouched(previousView.snapshot.qualitySelectionTouched);
@@ -1430,6 +1441,7 @@ export default function App() {
       setResults([]);
     }
     setLoadingDiscoverSongs(true);
+    setDiscoverFeedKind("recommend");
     setMessage("正在加载发现音乐");
 
     try {
@@ -1454,7 +1466,7 @@ export default function App() {
     }
   }
 
-  async function loadPersonalRadio(kind: PersonalRadioKind) {
+  async function loadPersonalRadio(kind: PersonalRadioKind, options: { keepExisting?: boolean } = {}) {
     const cookieOk = await ensureNeteaseCookieHealthy();
     if (!cookieOk) {
       return;
@@ -1463,12 +1475,17 @@ export default function App() {
     const requestId = listRequestIdRef.current + 1;
     listRequestIdRef.current = requestId;
     const label = kind === "roaming" ? "私人漫游" : "私人雷达";
+    const shouldKeepCurrentResults =
+      options.keepExisting || (mainTab === "search" && navKey === "discover" && resultSource === "discover" && discoverFeedKind === kind);
     navigateTopLevel("discover");
     setActivePlaylist(null);
     setActiveArtist(null);
     setActiveAlbum(null);
     setResultSource("discover");
-    setResults([]);
+    setDiscoverFeedKind(kind);
+    if (!shouldKeepCurrentResults) {
+      setResults([]);
+    }
     setLoadingPersonalRadioKind(kind);
     setMessage(`正在加载${label}`);
 
@@ -1493,6 +1510,65 @@ export default function App() {
         setLoadingPersonalRadioKind(null);
       }
     }
+  }
+
+  async function loadDailySongs(options: { keepExisting?: boolean } = {}) {
+    const cookieOk = await ensureNeteaseCookieHealthy();
+    if (!cookieOk) {
+      return;
+    }
+
+    const requestId = listRequestIdRef.current + 1;
+    listRequestIdRef.current = requestId;
+    const shouldKeepCurrentResults =
+      options.keepExisting || (mainTab === "search" && navKey === "discover" && resultSource === "discover" && discoverFeedKind === "daily");
+    navigateTopLevel("discover");
+    setActivePlaylist(null);
+    setActiveArtist(null);
+    setActiveAlbum(null);
+    setResultSource("discover");
+    setDiscoverFeedKind("daily");
+    if (!shouldKeepCurrentResults) {
+      setResults([]);
+    }
+    setLoadingDailySongs(true);
+    setMessage("正在读取网易云每日推荐");
+
+    try {
+      const songs = await getDailyRecommendSongs();
+      if (requestId !== listRequestIdRef.current) {
+        return;
+      }
+
+      setResults(songs);
+      setPlayQueue(songs);
+      setResultSource("discover");
+      applyQualityDefaults(songs);
+      setMessage(`每日推荐 · 共 ${songs.length} 首歌`);
+    } catch (error) {
+      if (requestId !== listRequestIdRef.current) {
+        return;
+      }
+      setMessage(error instanceof Error ? error.message : "获取每日推荐失败");
+    } finally {
+      if (requestId === listRequestIdRef.current) {
+        setLoadingDailySongs(false);
+      }
+    }
+  }
+
+  function refreshDiscoverFeed() {
+    if (discoverFeedKind === "daily") {
+      void loadDailySongs({ keepExisting: true });
+      return;
+    }
+
+    if (discoverFeedKind === "radar" || discoverFeedKind === "roaming") {
+      void loadPersonalRadio(discoverFeedKind, { keepExisting: true });
+      return;
+    }
+
+    void loadDiscoverSongs({ keepExisting: true });
   }
 
   function applyStartupPreferences(nextSettings: AppSettings) {
@@ -1535,6 +1611,7 @@ export default function App() {
 
     navigateTopLevel("discover");
     setResultSource("discover");
+    setDiscoverFeedKind("recommend");
 
     if (!nextSettings.autoLoadDiscoverOnStart) {
       setMessage("已关闭启动自动读取发现音乐");
@@ -1547,6 +1624,7 @@ export default function App() {
       setResults(cachedDiscoverSongs);
       setPlayQueue(cachedDiscoverSongs);
       setResultSource("discover");
+      setDiscoverFeedKind("recommend");
       applyQualityDefaults(cachedDiscoverSongs, nextSettings.defaultPlaybackQuality);
       setMessage(`已先加载缓存推荐 · ${cachedDiscoverSongs.length} 首，正在后台刷新`);
     }
@@ -2151,47 +2229,6 @@ export default function App() {
       setMessage(error instanceof Error ? error.message : "获取云盘音乐失败");
     } finally {
       setLoadingCloudSongs(false);
-    }
-  }
-
-  async function loadDailySongs() {
-    const cookieOk = await ensureNeteaseCookieHealthy();
-    if (!cookieOk) {
-      return;
-    }
-
-    const requestId = listRequestIdRef.current + 1;
-    listRequestIdRef.current = requestId;
-    const shouldKeepCurrentResults = mainTab === "search" && navKey === "daily" && resultSource === "daily";
-    navigateTopLevel("daily");
-    setActivePlaylist(null);
-    setActiveArtist(null);
-    setActiveAlbum(null);
-    setResultSource("daily");
-    if (!shouldKeepCurrentResults) {
-      setResults([]);
-    }
-    setLoadingDailySongs(true);
-    setMessage("正在读取网易云每日推荐");
-
-    try {
-      const songs = await getDailyRecommendSongs();
-      if (requestId !== listRequestIdRef.current) {
-        return;
-      }
-
-      setResults(songs);
-      setPlayQueue(songs);
-      setResultSource("daily");
-      applyQualityDefaults(songs);
-      setMessage(`每日推荐 · 共 ${songs.length} 首歌`);
-    } catch (error) {
-      if (requestId !== listRequestIdRef.current) {
-        return;
-      }
-      setMessage(error instanceof Error ? error.message : "获取每日推荐失败");
-    } finally {
-      setLoadingDailySongs(false);
     }
   }
 
@@ -4808,20 +4845,24 @@ export default function App() {
   const isDetailResultView = mainTab === "search" && (navKey === "artist" || navKey === "album");
   const canGoBackFromCurrentView = isPlaylistSongsView || (isDetailResultView && viewHistory.length > 0);
   const showAdminFallbackControls = false;
-  const activeDiscoverFeedLabel =
-    loadingPersonalRadioKind === "radar"
-      ? "私人雷达"
-      : loadingPersonalRadioKind === "roaming"
-        ? "私人漫游"
-        : results.some((song) => song.source === "netease-personal-radar")
-          ? "私人雷达"
-          : results.some((song) => song.source === "netease-personal-roaming")
-            ? "私人漫游"
-            : "推荐新歌";
-  const discoverListBusy = loadingDiscoverSongs || Boolean(loadingPersonalRadioKind);
+  const inferredDiscoverFeedKind: DiscoverFeedKind = results.some((song) => song.source === "netease-personal-radar")
+    ? "radar"
+    : results.some((song) => song.source === "netease-personal-roaming")
+      ? "roaming"
+      : "recommend";
+  const activeDiscoverFeedKind: DiscoverFeedKind =
+    loadingPersonalRadioKind ?? (loadingDailySongs ? "daily" : discoverFeedKind !== "recommend" ? discoverFeedKind : inferredDiscoverFeedKind);
+  const activeDiscoverFeedLabel = discoverFeedLabels[activeDiscoverFeedKind];
+  const discoverListBusy = loadingDiscoverSongs || loadingDailySongs || Boolean(loadingPersonalRadioKind);
+  const discoverFeedNote =
+    activeDiscoverFeedLabel === "每日推荐"
+      ? "来自网易云每日推荐"
+      : activeDiscoverFeedLabel === "推荐新歌"
+        ? "来自网易云推荐新歌"
+        : "来自网易云私人 FM";
   const listHeaderMeta =
     isDiscoverListView
-      ? { count: `${activeDiscoverFeedLabel} · ${results.length} 首`, note: activeDiscoverFeedLabel === "推荐新歌" ? "来自网易云推荐新歌" : "来自网易云私人 FM", action: discoverListBusy ? "加载中" : "刷新推荐", disabled: discoverListBusy, onClick: loadDiscoverSongs }
+      ? { count: `${activeDiscoverFeedLabel} · ${results.length} 首`, note: discoverFeedNote, action: discoverListBusy ? "加载中" : `刷新${activeDiscoverFeedLabel}`, disabled: discoverListBusy, onClick: refreshDiscoverFeed }
       : null;
   const resultListLoading =
     navKey === "discover"
@@ -4835,7 +4876,9 @@ export default function App() {
             : loadingArtist;
   const resultLoadingMessage =
     navKey === "discover"
-      ? loadingPersonalRadioKind === "roaming"
+      ? loadingDailySongs || discoverFeedKind === "daily"
+        ? "正在读取每日推荐..."
+        : loadingPersonalRadioKind === "roaming"
         ? "正在加载私人漫游..."
         : loadingPersonalRadioKind === "radar"
           ? "正在加载私人雷达..."
@@ -4849,7 +4892,9 @@ export default function App() {
             : "正在读取歌手热门歌曲...";
   const resultEmptyMessage =
     navKey === "discover"
-      ? "暂时没有推荐歌曲，请稍后刷新。"
+      ? discoverFeedKind === "daily"
+        ? "暂时没有读取到每日推荐，请确认 Cookie 登录态有效。"
+        : "暂时没有推荐歌曲，请稍后刷新。"
       : navKey === "cloud"
         ? "云盘里暂时没有读取到歌曲，或 Cookie 权限不足。"
         : navKey === "daily"
@@ -5569,9 +5614,6 @@ export default function App() {
               </button>
               <button type="button" className={mainTab === "search" && navKey === "search" ? "nav-button active" : "nav-button"} onClick={openSearchPage}>
                 搜索
-              </button>
-              <button type="button" className={mainTab === "search" && navKey === "daily" ? "nav-button active" : "nav-button"} onClick={() => void loadDailySongs()}>
-                每日推荐
               </button>
               <button type="button" className={mainTab === "search" && navKey === "playlists" ? "nav-button active" : "nav-button"} onClick={openPlaylistsPage}>
                 我的歌单
