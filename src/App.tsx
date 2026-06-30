@@ -684,16 +684,6 @@ function MusicGlyph() {
   );
 }
 
-function VaultGlyph() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 64 64" className="brand-glyph">
-      <path className="brand-glyph-top" d="M18 21.5h28" />
-      <path className="brand-glyph-stem" d="M32 22v22" />
-      <path className="brand-glyph-wave" d="M19 43c4.35-5.15 8.7-5.15 13.05 0s8.7 5.15 13.05 0" />
-    </svg>
-  );
-}
-
 function PreviewIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" className="action-svg">
@@ -5561,7 +5551,7 @@ export default function App() {
         <aside className="sidebar">
             <div className="brand-block">
               <div className="brand-mark" aria-hidden="true">
-                <VaultGlyph />
+                <img className="brand-logo-image" src="/trackvault-logo.png" alt="" />
               </div>
               <div className="brand-copy">
                 <strong>TrackVault</strong>

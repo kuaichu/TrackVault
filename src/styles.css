@@ -160,31 +160,6 @@ input[type="range"] {
   opacity: 0.92;
 }
 
-.brand-glyph {
-  width: 70%;
-  height: 70%;
-  display: block;
-}
-
-.brand-glyph-top,
-.brand-glyph-stem,
-.brand-glyph-wave {
-  fill: none;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.brand-glyph-top,
-.brand-glyph-stem {
-  stroke: currentColor;
-  stroke-width: 7;
-}
-
-.brand-glyph-wave {
-  stroke: #fff0c9;
-  stroke-width: 4.2;
-}
-
 .result-cover img,
 .inspector-cover img,
 .dock-cover img,
@@ -7716,7 +7691,17 @@ body {
   width: 46px;
   height: 46px;
   border-radius: 15px;
+  overflow: visible;
+  background: transparent;
   box-shadow: 0 14px 32px rgba(255, 180, 93, 0.2);
+}
+
+.brand-logo-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  object-fit: cover;
 }
 
 .brand-copy strong {
