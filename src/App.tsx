@@ -541,6 +541,16 @@ function formatFileSize(size?: number) {
   return `${(size / 1024 / 1024).toFixed(2)} MB`;
 }
 
+function formatDownloadFileName(path?: string) {
+  if (!path) {
+    return "等待产物";
+  }
+
+  const normalizedPath = path.replace(/\\/g, "/");
+  const fileName = normalizedPath.split("/").filter(Boolean).pop();
+  return fileName || "服务器文件";
+}
+
 function formatCompactCount(count: number) {
   if (count >= 100000000) {
     return `${(count / 100000000).toFixed(1).replace(/\.0$/, "")} 亿`;
@@ -5995,7 +6005,10 @@ export default function App() {
                   <h2>最近听过的歌曲</h2>
                 </div>
                 <div className="download-summary">
-                  <span>{playHistory.length} 首</span>
+                  <span className="download-summary-pill neutral">
+                    <strong>{playHistory.length}</strong>
+                    <em>首</em>
+                  </span>
                 </div>
               </header>
 
@@ -6034,9 +6047,18 @@ export default function App() {
                   <h2>服务器下载任务</h2>
                 </div>
                 <div className="download-summary">
-                  <span>{completedCount} 已完成</span>
-                  <span>{activeCount} 进行中</span>
-                  <span>{failedCount} 失败</span>
+                  <span className="download-summary-pill done">
+                    <strong>{completedCount}</strong>
+                    <em>已完成</em>
+                  </span>
+                  <span className="download-summary-pill active">
+                    <strong>{activeCount}</strong>
+                    <em>进行中</em>
+                  </span>
+                  <span className="download-summary-pill failed">
+                    <strong>{failedCount}</strong>
+                    <em>失败</em>
+                  </span>
                 </div>
               </header>
 
@@ -6045,33 +6067,54 @@ export default function App() {
                   <div className="empty-box">还没有下载任务，回到发现音乐添加一首歌。</div>
                 ) : (
                   tasks.map((task) => (
-                    <article key={task.id} className="download-task-row">
+                    <article key={task.id} className={`download-task-row ${task.status}`}>
                       <div className="download-task-main">
-                        <strong>{task.title}</strong>
-                        <span>{task.artist} · {task.quality}</span>
+                        <strong className="download-task-title">{task.title}</strong>
+                        <div className="download-task-subline">
+                          <span>{task.artist}</span>
+                          <span className="download-quality-pill">{task.quality}</span>
+                        </div>
                       </div>
-                      <span className="download-task-status">{statusLabel(task.status)}</span>
-                      <div className="download-task-progress">
+                      <div className="download-task-progress-block">
+                        <div className="download-task-progress-head">
+                          <span className={`download-task-status ${task.status}`}>{statusLabel(task.status)}</span>
+                          <strong>{task.progress}%</strong>
+                        </div>
                         <div className="progress-track">
                           <div className="progress-fill" style={{ width: `${task.progress}%` }} />
                         </div>
-                        <span>{task.progress}%</span>
                       </div>
                       <div className="download-task-meta">
-                        {task.status === "done" ? <span>时长 {task.downloadedDuration ?? "--"} · 大小 {formatFileSize(task.fileSizeBytes)}</span> : null}
+                        {task.status === "done" ? (
+                          <>
+                            <span>
+                              <em>时长</em>
+                              <strong>{task.downloadedDuration ?? "--"}</strong>
+                            </span>
+                            <span>
+                              <em>大小</em>
+                              <strong>{formatFileSize(task.fileSizeBytes)}</strong>
+                            </span>
+                          </>
+                        ) : null}
+                        <span className="download-file-chip" title={task.outputPath ?? "等待写入产物"}>
+                          <em>文件</em>
+                          <strong>{formatDownloadFileName(task.outputPath)}</strong>
+                        </span>
                         {task.error ? <span className="queue-error">{task.error}</span> : null}
-                        <span>{task.outputPath ? `服务器文件：${task.outputPath}` : "等待写入产物"}</span>
                       </div>
                       <div className="download-task-action">
                         {task.status === "done" ? (
                           <button
                             type="button"
-                            className="secondary-button compact"
+                            className="secondary-button compact operation-button download-save-button"
                             disabled={savingTaskFileId === task.id}
+                            aria-label={`保存 ${task.title} 到本机`}
+                            title="保存到本机"
                             onClick={() => void handleSaveTaskFile(task)}
                           >
-                            <DownloadIcon />
-                            {savingTaskFileId === task.id ? "保存中" : "保存到本机"}
+                            <OperationIcon name="download" />
+                            <span>{savingTaskFileId === task.id ? "保存中" : "保存"}</span>
                           </button>
                         ) : null}
                       </div>
