@@ -1,15 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <linearGradient id="trackvault-bg" x1="86" y1="62" x2="426" y2="450" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#ffb65f"/>
-      <stop offset="1" stop-color="#ff8a34"/>
+    <linearGradient id="trackvault-bg" x1="72" y1="48" x2="442" y2="458" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffba62"/>
+      <stop offset="0.52" stop-color="#ffa33e"/>
+      <stop offset="1" stop-color="#ff7f2e"/>
     </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#trackvault-bg)"/>
-  <g fill="#24150e">
-    <circle cx="178" cy="354" r="60"/>
-    <circle cx="344" cy="318" r="60"/>
-    <path d="M222 163c0-17 11-30 28-34l168-39c18-4 34 10 34 29v199h-70V185l-90 21v148h-70V163Z"/>
-    <path d="M222 199l230-54v65l-230 54v-65Z"/>
+  <rect width="512" height="512" rx="108" fill="url(#trackvault-bg)"/>
+  <g fill="#221206">
+    <ellipse cx="168" cy="360" rx="60" ry="54" transform="rotate(-13 168 360)"/>
+    <ellipse cx="338" cy="324" rx="60" ry="54" transform="rotate(-13 338 324)"/>
+    <path d="M208 356V176c0-18 11-30 29-34l169-43c22-6 43 10 43 33v188h-54V173l-133 34v149h-54Z"/>
+    <path d="M208 176c0-18 11-30 29-34l169-43c22-6 43 10 43 33v43l-241 62v-61Z"/>
   </g>
 </svg>
