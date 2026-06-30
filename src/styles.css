@@ -2255,7 +2255,12 @@ input[type="range"] {
   background: var(--panel-bg-solid);
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.34);
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+.quality-menu::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .floating-quality-menu {
@@ -2264,7 +2269,7 @@ input[type="range"] {
   left: 0;
   z-index: 240;
   width: 248px;
-  max-height: 260px;
+  max-height: 288px;
 }
 
 .quality-option {

@@ -157,8 +157,8 @@ const playlistSortOptions: Array<{ value: PlaylistSortMode; label: string }> = [
 const PLAYLIST_SORT_MENU_ESTIMATED_HEIGHT = 214;
 const FLOATING_MENU_MARGIN = 12;
 const QUALITY_MENU_MIN_WIDTH = 248;
-const QUALITY_MENU_MAX_HEIGHT = 260;
-const QUALITY_MENU_OPTION_HEIGHT = 47;
+const QUALITY_MENU_MAX_HEIGHT = 288;
+const QUALITY_MENU_OPTION_HEIGHT = 52;
 const QUALITY_MENU_VERTICAL_PADDING = 14;
 const defaultSettings: AppSettings = {
   accountName: "本地账号",
