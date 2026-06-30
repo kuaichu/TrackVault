@@ -252,7 +252,7 @@ const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
 };
 const playbackModeOrder: PlaybackMode[] = ["sequential", "shuffle", "repeat-one", "heartbeat"];
 const discoverFeedLabels: Record<DiscoverFeedKind, string> = {
-  recommend: "推荐新歌",
+  recommend: "系统推荐",
   daily: "每日推荐",
   radar: "私人雷达",
   roaming: "私人漫游"
@@ -4851,15 +4851,27 @@ export default function App() {
       ? "roaming"
       : "recommend";
   const activeDiscoverFeedKind: DiscoverFeedKind =
-    loadingPersonalRadioKind ?? (loadingDailySongs ? "daily" : discoverFeedKind !== "recommend" ? discoverFeedKind : inferredDiscoverFeedKind);
+    loadingDiscoverSongs
+      ? "recommend"
+      : loadingPersonalRadioKind ?? (loadingDailySongs ? "daily" : discoverFeedKind !== "recommend" ? discoverFeedKind : inferredDiscoverFeedKind);
   const activeDiscoverFeedLabel = discoverFeedLabels[activeDiscoverFeedKind];
   const discoverListBusy = loadingDiscoverSongs || loadingDailySongs || Boolean(loadingPersonalRadioKind);
   const discoverFeedNote =
-    activeDiscoverFeedLabel === "每日推荐"
+    activeDiscoverFeedKind === "daily"
       ? "来自网易云每日推荐"
-      : activeDiscoverFeedLabel === "推荐新歌"
+      : activeDiscoverFeedKind === "recommend"
         ? "来自网易云推荐新歌"
         : "来自网易云私人 FM";
+  const isDiscoverFeedLoading = (kind: DiscoverFeedKind) =>
+    kind === "recommend"
+      ? loadingDiscoverSongs
+      : kind === "daily"
+        ? loadingDailySongs
+        : loadingPersonalRadioKind === kind;
+  const getDiscoverMixCardClass = (kind: DiscoverFeedKind, variant?: string) =>
+    ["discover-mix-card", variant, activeDiscoverFeedKind === kind ? "active" : "", isDiscoverFeedLoading(kind) ? "busy" : ""]
+      .filter(Boolean)
+      .join(" ");
   const listHeaderMeta =
     isDiscoverListView
       ? { count: `${activeDiscoverFeedLabel} · ${results.length} 首`, note: discoverFeedNote, action: discoverListBusy ? "加载中" : `刷新${activeDiscoverFeedLabel}`, disabled: discoverListBusy, onClick: refreshDiscoverFeed }
@@ -6373,8 +6385,25 @@ export default function App() {
                 <div className="discover-mix-strip" aria-label="发现音乐快捷入口">
                   <button
                     type="button"
-                    className={loadingDailySongs ? "discover-mix-card busy" : "discover-mix-card"}
-                    disabled={loadingDailySongs || discoverListBusy}
+                    className={getDiscoverMixCardClass("recommend", "recommend")}
+                    disabled={discoverListBusy}
+                    aria-pressed={activeDiscoverFeedKind === "recommend"}
+                    onClick={() => void loadDiscoverSongs()}
+                    title="系统推荐"
+                  >
+                    <span className="discover-mix-mark" aria-hidden="true">
+                      <PlayerIcon name="heart" />
+                    </span>
+                    <span className="discover-mix-copy">
+                      <strong>系统推荐</strong>
+                      <small>{loadingDiscoverSongs ? "读取中" : "默认推荐新歌"}</small>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={getDiscoverMixCardClass("daily", "daily")}
+                    disabled={discoverListBusy}
+                    aria-pressed={activeDiscoverFeedKind === "daily"}
                     onClick={() => void loadDailySongs()}
                     title="每日推荐"
                   >
@@ -6388,8 +6417,9 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    className={loadingPersonalRadioKind === "radar" ? "discover-mix-card radar busy" : "discover-mix-card radar"}
-                    disabled={loadingDailySongs || discoverListBusy}
+                    className={getDiscoverMixCardClass("radar", "radar")}
+                    disabled={discoverListBusy}
+                    aria-pressed={activeDiscoverFeedKind === "radar"}
                     onClick={() => void loadPersonalRadio("radar")}
                     title="私人雷达"
                   >
@@ -6403,8 +6433,9 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    className={loadingPersonalRadioKind === "roaming" ? "discover-mix-card roaming busy" : "discover-mix-card roaming"}
-                    disabled={loadingDailySongs || discoverListBusy}
+                    className={getDiscoverMixCardClass("roaming", "roaming")}
+                    disabled={discoverListBusy}
+                    aria-pressed={activeDiscoverFeedKind === "roaming"}
                     onClick={() => void loadPersonalRadio("roaming")}
                     title="私人漫游"
                   >
