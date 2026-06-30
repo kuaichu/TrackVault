@@ -112,6 +112,34 @@ const playbackQualityOptions: Array<{ level: DownloadQualityLevel; label: string
   { level: "lossless", label: "FLAC" },
   { level: "hires", label: "Hi-Res" }
 ];
+
+const qualityDisplayMeta: Record<DownloadQualityLevel, { title: string; detail: string; badge: string }> = {
+  standard: { title: "标准音质", detail: "128kbps", badge: "标" },
+  exhigh: { title: "极高音质", detail: "320kbps", badge: "HQ" },
+  lossless: { title: "无损音质", detail: "FLAC / 44.1-48kHz / 16bit", badge: "SQ" },
+  hires: { title: "Hi-Res", detail: "最高 192kHz / 24bit", badge: "HR" },
+  jyeffect: { title: "高清环绕声", detail: "沉浸环绕效果", badge: "环" },
+  jymaster: { title: "超清母带", detail: "更高规格母带音质", badge: "母" },
+  sky: { title: "沉浸环绕声", detail: "空间环绕声场", badge: "空" }
+};
+
+function getQualityDisplayMeta(level: DownloadQualityLevel, fallbackLabel: string) {
+  return qualityDisplayMeta[level] ?? { title: fallbackLabel, detail: "", badge: fallbackLabel.slice(0, 2) };
+}
+
+function renderQualityOptionContent(level: DownloadQualityLevel, label: string) {
+  const meta = getQualityDisplayMeta(level, label);
+
+  return (
+    <>
+      <span className="quality-option-badge" aria-hidden="true">{meta.badge}</span>
+      <span className="quality-option-copy">
+        <strong>{meta.title}</strong>
+        <small>{meta.detail}</small>
+      </span>
+    </>
+  );
+}
 const startupViewOptions: Array<{ value: AppSettings["startupView"]; label: string }> = [
   { value: "discover", label: "发现" },
   { value: "search", label: "搜索" },
@@ -4801,7 +4829,7 @@ export default function App() {
                   className={isActive ? "quality-option active" : "quality-option"}
                   onClick={() => handleSelectQuality(song, quality.level)}
                 >
-                  {quality.label}
+                  {renderQualityOptionContent(quality.level, quality.label)}
                 </button>
               );
             })}
@@ -6462,7 +6490,7 @@ export default function App() {
                               setOpenSettingsQualityMenu(null);
                             }}
                           >
-                            {option.label}
+                            {renderQualityOptionContent(option.level, option.label)}
                           </button>
                         ))}
                       </div>
@@ -6503,7 +6531,7 @@ export default function App() {
                               setOpenSettingsQualityMenu(null);
                             }}
                           >
-                            {option.label}
+                            {renderQualityOptionContent(option.level, option.label)}
                           </button>
                         ))}
                       </div>

@@ -2245,22 +2245,31 @@ input[type="range"] {
   top: calc(100% + 8px);
   left: 0;
   z-index: 80;
-  min-width: 100%;
-  padding: 8px;
+  width: max(100%, 248px);
+  max-height: min(52vh, 260px);
+  padding: 7px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-radius: 14px;
   background: var(--panel-bg-solid);
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.34);
+  scrollbar-width: thin;
 }
 
 .quality-option {
   width: 100%;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
   border: none;
   border-radius: 10px;
-  padding: 9px 11px;
+  padding: 7px 9px;
   background: transparent;
   color: var(--text-primary);
   text-align: left;
+  cursor: pointer;
 }
 
 .quality-option:hover {
@@ -2270,6 +2279,55 @@ input[type="range"] {
 .quality-option.active {
   background: rgba(255, 155, 87, 0.14);
   color: #ffd7a4;
+}
+
+.quality-option-badge {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(205, 218, 235, 0.78);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.quality-option.active .quality-option-badge {
+  background: rgba(255, 180, 93, 0.18);
+  color: #ffd7a4;
+}
+
+.quality-option-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.quality-option-copy strong,
+.quality-option-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quality-option-copy strong {
+  color: currentColor;
+  font-size: 0.88rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.quality-option-copy small {
+  color: rgba(188, 201, 219, 0.64);
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.quality-option.active .quality-option-copy small {
+  color: rgba(255, 215, 164, 0.72);
 }
 
 .row-actions {
