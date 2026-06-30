@@ -2073,6 +2073,66 @@ input[type="range"] {
   min-height: 54px;
 }
 
+.search-provider-switch {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 6px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.search-provider-button {
+  min-width: 0;
+  min-height: 46px;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  border: 0;
+  border-radius: 12px;
+  padding: 8px 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-provider-button strong,
+.search-provider-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-provider-button strong {
+  color: currentColor;
+  font-size: 0.9rem;
+}
+
+.search-provider-button span {
+  color: rgba(186, 198, 214, 0.64);
+  font-size: 0.72rem;
+}
+
+.search-provider-button:hover {
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-primary);
+}
+
+.search-provider-button.active {
+  background:
+    linear-gradient(135deg, rgba(255, 180, 93, 0.16), rgba(255, 180, 93, 0.035)),
+    rgba(255, 155, 87, 0.08);
+  color: #ffd7a4;
+  box-shadow: inset 0 0 0 1px rgba(255, 180, 93, 0.16);
+}
+
+.search-provider-button.active span {
+  color: rgba(255, 215, 164, 0.72);
+}
+
 .search-lobby {
   flex: 1;
   min-height: 0;

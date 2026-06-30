@@ -25,6 +25,7 @@ export type Song = {
   artists?: SongArtist[];
   album: string;
   albumId?: string;
+  mediaId?: string;
   coverUrl?: string;
   duration: string;
   quality: string;
@@ -270,9 +271,10 @@ export type DownloadTask = {
 export type AppSettings = {
   accountName: string;
   vipEnabled: boolean;
-  providerMode: "demo" | "netease";
+  providerMode: "demo" | "netease" | "qq" | "aggregate";
   downloadDirectory: string;
   neteaseCookie: string;
+  qqMusicCookie?: string;
   notes: string;
   defaultPlaybackQuality: DownloadQualityLevel;
   defaultDownloadQuality: DownloadQualityLevel;

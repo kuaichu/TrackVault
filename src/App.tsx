@@ -150,6 +150,11 @@ const startupViewOptions: Array<{ value: AppSettings["startupView"]; label: stri
   { value: "playlists", label: "歌单" },
   { value: "downloads", label: "下载" }
 ];
+const searchProviderOptions: Array<{ value: Exclude<AppSettings["providerMode"], "demo">; label: string; detail: string }> = [
+  { value: "netease", label: "网易云", detail: "当前主源" },
+  { value: "qq", label: "QQ 音乐", detail: "QQ 曲库" },
+  { value: "aggregate", label: "聚合", detail: "双平台" }
+];
 const playlistSortOptions: Array<{ value: PlaylistSortMode; label: string }> = [
   { value: "default", label: "默认顺序" },
   { value: "title-asc", label: "标题 A-Z" },
@@ -169,6 +174,7 @@ const defaultSettings: AppSettings = {
   providerMode: "netease",
   downloadDirectory: "downloads",
   neteaseCookie: "",
+  qqMusicCookie: "",
   notes: "",
   defaultPlaybackQuality: "standard",
   defaultDownloadQuality: "hires",
@@ -1169,7 +1175,9 @@ export default function App() {
   const accountStatusLabel = session.loggedIn || accountProfile?.provider === "netease" ? accountBadgeLabel : "未登录";
   const accountIsLoggedIn = session.loggedIn || accountProfile?.provider === "netease";
   const neteasePlatformStatusLabel = accountIsLoggedIn ? (accountVipEnabled ? "黑胶" : "标准") : "未登录";
-  const qqMusicPlatformStatusLabel = "待接";
+  const qqMusicPlatformStatusLabel = settings.qqMusicCookie?.trim() ? "Cookie 已填" : "可搜索";
+  const activeSearchProviderMode = settings.providerMode === "demo" ? "netease" : settings.providerMode;
+  const activeSearchProviderLabel = searchProviderOptions.find((option) => option.value === activeSearchProviderMode)?.label ?? "网易云";
   const hasNeteaseDownloadAuth = accountIsLoggedIn;
   const playbackLocked = !accountIsLoggedIn;
   const hasPlaybackQueue = playQueue.length > 0 || results.length > 0;
@@ -1217,6 +1225,12 @@ export default function App() {
 
   function getSongSourceMeta(song: Song) {
     switch (song.source) {
+      case "qqmusic":
+        return {
+          title: "QQ 音乐曲库",
+          detail: "来自 QQ 音乐搜索结果；高品质试听和下载取决于 QQ 账号 Cookie、绿钻权限与当前版权。",
+          badge: "Q"
+        };
       case "netease-cloud":
         return {
           title: "网易云云盘",
@@ -1240,6 +1254,14 @@ export default function App() {
       default:
         return { title: "网易云曲库", detail: "来自网易云搜索或歌单条目，实际音质需解析后确认。", badge: "网" };
     }
+  }
+
+  function getSongProviderLabel(song: Song) {
+    return song.source === "qqmusic" ? "QQ 音乐" : "网易云";
+  }
+
+  function getSongQualityLine(song: Song) {
+    return `${getSongProviderLabel(song)} · ${song.quality}`;
   }
 
   function getProbeStatusText(probe: SongAudioProbe | null, fallbackLabel: string) {
@@ -1483,10 +1505,10 @@ export default function App() {
     const requestId = searchRequestIdRef.current + 1;
     searchRequestIdRef.current = requestId;
     setSearching(true);
-    setMessage(`正在搜索 “${trimmed}”`);
+    setMessage(`正在通过${activeSearchProviderLabel}搜索 “${trimmed}”`);
 
     try {
-      const data = await searchSongs(trimmed);
+      const data = await searchSongs(trimmed, activeSearchProviderMode);
       if (requestId !== searchRequestIdRef.current) {
         return;
       }
@@ -1497,7 +1519,7 @@ export default function App() {
       setResultSource("search");
       applyQualityDefaults(data);
       setCurrentTrack((current) => current ?? data[0] ?? null);
-      setMessage(`共找到 ${data.length} 首歌曲`);
+      setMessage(`${activeSearchProviderLabel}共找到 ${data.length} 首歌曲`);
     } catch (error) {
       if (requestId !== searchRequestIdRef.current) {
         return;
@@ -2396,7 +2418,7 @@ export default function App() {
       return;
     }
 
-    const nextUrl = getStreamUrl(song.id, options.level ?? getSelectedLevel(song), parseDurationSeconds(song.duration));
+    const nextUrl = getStreamUrl(song, options.level ?? getSelectedLevel(song), parseDurationSeconds(song.duration));
     const currentUrl = audio.dataset.streamUrl ?? "";
     const shouldReload = currentUrl !== nextUrl;
 
@@ -3414,7 +3436,7 @@ export default function App() {
       return;
     }
 
-      const nextUrl = getStreamUrl(currentTrack.id, getSelectedLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
+    const nextUrl = getStreamUrl(currentTrack, getSelectedLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
     const hasSource = audio.dataset.streamUrl === nextUrl;
 
     if (!hasSource) {
@@ -3979,7 +4001,7 @@ export default function App() {
     }
 
     const shouldContinuePlaying = isPlaying || !audio.paused;
-    const nextUrl = getStreamUrl(currentTrack.id, getSelectedLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
+    const nextUrl = getStreamUrl(currentTrack, getSelectedLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
 
     const seek = () => {
       audio.currentTime = time;
@@ -4897,7 +4919,7 @@ export default function App() {
       return;
     }
 
-    const nextUrl = getStreamUrl(currentTrack.id, getSelectedLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
+    const nextUrl = getStreamUrl(currentTrack, getSelectedLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
     if (audio.dataset.streamUrl === nextUrl) {
       return;
     }
@@ -5778,7 +5800,7 @@ export default function App() {
                   <b>网易</b>
                   <em>{neteasePlatformStatusLabel}</em>
                 </span>
-                <span className="identity-platform-chip muted">
+                <span className="identity-platform-chip active">
                   <b>QQ</b>
                   <em>{qqMusicPlatformStatusLabel}</em>
                 </span>
@@ -5814,16 +5836,16 @@ export default function App() {
                   </div>
                 </section>
 
-                <section className="platform-account-card pending" aria-label="QQ音乐账号预留">
+                <section className="platform-account-card active" aria-label="QQ音乐账号">
                   <div className="platform-account-main">
                     <span className="platform-account-mark qq" aria-hidden="true">Q</span>
                     <div className="platform-account-copy">
                       <strong>QQ 音乐</strong>
-                      <span>待接入后参与音源选择</span>
+                      <span>已接入搜索与曲库来源</span>
                     </div>
-                    <span className="platform-account-state muted">待接入</span>
+                    <span className="platform-account-state muted">{qqMusicPlatformStatusLabel}</span>
                   </div>
-                  <p>后续用于聚合搜索、版本区分与版权补位。</p>
+                  <p>当前支持搜索与来源区分；登录、绿钻优先与版权补位会在后续音源策略里接上。</p>
                 </section>
 
                 <button type="button" role="menuitem" className="account-center-danger" onClick={() => void handleClearCookie()}>
@@ -6777,7 +6799,7 @@ export default function App() {
                       <CoverArt song={song} className="result-cover" />
                       <div className="result-copy">
                         <strong>{song.title}</strong>
-                        <span>{song.quality}</span>
+                        <span>{getSongQualityLine(song)}</span>
                       </div>
                     </div>
 
@@ -6975,6 +6997,21 @@ export default function App() {
                   <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索歌曲、歌手、专辑" />
                   <button type="submit" disabled={searching}>{searching ? "搜索中" : "搜索"}</button>
                 </form>
+                <div className="search-provider-switch" role="tablist" aria-label="搜索来源">
+                  {searchProviderOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeSearchProviderMode === option.value}
+                      className={activeSearchProviderMode === option.value ? "search-provider-button active" : "search-provider-button"}
+                      onClick={() => setSettings((current) => ({ ...current, providerMode: option.value }))}
+                    >
+                      <strong>{option.label}</strong>
+                      <span>{option.detail}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {resultSource === "search" && results.length > 0 ? (
@@ -7060,7 +7097,7 @@ export default function App() {
                         <CoverArt song={song} className="result-cover" />
                         <div className="result-copy">
                           <strong>{song.title}</strong>
-                          <span>{song.quality}</span>
+                          <span>{getSongQualityLine(song)}</span>
                         </div>
                       </div>
 

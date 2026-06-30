@@ -72,12 +72,20 @@ async function apiFetch(input: string, init: RequestInit = {}) {
   });
 }
 
-export function getStreamUrl(songId: string, level: DownloadQualityLevel, expectedDurationSeconds?: number) {
+export function getStreamUrl(song: Song | string, level: DownloadQualityLevel, expectedDurationSeconds?: number) {
+  const songId = typeof song === "string" ? song : song.id;
   const params = new URLSearchParams({
     id: songId,
     level,
     sid: getClientSessionId()
   });
+
+  if (typeof song !== "string") {
+    params.set("source", song.source);
+    if (song.mediaId) {
+      params.set("mediaId", song.mediaId);
+    }
+  }
 
   if (Number.isFinite(expectedDurationSeconds) && Number(expectedDurationSeconds) > 0) {
     params.set("expectedDuration", String(Math.round(Number(expectedDurationSeconds))));
@@ -111,9 +119,14 @@ export function getDirectDownloadUrl(song: Song, level: DownloadQualityLevel) {
     artist: song.artist,
     album: song.album,
     duration: song.duration,
+    source: song.source,
     level,
     sid: getClientSessionId()
   });
+
+  if (song.mediaId) {
+    params.set("mediaId", song.mediaId);
+  }
 
   return `/api/download/direct?${params.toString()}`;
 }
@@ -125,9 +138,14 @@ export function getServerDownloadUrl(song: Song, level: DownloadQualityLevel) {
     artist: song.artist,
     album: song.album,
     duration: song.duration,
+    source: song.source,
     level,
     sid: getClientSessionId()
   });
+
+  if (song.mediaId) {
+    params.set("mediaId", song.mediaId);
+  }
 
   return `/api/download/proxy?${params.toString()}`;
 }
@@ -151,6 +169,7 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
   }
 
   const directDownload = (await directResponse.json()) as DirectDownloadInfo;
+  const providerLabel = song.source === "qqmusic" ? "QQ 音乐 CDN" : "网易云 CDN";
   let mediaResponse: Response;
   try {
     mediaResponse = await fetch(directDownload.url, {
@@ -158,11 +177,11 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
       mode: "cors"
     });
   } catch {
-    throw new DirectDownloadBlockedError("浏览器被网易云 CDN 跨域策略拦截，无法无中转保存到本机。");
+    throw new DirectDownloadBlockedError(`浏览器被${providerLabel}跨域策略拦截，无法无中转保存到本机。`);
   }
 
   if (!mediaResponse.ok) {
-    throw new Error(`网易云 CDN 下载失败：HTTP ${mediaResponse.status}`);
+    throw new Error(`${providerLabel}下载失败：HTTP ${mediaResponse.status}`);
   }
 
   const contentLength = Number(mediaResponse.headers.get("content-length") ?? "0");
@@ -171,7 +190,7 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
       const blob = await mediaResponse.blob();
       saveBlob(blob, directDownload.filename);
     } catch {
-      throw new DirectDownloadBlockedError("网易云 CDN 下载流中断，浏览器无法稳定直连保存到本机。");
+      throw new DirectDownloadBlockedError(`${providerLabel}下载流中断，浏览器无法稳定直连保存到本机。`);
     }
     return;
   }
@@ -194,7 +213,7 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
       }
     }
   } catch {
-    throw new DirectDownloadBlockedError("网易云 CDN 下载流中断，浏览器无法稳定直连保存到本机。");
+    throw new DirectDownloadBlockedError(`${providerLabel}下载流中断，浏览器无法稳定直连保存到本机。`);
   }
 
   saveBlob(new Blob(chunks, { type: mediaResponse.headers.get("content-type") ?? "application/octet-stream" }), directDownload.filename);
@@ -210,10 +229,15 @@ export function startServerSongDownload(song: Song, level: DownloadQualityLevel)
   link.remove();
 }
 
-export async function searchSongs(query: string): Promise<Song[]> {
-  const response = await apiFetch(`/api/search?q=${encodeURIComponent(query)}`);
+export async function searchSongs(query: string, provider = "netease"): Promise<Song[]> {
+  const params = new URLSearchParams({
+    q: query,
+    provider
+  });
+  const response = await apiFetch(`/api/search?${params.toString()}`);
   if (!response.ok) {
-    throw new Error("搜索失败");
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "搜索失败");
   }
   const data = (await response.json()) as { results: Song[] };
   return data.results;

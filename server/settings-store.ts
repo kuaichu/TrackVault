@@ -13,6 +13,7 @@ const defaultSettings: AppSettings = {
   providerMode: "netease",
   downloadDirectory: "downloads",
   neteaseCookie: "",
+  qqMusicCookie: "",
   notes: "",
   defaultPlaybackQuality: "standard",
   defaultDownloadQuality: "hires",
@@ -33,9 +34,13 @@ function normalizeSettings(input: Partial<AppSettings>): AppSettings {
   return {
     accountName: input.accountName?.trim() || defaultSettings.accountName,
     vipEnabled: Boolean(input.vipEnabled),
-    providerMode: input.providerMode === "demo" ? "demo" : "netease",
+    providerMode:
+      input.providerMode === "demo" || input.providerMode === "qq" || input.providerMode === "aggregate"
+        ? input.providerMode
+        : "netease",
     downloadDirectory: input.downloadDirectory?.trim() || defaultSettings.downloadDirectory,
     neteaseCookie: input.neteaseCookie?.trim() || "",
+    qqMusicCookie: input.qqMusicCookie?.trim() || "",
     notes: input.notes?.trim() || "",
     defaultPlaybackQuality: normalizeDefaultQuality(input.defaultPlaybackQuality, defaultSettings.defaultPlaybackQuality),
     defaultDownloadQuality: normalizeDefaultQuality(input.defaultDownloadQuality),

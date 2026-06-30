@@ -15,10 +15,11 @@ import { getPlayHistory, getSearchHistory, removeSearchHistory, savePlayHistory,
 import { getSongLyrics } from "./lyric-provider.js";
 import { MediaAccessError } from "./media-security.js";
 import { addSongToUserPlaylist, getPlaylistSongs, getUserPlaylists, removeSongsFromUserPlaylist } from "./playlist-provider.js";
-import { searchProvider } from "./provider.js";
+import { searchProvider, type SearchProviderMode } from "./provider.js";
 import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getPersonalRadioSongs } from "./personal-radio-provider.js";
+import { isQqMusicSong, probeQqSongAudio, resolveQqSongStream } from "./qqmusic-provider.js";
 import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./settings-store.js";
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
 import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, getTaskFileForDownload, probeSongAudio, resolveDirectDownload, resolveSongStream } from "./task-store.js";
@@ -59,8 +60,17 @@ app.get("/api/health", (_request, response) => {
 
 app.get("/api/search", async (request, response) => {
   const query = typeof request.query.q === "string" ? request.query.q : "";
-  const results = await searchProvider(query);
-  response.json({ results });
+  const provider = typeof request.query.provider === "string" ? request.query.provider : "netease";
+  const providerMode: SearchProviderMode = provider === "qq" || provider === "aggregate" ? provider : "netease";
+
+  try {
+    const results = await searchProvider(query, providerMode);
+    response.json({ results, provider: providerMode });
+  } catch (error) {
+    response.status(502).json({
+      message: error instanceof Error ? error.message : "搜索失败"
+    });
+  }
 });
 
 app.get("/api/discover/songs", async (_request, response) => {
@@ -282,7 +292,11 @@ app.post("/api/songs/audio-probe", async (request, response) => {
   }
 
   try {
-    response.json({ probe: await probeSongAudio(song, level as DownloadQualityLevel, mode, userCookieOverride) });
+    response.json({
+      probe: isQqMusicSong(song)
+        ? await probeQqSongAudio(song, level as DownloadQualityLevel, mode)
+        : await probeSongAudio(song, level as DownloadQualityLevel, mode, userCookieOverride)
+    });
   } catch (error) {
     response.status(error instanceof MediaAccessError ? error.status : 502).json({
       message: error instanceof Error ? error.message : "检测实际音源失败"
@@ -404,6 +418,8 @@ app.post("/api/likes/:id", async (request, response) => {
 app.get("/api/stream", async (request, response) => {
   const songId = typeof request.query.id === "string" ? request.query.id : "";
   const level = typeof request.query.level === "string" ? request.query.level : "standard";
+  const source = typeof request.query.source === "string" ? request.query.source : "netease";
+  const mediaId = typeof request.query.mediaId === "string" ? request.query.mediaId : undefined;
   const expectedDurationSeconds = Number(request.query.expectedDuration ?? 0);
   const userCookieOverride = typeof request.headers["x-user-cookie"] === "string" ? request.headers["x-user-cookie"] : undefined;
 
@@ -413,12 +429,28 @@ app.get("/api/stream", async (request, response) => {
   }
 
   try {
-    const resolved = await resolveSongStream(
-      songId,
-      level as DownloadQualityLevel,
-      userCookieOverride,
-      Number.isFinite(expectedDurationSeconds) ? expectedDurationSeconds : 0
-    );
+    const resolved =
+      source === "qqmusic"
+        ? await resolveQqSongStream(
+            {
+              id: songId,
+              title: "",
+              artist: "",
+              album: "",
+              mediaId,
+              duration: "",
+              quality: "",
+              availableQualities: [],
+              source
+            },
+            level as DownloadQualityLevel
+          )
+        : await resolveSongStream(
+            songId,
+            level as DownloadQualityLevel,
+            userCookieOverride,
+            Number.isFinite(expectedDurationSeconds) ? expectedDurationSeconds : 0
+          );
     const upstream = await fetch(resolved.url, {
       headers: request.headers.range ? { Range: request.headers.range } : undefined
     });
@@ -466,10 +498,11 @@ function getDownloadSongFromQuery(request: express.Request): Song {
     title: typeof request.query.title === "string" ? request.query.title : "",
     artist: typeof request.query.artist === "string" ? request.query.artist : "",
     album: typeof request.query.album === "string" ? request.query.album : "",
+    mediaId: typeof request.query.mediaId === "string" ? request.query.mediaId : undefined,
     duration: typeof request.query.duration === "string" ? request.query.duration : "",
     quality: "",
     availableQualities: [],
-    source: "netease"
+    source: typeof request.query.source === "string" ? request.query.source : "netease"
   };
 }
 

@@ -2,9 +2,12 @@ import { createRequire } from "node:module";
 import type { SearchType } from "NeteaseCloudMusicApi";
 import type { DownloadQualityOption, Song } from "./types.js";
 import { getSettings } from "./settings-store.js";
+import { searchQqMusicSongs } from "./qqmusic-provider.js";
 
 const require = createRequire(import.meta.url);
 const { search, song_detail } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
+
+export type SearchProviderMode = "netease" | "qq" | "aggregate";
 
 type SearchSong = {
   id: number;
@@ -119,7 +122,7 @@ async function getSongDetailMap(songIds: string[]) {
   return new Map(songs.map((song) => [String(song.id), song]));
 }
 
-export async function searchProvider(query: string): Promise<Song[]> {
+async function searchNeteaseSongs(query: string): Promise<Song[]> {
   const keyword = query.trim();
   if (!keyword) {
     return [];
@@ -168,4 +171,36 @@ export async function searchProvider(query: string): Promise<Song[]> {
       source: "netease"
     };
   });
+}
+
+export async function searchProvider(query: string, providerMode: SearchProviderMode = "netease"): Promise<Song[]> {
+  const keyword = query.trim();
+  if (!keyword) {
+    return [];
+  }
+
+  if (providerMode === "qq") {
+    return searchQqMusicSongs(keyword);
+  }
+
+  if (providerMode === "aggregate") {
+    const [neteaseResult, qqResult] = await Promise.allSettled([
+      searchNeteaseSongs(keyword),
+      searchQqMusicSongs(keyword)
+    ]);
+
+    const neteaseSongs = neteaseResult.status === "fulfilled" ? neteaseResult.value : [];
+    const qqSongs = qqResult.status === "fulfilled" ? qqResult.value : [];
+
+    if (neteaseSongs.length === 0 && qqSongs.length === 0) {
+      const firstError = neteaseResult.status === "rejected" ? neteaseResult.reason : qqResult.status === "rejected" ? qqResult.reason : null;
+      if (firstError) {
+        throw firstError;
+      }
+    }
+
+    return [...neteaseSongs, ...qqSongs];
+  }
+
+  return searchNeteaseSongs(keyword);
 }

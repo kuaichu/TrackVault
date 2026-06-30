@@ -8,6 +8,7 @@ import type { SoundQualityType } from "NeteaseCloudMusicApi";
 import { getCurrentUserKey } from "./account-store.js";
 import { getDatabase, isSqliteAvailable, readJsonStore, updateJsonStore } from "./database.js";
 import { buildMediaCredentialPlan, extractClientSessionIdFromUserKey } from "./media-security.js";
+import { isQqMusicSong, probeQqSongAudio, resolveQqDirectDownload } from "./qqmusic-provider.js";
 import { getSettings } from "./settings-store.js";
 import type { DownloadQualityLevel, DownloadTask, NeteaseCookieCheckResult, Song, SongAudioProbe, SongAudioProbeMode } from "./types.js";
 
@@ -684,6 +685,10 @@ export async function assertDownloadAccess(song: Song, level: DownloadQualityLev
 }
 
 export async function probeSongAudio(song: Song, level: DownloadQualityLevel, mode: SongAudioProbeMode, userCookieOverride?: string): Promise<SongAudioProbe> {
+  if (isQqMusicSong(song)) {
+    return probeQqSongAudio(song, level, mode);
+  }
+
   const plan = await buildMediaCredentialPlan({ userCookieOverride });
   const match =
     mode === "download"
@@ -694,6 +699,10 @@ export async function probeSongAudio(song: Song, level: DownloadQualityLevel, mo
 }
 
 export async function resolveDirectDownload(song: Song, level: DownloadQualityLevel, userCookieOverride?: string): Promise<DirectDownloadResolution> {
+  if (isQqMusicSong(song)) {
+    return resolveQqDirectDownload(song, level);
+  }
+
   const plan = await buildMediaCredentialPlan({ userCookieOverride });
   const resolvedSong = await resolveSongDownloadWithPlan(song, level, plan);
   const extension = getFileExtension(resolvedSong.url, null, resolvedSong.type);
