@@ -2981,7 +2981,7 @@ input[type="range"] {
 
 .history-row {
   display: grid;
-  grid-template-columns: 34px 48px minmax(0, 1fr) 72px 88px;
+  grid-template-columns: 34px 48px minmax(0, 1fr) 74px 64px 46px;
   gap: 12px;
   align-items: center;
   padding: 12px;
@@ -2993,7 +2993,10 @@ input[type="range"] {
 
 .history-row.active {
   border-color: rgba(255, 155, 87, 0.22);
-  background: rgba(255, 155, 87, 0.09);
+  background:
+    linear-gradient(90deg, rgba(255, 180, 93, 0.14), rgba(255, 180, 93, 0.045) 44%, rgba(255, 255, 255, 0.018)),
+    rgba(17, 24, 35, 0.78);
+  box-shadow: inset 3px 0 0 rgba(255, 180, 93, 0.72);
 }
 
 .history-copy {
@@ -3011,6 +3014,89 @@ input[type="range"] {
 .history-copy span {
   margin-top: 4px;
   color: var(--text-secondary);
+}
+
+.history-state {
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 58px;
+  padding: 6px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.history-state::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.8;
+}
+
+.history-state:empty {
+  visibility: hidden;
+}
+
+.history-state.active {
+  border-color: rgba(255, 180, 93, 0.24);
+  background: rgba(255, 180, 93, 0.12);
+  color: #ffd486;
+}
+
+.history-play-button {
+  justify-self: end;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.095);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+    rgba(13, 19, 30, 0.78);
+  color: #ffd7a4;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.history-play-button:hover:not(:disabled) {
+  border-color: rgba(255, 180, 93, 0.34);
+  background:
+    linear-gradient(135deg, rgba(255, 151, 88, 0.2), rgba(255, 204, 112, 0.1)),
+    rgba(20, 27, 39, 0.86);
+  color: #ffe0a3;
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(255, 151, 88, 0.1);
+}
+
+.history-play-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.history-play-button .player-svg {
+  width: 18px;
+  height: 18px;
+}
+
+.history-play-button .lock-svg {
+  width: 15px;
+  height: 15px;
 }
 
 .download-task-row {
@@ -5356,13 +5442,19 @@ input[type="range"] {
   }
 
   .history-row {
-    grid-template-columns: 34px 48px minmax(0, 1fr);
+    grid-template-columns: 34px 48px minmax(0, 1fr) 42px;
   }
 
-  .history-row .result-time,
-  .history-row .secondary-button {
+  .history-row .history-state,
+  .history-row .result-time {
     grid-column: 3;
     justify-self: start;
+  }
+
+  .history-row .history-play-button {
+    grid-column: 4;
+    grid-row: 1 / span 2;
+    align-self: center;
   }
 
   .download-task-progress-block {

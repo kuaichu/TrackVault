@@ -6071,26 +6071,32 @@ export default function App() {
                 {playHistory.length === 0 ? (
                   <div className="empty-box">暂无播放历史。试听或播放一首歌后会出现在这里。</div>
                 ) : (
-                  playHistory.map((song, index) => (
-                    <article key={song.id} className={currentTrack?.id === song.id ? "history-row active" : "history-row"} onClick={() => handlePreview(song)} onContextMenu={(event) => handleOpenSongContextMenu(event, song)}>
-                      <span className="queue-index">{String(index + 1).padStart(2, "0")}</span>
-                      <CoverArt song={song} className="result-cover" />
-                      <div className="history-copy">
-                        <strong>{song.title}</strong>
-                        <span>{song.artist} · {song.album}</span>
-                      </div>
-                      <span className="result-time">{song.duration}</span>
-                      <button
-                        type="button"
-                        className={playbackLocked ? "secondary-button locked-action-button" : "secondary-button"}
-                        disabled={playbackLocked}
-                        onClick={(event) => { event.stopPropagation(); handlePreview(song); }}
-                      >
-                        {playbackLocked ? <LockIcon /> : null}
-                        {playbackLocked ? "登录后播放" : "播放"}
-                      </button>
-                    </article>
-                  ))
+                  playHistory.map((song, index) => {
+                    const isCurrentHistoryTrack = currentTrack?.id === song.id;
+
+                    return (
+                      <article key={song.id} className={isCurrentHistoryTrack ? "history-row active" : "history-row"} onClick={() => handlePreview(song)} onContextMenu={(event) => handleOpenSongContextMenu(event, song)}>
+                        <span className="queue-index">{String(index + 1).padStart(2, "0")}</span>
+                        <CoverArt song={song} className="result-cover" />
+                        <div className="history-copy">
+                          <strong>{song.title}</strong>
+                          <span>{song.artist} · {song.album}</span>
+                        </div>
+                        <span className={isCurrentHistoryTrack ? "history-state active" : "history-state"} aria-hidden={!isCurrentHistoryTrack}>{isCurrentHistoryTrack ? "正在听" : ""}</span>
+                        <span className="result-time">{song.duration}</span>
+                        <button
+                          type="button"
+                          className={playbackLocked ? "history-play-button locked-action-button" : "history-play-button"}
+                          disabled={playbackLocked}
+                          aria-label={playbackLocked ? `登录后播放 ${song.title}` : `播放 ${song.title}`}
+                          title={playbackLocked ? "登录后播放" : "播放"}
+                          onClick={(event) => { event.stopPropagation(); handlePreview(song); }}
+                        >
+                          {playbackLocked ? <LockIcon /> : <PlayerIcon name="play" />}
+                        </button>
+                      </article>
+                    );
+                  })
                 )}
               </div>
             </section>
