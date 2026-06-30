@@ -687,14 +687,9 @@ function MusicGlyph() {
 function VaultGlyph() {
   return (
     <svg aria-hidden="true" viewBox="0 0 64 64" className="brand-glyph">
-      <circle cx="32" cy="31" r="19" className="brand-glyph-disc" />
-      <circle cx="32" cy="31" r="8" className="brand-glyph-label" />
-      <circle cx="32" cy="31" r="2.8" className="brand-glyph-dot" />
-      <path className="brand-glyph-ring" d="M20.5 31c0-6.35 5.15-11.5 11.5-11.5" />
-      <path className="brand-glyph-ring" d="M43.5 31c0 6.35-5.15 11.5-11.5 11.5" />
-      <path className="brand-glyph-lock" d="M25 34.5h14v10.25c0 1.8-1.45 3.25-3.25 3.25h-7.5A3.25 3.25 0 0 1 25 44.75V34.5Z" />
-      <path className="brand-glyph-shackle" d="M28.75 34.5v-2.15c0-2.45 1.55-4.15 3.25-4.15s3.25 1.7 3.25 4.15v2.15" />
-      <path className="brand-glyph-keyhole" d="M32 39.1a1.85 1.85 0 0 1 1 3.4v2.35h-2V42.5a1.85 1.85 0 0 1 1-3.4Z" />
+      <path className="brand-glyph-top" d="M18 21.5h28" />
+      <path className="brand-glyph-stem" d="M32 22v22" />
+      <path className="brand-glyph-wave" d="M19 43c4.35-5.15 8.7-5.15 13.05 0s8.7 5.15 13.05 0" />
     </svg>
   );
 }

@@ -166,40 +166,23 @@ input[type="range"] {
   display: block;
 }
 
-.brand-glyph-disc,
-.brand-glyph-dot,
-.brand-glyph-lock {
-  fill: currentColor;
-}
-
-.brand-glyph-disc {
-  opacity: 0.93;
-}
-
-.brand-glyph-label {
-  fill: #ffbd6f;
-}
-
-.brand-glyph-keyhole {
-  fill: #ffbd6f;
-}
-
-.brand-glyph-ring,
-.brand-glyph-shackle {
+.brand-glyph-top,
+.brand-glyph-stem,
+.brand-glyph-wave {
   fill: none;
-  stroke: #ffbd6f;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-.brand-glyph-ring {
-  stroke-width: 2.5;
-  opacity: 0.42;
+.brand-glyph-top,
+.brand-glyph-stem {
+  stroke: currentColor;
+  stroke-width: 7;
 }
 
-.brand-glyph-shackle {
-  stroke: currentColor;
-  stroke-width: 3.2;
+.brand-glyph-wave {
+  stroke: #fff0c9;
+  stroke-width: 4.2;
 }
 
 .result-cover img,
