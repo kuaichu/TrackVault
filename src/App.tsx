@@ -184,6 +184,7 @@ type ViewSnapshot = {
 };
 
 type ViewState = { mainTab: MainTab; navKey: NavKey; snapshot: ViewSnapshot };
+type NavigateOptions = { recordHistory?: boolean; resetHistory?: boolean };
 
 const navText: Record<NavKey, { title: string; subtitle: string }> = {
   discover: { title: "发现音乐", subtitle: "推荐新歌与近期值得听的音乐" },
@@ -1123,36 +1124,45 @@ export default function App() {
     });
   }
 
-  function navigateTo(nextNavKey: NavKey, nextMainTab: MainTab = "search") {
+  function navigateTo(nextNavKey: NavKey, nextMainTab: MainTab = "search", options: NavigateOptions = {}) {
+    const recordHistory = options.recordHistory ?? true;
     if (nextNavKey === navKey && nextMainTab === mainTab) {
+      if (options.resetHistory) {
+        setViewHistory([]);
+      }
       return;
     }
 
-    const resultScrollTop = resultBodyRef.current?.scrollTop ?? 0;
-    const currentView = {
-      mainTab,
-      navKey,
-      snapshot: {
-        results,
-        playQueue,
-        resultSource,
-        activePlaylist,
-        activeArtist,
-        activeAlbum,
-        selectedPlaylistId,
-        playlistSongsPage,
-        playlistSongsLimit,
-        playlistSongsHasMore,
-        playlistSongsTotal,
-        playlistSearchInput,
-        playlistSearchKeyword,
-        cloudMeta,
-        qualitySelections,
-        qualitySelectionTouched,
-        resultScrollTop
-      }
-    };
-    setViewHistory((current) => [currentView, ...current.filter((item) => item.mainTab !== currentView.mainTab || item.navKey !== currentView.navKey)].slice(0, 20));
+    if (recordHistory) {
+      const resultScrollTop = resultBodyRef.current?.scrollTop ?? 0;
+      const currentView = {
+        mainTab,
+        navKey,
+        snapshot: {
+          results,
+          playQueue,
+          resultSource,
+          activePlaylist,
+          activeArtist,
+          activeAlbum,
+          selectedPlaylistId,
+          playlistSongsPage,
+          playlistSongsLimit,
+          playlistSongsHasMore,
+          playlistSongsTotal,
+          playlistSearchInput,
+          playlistSearchKeyword,
+          cloudMeta,
+          qualitySelections,
+          qualitySelectionTouched,
+          resultScrollTop
+        }
+      };
+      setViewHistory((current) => [currentView, ...current.filter((item) => item.mainTab !== currentView.mainTab || item.navKey !== currentView.navKey)].slice(0, 20));
+    } else if (options.resetHistory) {
+      setViewHistory([]);
+    }
+
     setMainTab(nextMainTab);
     setNavKey(nextNavKey);
     setBatchSelectionMode(false);
@@ -1162,6 +1172,10 @@ export default function App() {
         resultBodyRef.current.scrollTop = 0;
       }
     });
+  }
+
+  function navigateTopLevel(nextNavKey: NavKey, nextMainTab: MainTab = "search") {
+    navigateTo(nextNavKey, nextMainTab, { recordHistory: false, resetHistory: true });
   }
 
   function goBackView() {
@@ -1203,7 +1217,7 @@ export default function App() {
     setActiveArtist(null);
     setActiveAlbum(null);
     setResultSource("search");
-    navigateTo("search");
+    navigateTopLevel("search");
     setMessage("输入关键词开始搜索。");
   }
 
@@ -1220,7 +1234,7 @@ export default function App() {
     setPlaylistSongsHasMore(false);
     setPlaylistSongsTotal(0);
     setSelectedSongIds([]);
-    navigateTo("playlists");
+    navigateTopLevel("playlists");
 
     if (playlists.length === 0 && !loadingPlaylists && settings.neteaseCookie.trim()) {
       void loadUserPlaylists();
@@ -1274,7 +1288,7 @@ export default function App() {
       return;
     }
 
-    navigateTo("search");
+    navigateTopLevel("search");
     setActivePlaylist(null);
     setActiveArtist(null);
     setActiveAlbum(null);
@@ -1315,7 +1329,7 @@ export default function App() {
     listRequestIdRef.current = requestId;
     const shouldKeepCurrentResults =
       options.keepExisting || (mainTab === "search" && navKey === "discover" && resultSource === "discover");
-    navigateTo("discover");
+    navigateTopLevel("discover");
     setActivePlaylist(null);
     setActiveArtist(null);
     setActiveAlbum(null);
@@ -1367,7 +1381,7 @@ export default function App() {
       setPlaylistSongsHasMore(false);
       setPlaylistSongsTotal(0);
       setSelectedSongIds([]);
-      navigateTo("playlists");
+      navigateTopLevel("playlists");
 
       const startupCookie = nextSettings.neteaseCookie.trim();
       if (startupCookie) {
@@ -1382,11 +1396,11 @@ export default function App() {
       setActiveArtist(null);
       setActiveAlbum(null);
       setResultSource("search");
-      navigateTo("downloads");
+      navigateTopLevel("downloads");
       return;
     }
 
-    navigateTo("discover");
+    navigateTopLevel("discover");
     setResultSource("discover");
 
     if (!nextSettings.autoLoadDiscoverOnStart) {
@@ -1481,7 +1495,7 @@ export default function App() {
   }
 
   function openTransferPage() {
-    navigateTo("transfer");
+    navigateTopLevel("transfer");
     if (playlists.length === 0 && !loadingPlaylists && settings.neteaseCookie.trim()) {
       void loadUserPlaylists();
     }
@@ -1974,7 +1988,7 @@ export default function App() {
     const requestId = listRequestIdRef.current + 1;
     listRequestIdRef.current = requestId;
     const shouldKeepCurrentResults = mainTab === "search" && navKey === "cloud" && resultSource === "cloud";
-    navigateTo("cloud");
+    navigateTopLevel("cloud");
     setActivePlaylist(null);
     setActiveArtist(null);
     setActiveAlbum(null);
@@ -2016,7 +2030,7 @@ export default function App() {
     const requestId = listRequestIdRef.current + 1;
     listRequestIdRef.current = requestId;
     const shouldKeepCurrentResults = mainTab === "search" && navKey === "daily" && resultSource === "daily";
-    navigateTo("daily");
+    navigateTopLevel("daily");
     setActivePlaylist(null);
     setActiveArtist(null);
     setActiveAlbum(null);
@@ -4449,7 +4463,8 @@ export default function App() {
   const currentQualityLabel = currentTrack ? getSelectedLabel(currentTrack) : "128K";
   const isDiscoverListView = mainTab === "search" && navKey === "discover" && resultSource === "discover";
   const isPlaylistSongsView = mainTab === "search" && navKey === "playlists" && resultSource === "playlist" && Boolean(activePlaylist);
-  const canGoBackFromCurrentView = viewHistory.length > 0 || isPlaylistSongsView;
+  const isDetailResultView = mainTab === "search" && (navKey === "artist" || navKey === "album");
+  const canGoBackFromCurrentView = isPlaylistSongsView || (isDetailResultView && viewHistory.length > 0);
   const showAdminFallbackControls = false;
   const listHeaderMeta =
     isDiscoverListView
@@ -5158,13 +5173,13 @@ export default function App() {
               <button type="button" className={mainTab === "search" && navKey === "cloud" ? "nav-button active" : "nav-button"} onClick={() => void loadCloudSongs()}>
                 云盘音乐
               </button>
-              <button type="button" className={mainTab === "search" && navKey === "downloads" ? "nav-button active" : "nav-button"} onClick={() => navigateTo("downloads")}>
+              <button type="button" className={mainTab === "search" && navKey === "downloads" ? "nav-button active" : "nav-button"} onClick={() => navigateTopLevel("downloads")}>
                 下载管理
               </button>
-              <button type="button" className={mainTab === "search" && navKey === "history" ? "nav-button active" : "nav-button"} onClick={() => navigateTo("history")}>
+              <button type="button" className={mainTab === "search" && navKey === "history" ? "nav-button active" : "nav-button"} onClick={() => navigateTopLevel("history")}>
                 播放历史
               </button>
-              <button type="button" className={mainTab === "settings" ? "nav-button active" : "nav-button"} onClick={() => navigateTo(navKey, "settings")}>
+              <button type="button" className={mainTab === "settings" ? "nav-button active" : "nav-button"} onClick={() => navigateTopLevel(navKey, "settings")}>
                 设置
               </button>
             </nav>
@@ -7241,7 +7256,7 @@ export default function App() {
               <button type="button" className="secondary-button" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSongs([]); setPlaylistPickerSourcePlaylistId(null); }}>
                 取消
               </button>
-              <button type="button" className="primary-button" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSongs([]); setPlaylistPickerSourcePlaylistId(null); navigateTo("playlists"); }}>
+              <button type="button" className="primary-button" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSongs([]); setPlaylistPickerSourcePlaylistId(null); navigateTopLevel("playlists"); }}>
                 查看歌单
               </button>
             </div>
