@@ -9169,7 +9169,7 @@ body {
 }
 
 .player-bar-tools {
-  grid-template-columns: 34px 34px 78px 18px minmax(72px, 1fr) 30px;
+  grid-template-columns: 34px 34px 86px 18px minmax(72px, 1fr) 30px;
   gap: 8px;
 }
 
@@ -9186,7 +9186,7 @@ body {
 }
 
 .player-bar-modal .player-bar-tools {
-  grid-template-columns: 34px 34px 78px 18px minmax(72px, 1fr) 30px;
+  grid-template-columns: 34px 34px 86px 18px minmax(72px, 1fr) 30px;
 }
 
 .player-bar-modal .dock-quality-trigger,
@@ -9200,12 +9200,27 @@ body {
 }
 
 .dock-quality-select {
-  width: 78px;
+  width: 86px;
+  min-width: 86px;
 }
 
 .dock-quality-trigger {
+  min-width: 86px;
   padding: 5px 9px;
   font-size: 0.78rem;
+  justify-content: center;
+  gap: 8px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.dock-quality-trigger > span:first-child {
+  min-width: 42px;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: keep-all;
 }
 
 .player-modal-window {
@@ -9239,7 +9254,7 @@ body {
   }
 
   .player-bar-tools {
-    grid-template-columns: 34px minmax(72px, 86px) 18px minmax(0, 1fr) 30px;
+    grid-template-columns: 34px 86px 18px minmax(0, 1fr) 30px;
   }
 
   .player-modal-window {
@@ -9291,12 +9306,13 @@ body {
 
   .player-bar-tools,
   .player-bar-modal .player-bar-tools {
-    grid-template-columns: 32px 72px 16px minmax(52px, 1fr) 28px;
+    grid-template-columns: 32px 86px 16px minmax(52px, 1fr) 28px;
     gap: 7px;
   }
 
   .dock-quality-select {
-    width: 72px;
+    width: 86px;
+    min-width: 86px;
   }
 
   .player-modal-window {
