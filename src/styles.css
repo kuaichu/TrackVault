@@ -4739,6 +4739,10 @@ input[type="range"] {
   min-width: 0;
 }
 
+.volume-range {
+  cursor: ns-resize;
+}
+
 .dock-volume strong {
   min-width: 28px;
   text-align: right;

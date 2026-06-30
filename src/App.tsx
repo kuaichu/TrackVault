@@ -897,6 +897,7 @@ export default function App() {
   const lyricPanelRef = useRef<HTMLDivElement | null>(null);
   const resultBodyRef = useRef<HTMLDivElement | null>(null);
   const commentsScrollRef = useRef<HTMLDivElement | null>(null);
+  const volumeRangeRef = useRef<HTMLInputElement | null>(null);
   const modalLyricPanelRef = useRef<HTMLDivElement | null>(null);
   const activeLyricRef = useRef<HTMLButtonElement | null>(null);
   const activeModalLyricRef = useRef<HTMLButtonElement | null>(null);
@@ -4342,6 +4343,17 @@ export default function App() {
   }, [volume]);
 
   useEffect(() => {
+    const volumeRange = volumeRangeRef.current;
+    if (!volumeRange) {
+      return;
+    }
+
+    volumeRange.addEventListener("wheel", handleVolumeWheel, { passive: false });
+
+    return () => volumeRange.removeEventListener("wheel", handleVolumeWheel);
+  }, []);
+
+  useEffect(() => {
     const audio = audioRef.current;
     if (!audio) {
       return;
@@ -5050,6 +5062,22 @@ export default function App() {
     }
   }
 
+  function clampVolumeValue(nextVolume: number) {
+    return Math.min(100, Math.max(0, Math.round(nextVolume)));
+  }
+
+  function handleVolumeWheel(event: globalThis.WheelEvent) {
+    const wheelDelta = event.deltaY || event.deltaX;
+    if (wheelDelta === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    const step = event.shiftKey ? 1 : 4;
+    const direction = wheelDelta > 0 ? -1 : 1;
+    setVolume((current) => clampVolumeValue(current + direction * step));
+  }
+
   function renderPlayerBar(mode: "dock" | "modal") {
     const isModalBar = mode === "modal";
     const playerBarClass = `player-bar ${isModalBar ? "player-bar-modal player-modal-controls" : "player-bar-dock player-dock"}`;
@@ -5152,7 +5180,18 @@ export default function App() {
             </div>
           )}
           <PlayerIcon name="volume" />
-          <input className="range-progress" style={volumeRangeStyle} type="range" min="0" max="100" value={volume} onChange={(event) => setVolume(Number(event.target.value))} />
+          <input
+            ref={volumeRangeRef}
+            className="range-progress volume-range"
+            style={volumeRangeStyle}
+            type="range"
+            min="0"
+            max="100"
+            value={volume}
+            aria-label="音量"
+            title="滚轮调节音量，按住 Shift 微调"
+            onChange={(event) => setVolume(clampVolumeValue(Number(event.target.value)))}
+          />
           <strong>{volume}</strong>
         </div>
       </footer>
