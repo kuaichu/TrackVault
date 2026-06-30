@@ -258,6 +258,8 @@ export type AppSettings = {
   defaultPlaybackQuality: DownloadQualityLevel;
   defaultDownloadQuality: DownloadQualityLevel;
   maxConcurrentDownloads: number;
+  startupView: "discover" | "search" | "playlists" | "downloads";
+  autoLoadDiscoverOnStart: boolean;
 };
 
 export type AdminConfig = {

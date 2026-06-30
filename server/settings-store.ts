@@ -16,7 +16,9 @@ const defaultSettings: AppSettings = {
   notes: "",
   defaultPlaybackQuality: "standard",
   defaultDownloadQuality: "hires",
-  maxConcurrentDownloads: 3
+  maxConcurrentDownloads: 3,
+  startupView: "discover",
+  autoLoadDiscoverOnStart: true
 };
 
 const defaultAdminConfig: AdminConfig = {
@@ -37,7 +39,9 @@ function normalizeSettings(input: Partial<AppSettings>): AppSettings {
     notes: input.notes?.trim() || "",
     defaultPlaybackQuality: normalizeDefaultQuality(input.defaultPlaybackQuality, defaultSettings.defaultPlaybackQuality),
     defaultDownloadQuality: normalizeDefaultQuality(input.defaultDownloadQuality),
-    maxConcurrentDownloads: clampConcurrentDownloads(input.maxConcurrentDownloads)
+    maxConcurrentDownloads: clampConcurrentDownloads(input.maxConcurrentDownloads),
+    startupView: normalizeStartupView(input.startupView),
+    autoLoadDiscoverOnStart: input.autoLoadDiscoverOnStart ?? defaultSettings.autoLoadDiscoverOnStart
   };
 }
 
@@ -270,6 +274,11 @@ function clampConcurrentDownloads(value: number | undefined) {
   }
 
   return Math.min(5, Math.max(1, Math.round(nextValue)));
+}
+
+function normalizeStartupView(value: AppSettings["startupView"] | undefined) {
+  const allowed: AppSettings["startupView"][] = ["discover", "search", "playlists", "downloads"];
+  return value && allowed.includes(value) ? value : defaultSettings.startupView;
 }
 
 function normalizeAdminConfig(input: Partial<AdminConfig>): AdminConfig {

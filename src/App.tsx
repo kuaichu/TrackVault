@@ -112,6 +112,12 @@ const playbackQualityOptions: Array<{ level: DownloadQualityLevel; label: string
   { level: "lossless", label: "FLAC" },
   { level: "hires", label: "Hi-Res" }
 ];
+const startupViewOptions: Array<{ value: AppSettings["startupView"]; label: string }> = [
+  { value: "discover", label: "发现" },
+  { value: "search", label: "搜索" },
+  { value: "playlists", label: "歌单" },
+  { value: "downloads", label: "下载" }
+];
 const playlistSortOptions: Array<{ value: PlaylistSortMode; label: string }> = [
   { value: "default", label: "默认顺序" },
   { value: "title-asc", label: "标题 A-Z" },
@@ -130,7 +136,9 @@ const defaultSettings: AppSettings = {
   notes: "",
   defaultPlaybackQuality: "standard",
   defaultDownloadQuality: "hires",
-  maxConcurrentDownloads: 3
+  maxConcurrentDownloads: 3,
+  startupView: "discover",
+  autoLoadDiscoverOnStart: true
 };
 
 const defaultAdminConfig: AdminConfigView = {
@@ -1340,6 +1348,65 @@ export default function App() {
     }
   }
 
+  function applyStartupPreferences(nextSettings: AppSettings) {
+    if (nextSettings.startupView === "search") {
+      openSearchPage();
+      return;
+    }
+
+    if (nextSettings.startupView === "playlists") {
+      setResults([]);
+      setActivePlaylist(null);
+      setActiveArtist(null);
+      setActiveAlbum(null);
+      setSelectedPlaylistId(null);
+      setResultSource("search");
+      setPlaylistSearchInput("");
+      setPlaylistSearchKeyword("");
+      setPlaylistSongsPage(1);
+      setPlaylistSongsHasMore(false);
+      setPlaylistSongsTotal(0);
+      setSelectedSongIds([]);
+      navigateTo("playlists");
+
+      const startupCookie = nextSettings.neteaseCookie.trim();
+      if (startupCookie) {
+        void loadUserPlaylists({ cookieOverride: startupCookie, silentCookieCheck: true });
+      }
+      return;
+    }
+
+    if (nextSettings.startupView === "downloads") {
+      setResults([]);
+      setActivePlaylist(null);
+      setActiveArtist(null);
+      setActiveAlbum(null);
+      setResultSource("search");
+      navigateTo("downloads");
+      return;
+    }
+
+    navigateTo("discover");
+    setResultSource("discover");
+
+    if (!nextSettings.autoLoadDiscoverOnStart) {
+      setMessage("已关闭启动自动读取发现音乐");
+      return;
+    }
+
+    const cachedDiscoverSongs = loadCachedDiscoverSongs();
+
+    if (cachedDiscoverSongs.length > 0) {
+      setResults(cachedDiscoverSongs);
+      setPlayQueue(cachedDiscoverSongs);
+      setResultSource("discover");
+      applyQualityDefaults(cachedDiscoverSongs, nextSettings.defaultPlaybackQuality);
+      setMessage(`已先加载缓存推荐 · ${cachedDiscoverSongs.length} 首，正在后台刷新`);
+    }
+
+    void loadDiscoverSongs({ keepExisting: cachedDiscoverSongs.length > 0 });
+  }
+
   async function refreshTasks() {
     try {
       setTasks(await getTasks());
@@ -1348,8 +1415,8 @@ export default function App() {
     }
   }
 
-  async function loadUserPlaylists() {
-    const cookieOk = await ensureNeteaseCookieHealthy();
+  async function loadUserPlaylists(options: { cookieOverride?: string; silentCookieCheck?: boolean } = {}) {
+    const cookieOk = await ensureNeteaseCookieHealthy({ cookieOverride: options.cookieOverride, silent: options.silentCookieCheck });
     if (!cookieOk) {
       setPlaylists([]);
       return;
@@ -3521,20 +3588,6 @@ export default function App() {
   }
 
   useEffect(() => {
-    const cachedDiscoverSongs = loadCachedDiscoverSongs();
-
-    if (cachedDiscoverSongs.length > 0) {
-      setResults(cachedDiscoverSongs);
-      setPlayQueue(cachedDiscoverSongs);
-      setResultSource("discover");
-      applyQualityDefaults(cachedDiscoverSongs);
-      setMessage(`已先加载缓存推荐 · ${cachedDiscoverSongs.length} 首，正在后台刷新`);
-    }
-
-    void loadDiscoverSongs({ keepExisting: cachedDiscoverSongs.length > 0 });
-  }, []);
-
-  useEffect(() => {
     function handleWindowClick() {
       setOpenQualityMenuId(null);
       setOpenPlaylistSortMenu(false);
@@ -3597,6 +3650,8 @@ export default function App() {
 
   useEffect(() => {
     void refreshSettings().then((nextSettings) => {
+      const settingsForStartup = nextSettings ?? defaultSettings;
+      applyStartupPreferences(settingsForStartup);
       const cookie = nextSettings?.neteaseCookie.trim();
       if (cookie) {
         void ensureNeteaseCookieHealthy({ silent: true, force: true, cookieOverride: cookie });
@@ -6346,7 +6401,7 @@ export default function App() {
               <div className="form-head settings-head">
                 <div>
                   <p className="eyebrow">偏好中心</p>
-                  <h1>下载与播放偏好</h1>
+                  <h1>播放与启动偏好</h1>
                 </div>
                 <button type="submit" form="preferences-form" className="primary-button settings-save-button" disabled={savingSettings}>{savingSettings ? "保存中" : "保存更改"}</button>
               </div>
@@ -6435,34 +6490,48 @@ export default function App() {
                   </div>
                 </div>
 
-                <label className="settings-card preference-card preference-card-quiet">
+                <div className="settings-card preference-card preference-card-quiet">
                   <div className="settings-card-head">
                     <div>
-                      <span>任务目录</span>
-                      <small>服务器下载产物保存位置</small>
+                      <span>启动页</span>
+                      <small>打开 TrackVault 后优先进入</small>
                     </div>
-                    <strong>路径</strong>
+                    <strong>{startupViewOptions.find((option) => option.value === settings.startupView)?.label ?? "发现"}</strong>
                   </div>
-                  <input value={settings.downloadDirectory} onChange={(event) => setSettings((current) => ({ ...current, downloadDirectory: event.target.value }))} placeholder="downloads" />
-                </label>
+                  <div className="preference-options" role="group" aria-label="启动页">
+                    {startupViewOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={settings.startupView === option.value ? "preference-option active" : "preference-option"}
+                        onClick={() => setSettings((current) => ({ ...current, startupView: option.value }))}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
                 <div className="settings-card preference-card preference-card-quiet">
                   <div className="settings-card-head">
                     <div>
-                      <span>并发任务</span>
-                      <small>仅影响服务器下载队列</small>
+                      <span>启动加载</span>
+                      <small>启动页为发现音乐时是否自动刷新</small>
                     </div>
-                    <strong>{settings.maxConcurrentDownloads}</strong>
+                    <strong>{settings.autoLoadDiscoverOnStart ? "开启" : "关闭"}</strong>
                   </div>
-                  <div className="concurrency-options" role="group" aria-label="同时下载任务数">
-                    {[1, 2, 3, 4, 5].map((value) => (
+                  <div className="preference-options two-options" role="group" aria-label="启动加载发现音乐">
+                    {[
+                      { value: true, label: "开启" },
+                      { value: false, label: "关闭" }
+                    ].map((option) => (
                       <button
-                        key={value}
+                        key={option.label}
                         type="button"
-                        className={settings.maxConcurrentDownloads === value ? "concurrency-option active" : "concurrency-option"}
-                        onClick={() => setSettings((current) => ({ ...current, maxConcurrentDownloads: value }))}
+                        className={settings.autoLoadDiscoverOnStart === option.value ? "preference-option active" : "preference-option"}
+                        onClick={() => setSettings((current) => ({ ...current, autoLoadDiscoverOnStart: option.value }))}
                       >
-                        {value}
+                        {option.label}
                       </button>
                     ))}
                   </div>
