@@ -689,8 +689,34 @@ input[type="range"] {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.user-profile-stat-button {
+  min-width: 0;
+  padding: 12px 10px;
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.user-profile-stat-button:hover,
+.user-profile-stat-button.active {
+  border-color: rgba(255, 180, 93, 0.26);
+  background:
+    linear-gradient(135deg, rgba(255, 180, 93, 0.16), rgba(255, 180, 93, 0.045)),
+    rgba(34, 27, 22, 0.72);
+  transform: translateY(-1px);
+}
+
 .user-profile-stats strong,
-.user-profile-stats span {
+.user-profile-stats span,
+.user-profile-stat-button strong,
+.user-profile-stat-button span {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -699,12 +725,14 @@ input[type="range"] {
   white-space: nowrap;
 }
 
-.user-profile-stats strong {
+.user-profile-stats strong,
+.user-profile-stat-button strong {
   color: #ffe0a3;
   font-size: 1.08rem;
 }
 
-.user-profile-stats span {
+.user-profile-stats span,
+.user-profile-stat-button span {
   margin-top: 4px;
   color: var(--text-muted);
   font-size: 12px;
@@ -726,6 +754,11 @@ input[type="range"] {
 }
 
 .user-profile-playlists {
+  display: grid;
+  gap: 10px;
+}
+
+.user-profile-social {
   display: grid;
   gap: 10px;
 }
@@ -752,6 +785,116 @@ input[type="range"] {
 .user-profile-playlist-list {
   display: grid;
   gap: 8px;
+}
+
+.user-social-list {
+  display: grid;
+  gap: 8px;
+}
+
+.user-social-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 15px;
+  background: rgba(17, 24, 35, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.user-social-main {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.user-social-main:hover .user-social-avatar {
+  border-color: rgba(255, 180, 93, 0.28);
+}
+
+.user-social-avatar {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 13px;
+  background: rgba(255, 155, 87, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #ffd7a4;
+  font-weight: 900;
+}
+
+.user-social-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-social-copy {
+  min-width: 0;
+}
+
+.user-social-copy strong,
+.user-social-copy small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-social-copy strong {
+  color: var(--text-primary);
+  font-size: 0.92rem;
+}
+
+.user-social-copy small {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.user-social-badge,
+.user-social-self {
+  justify-self: end;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.user-social-badge.mutual {
+  border: 1px solid rgba(255, 180, 93, 0.22);
+  background: rgba(255, 155, 87, 0.15);
+  color: #ffd7a4;
+}
+
+.user-social-follow {
+  justify-self: end;
+  min-width: 76px;
+}
+
+.user-social-follow.active {
+  border-color: rgba(255, 180, 93, 0.2);
+  background: rgba(255, 180, 93, 0.1);
+  color: #ffd7a4;
+}
+
+.user-social-more {
+  justify-self: center;
 }
 
 .user-profile-playlist {

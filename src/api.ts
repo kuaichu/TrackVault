@@ -35,6 +35,9 @@ import type {
   TransferExportResult,
   TransferImportRequest,
   UserProfile,
+  UserFollowActionResult,
+  UserSocialListKind,
+  UserSocialPage,
   UserPlaylist
 } from "./types";
 
@@ -445,6 +448,37 @@ export async function getUserProfile(userId: string): Promise<UserProfile> {
 
   const data = (await response.json()) as { user: UserProfile };
   return data.user;
+}
+
+export async function getUserSocialList(userId: string, kind: UserSocialListKind, page = 1, limit = 30): Promise<UserSocialPage> {
+  const params = new URLSearchParams({
+    kind,
+    page: String(page),
+    limit: String(limit)
+  });
+  const response = await apiFetch(`/api/users/${encodeURIComponent(userId)}/social?${params.toString()}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取好友列表失败");
+  }
+
+  return (await response.json()) as UserSocialPage;
+}
+
+export async function setUserFollowed(userId: string, followed: boolean): Promise<UserFollowActionResult> {
+  const response = await apiFetch(`/api/users/${encodeURIComponent(userId)}/follow`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ followed })
+  });
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "关注操作失败");
+  }
+
+  return (await response.json()) as UserFollowActionResult;
 }
 
 export async function getArtistProfile(artistId: string): Promise<ArtistProfile> {

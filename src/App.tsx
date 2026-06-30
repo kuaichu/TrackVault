@@ -28,6 +28,7 @@ import {
   getSongCommentReplies,
   getSongComments,
   getUserProfile,
+  getUserSocialList,
   getSearchHistory,
   getLyrics,
   getSettings,
@@ -48,6 +49,7 @@ import {
   setSongLiked,
   saveSettings,
   setSongCommentLiked,
+  setUserFollowed,
   startNeteaseQrLogin,
   startDirectSongDownload,
   startServerSongDownload,
@@ -57,12 +59,13 @@ import {
   replyToSongComment,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, SongComment, SongCommentRepliesPage, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserPlaylist, UserProfile } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, SongComment, SongCommentRepliesPage, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
 const COMMENT_PAGE_SIZE = 20;
 const COMMENT_REPLY_PAGE_SIZE = 20;
+const USER_SOCIAL_PAGE_SIZE = 30;
 const neteaseEmojiMap: Record<string, string> = {
   "[爱心]": "\u2764\uFE0F",
   "[心碎]": "\uD83D\uDC94",
@@ -902,6 +905,11 @@ export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loadingUserProfile, setLoadingUserProfile] = useState(false);
   const [userProfileError, setUserProfileError] = useState("");
+  const [userSocialKind, setUserSocialKind] = useState<UserSocialListKind | null>(null);
+  const [userSocialPage, setUserSocialPage] = useState<UserSocialPage | null>(null);
+  const [loadingUserSocial, setLoadingUserSocial] = useState(false);
+  const [userSocialError, setUserSocialError] = useState("");
+  const [userSocialActionIds, setUserSocialActionIds] = useState<string[]>([]);
   const [volume, setVolume] = useState(initialPlayerState.volume);
   const [playerError, setPlayerError] = useState("");
   const [likedSongIds, setLikedSongIds] = useState<string[]>([]);
@@ -2220,6 +2228,11 @@ export default function App() {
     setUserProfile(cachedProfile ? cachedProfile.profile : null);
     setLoadingUserProfile(!isFreshCachedProfile);
     setUserProfileError("");
+    setUserSocialKind(null);
+    setUserSocialPage(null);
+    setLoadingUserSocial(false);
+    setUserSocialError("");
+    setUserSocialActionIds([]);
   }
 
   function closeUserProfile() {
@@ -2227,6 +2240,11 @@ export default function App() {
     setUserProfile(null);
     setLoadingUserProfile(false);
     setUserProfileError("");
+    setUserSocialKind(null);
+    setUserSocialPage(null);
+    setLoadingUserSocial(false);
+    setUserSocialError("");
+    setUserSocialActionIds([]);
   }
 
   function openMyUserProfile() {
@@ -2258,6 +2276,80 @@ export default function App() {
 
     closeUserProfile();
     void loadPlaylistSongs(mappedPlaylist, 1, "");
+  }
+
+  async function loadUserSocial(kind: UserSocialListKind, page = 1, append = false) {
+    const targetUserId = userProfileDisplay?.id ?? userProfileTarget?.id ?? "";
+    if (!targetUserId) {
+      setUserSocialError("缺少用户 ID，无法读取好友列表。");
+      return;
+    }
+
+    setLoadingUserSocial(true);
+    setUserSocialError("");
+
+    try {
+      const nextPage = await getUserSocialList(targetUserId, kind, page, USER_SOCIAL_PAGE_SIZE);
+      setUserSocialPage((current) =>
+        append && current && current.kind === kind
+          ? {
+              ...nextPage,
+              users: [...current.users, ...nextPage.users]
+            }
+          : nextPage
+      );
+      setUserSocialKind(kind);
+    } catch (error) {
+      setUserSocialError(error instanceof Error ? error.message : "获取好友列表失败");
+    } finally {
+      setLoadingUserSocial(false);
+    }
+  }
+
+  function openUserSocial(kind: UserSocialListKind) {
+    if (userSocialKind === kind && userSocialPage) {
+      setUserSocialKind(null);
+      setUserSocialPage(null);
+      setUserSocialError("");
+      return;
+    }
+
+    void loadUserSocial(kind, 1, false);
+  }
+
+  async function toggleSocialUserFollow(user: UserSocialUser) {
+    if (!accountIsLoggedIn) {
+      setMessage("需要先登录网易云账号，才能关注或取消关注用户。");
+      return;
+    }
+
+    const nextFollowed = !user.followed;
+    setUserSocialActionIds((current) => [...current, user.id]);
+
+    try {
+      const result = await setUserFollowed(user.id, nextFollowed);
+      setUserSocialPage((current) =>
+        current
+          ? {
+              ...current,
+              users: current.users.map((item) =>
+                item.id === result.userId
+                  ? {
+                      ...item,
+                      followed: result.followed,
+                      mutual: result.followed && item.mutual
+                    }
+                  : item
+              )
+            }
+          : current
+      );
+      setMessage(result.followed ? `已关注 ${user.nickname}` : `已取消关注 ${user.nickname}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "关注操作失败");
+    } finally {
+      setUserSocialActionIds((current) => current.filter((id) => id !== user.id));
+    }
   }
 
   function handleSelectSong(song: Song) {
@@ -6307,14 +6399,24 @@ export default function App() {
                       <strong>{formatCompactCount(userProfileDisplay.listenSongs)}</strong>
                       <span>听歌</span>
                     </div>
-                    <div>
+                    <button
+                      type="button"
+                      className={userSocialKind === "followeds" ? "user-profile-stat-button active" : "user-profile-stat-button"}
+                      onClick={() => openUserSocial("followeds")}
+                      aria-pressed={userSocialKind === "followeds"}
+                    >
                       <strong>{formatCompactCount(userProfileDisplay.followeds)}</strong>
                       <span>粉丝</span>
-                    </div>
-                    <div>
+                    </button>
+                    <button
+                      type="button"
+                      className={userSocialKind === "follows" ? "user-profile-stat-button active" : "user-profile-stat-button"}
+                      onClick={() => openUserSocial("follows")}
+                      aria-pressed={userSocialKind === "follows"}
+                    >
                       <strong>{formatCompactCount(userProfileDisplay.follows)}</strong>
                       <span>关注</span>
-                    </div>
+                    </button>
                   </div>
 
                   <div className="user-profile-meta">
@@ -6324,6 +6426,75 @@ export default function App() {
                     <span>{formatCompactCount(userProfileDisplay.eventCount)} 动态</span>
                     <span>{formatCompactCount(userProfileDisplay.playlistCount)} 歌单</span>
                   </div>
+
+                  {userSocialKind ? (
+                    <section className="user-profile-social">
+                      <div className="user-profile-section-head">
+                        <h3>{userSocialKind === "followeds" ? "粉丝" : "关注"}</h3>
+                        <span>
+                          {loadingUserSocial && !userSocialPage
+                            ? "读取中"
+                            : `${userSocialPage?.total ?? (userSocialKind === "followeds" ? userProfileDisplay.followeds : userProfileDisplay.follows)} 人`}
+                        </span>
+                      </div>
+                      {userSocialError ? <div className="empty-box">{userSocialError}</div> : null}
+                      {loadingUserSocial && !userSocialPage ? <div className="empty-box">正在读取好友列表...</div> : null}
+                      {userSocialPage && userSocialPage.users.length > 0 ? (
+                        <div className="user-social-list">
+                          {userSocialPage.users.map((user) => {
+                            const isSelf = accountProfile?.provider === "netease" && accountProfile.id === user.id;
+                            const actionBusy = userSocialActionIds.includes(user.id);
+
+                            return (
+                              <article key={user.id} className="user-social-row">
+                                <button
+                                  type="button"
+                                  className="user-social-main"
+                                  onClick={() => openUserProfile({ id: user.id, fallbackName: user.nickname, fallbackAvatarUrl: user.avatarUrl })}
+                                >
+                                  <span className="user-social-avatar">
+                                    {user.avatarUrl ? <img src={user.avatarUrl} alt="" loading="lazy" /> : user.nickname.slice(0, 1)}
+                                  </span>
+                                  <span className="user-social-copy">
+                                    <strong>{user.nickname}</strong>
+                                    <small>{user.signature}</small>
+                                  </span>
+                                </button>
+                                <span className={user.mutual ? "user-social-badge mutual" : "user-social-badge"}>
+                                  {user.mutual ? "互关" : user.followed ? "已关注" : `${formatCompactCount(user.followeds)} 粉丝`}
+                                </span>
+                                {!isSelf ? (
+                                  <button
+                                    type="button"
+                                    className={user.followed ? "secondary-button compact user-social-follow active" : "secondary-button compact user-social-follow"}
+                                    disabled={actionBusy}
+                                    onClick={() => void toggleSocialUserFollow(user)}
+                                  >
+                                    {actionBusy ? "处理中" : user.followed ? "取消关注" : "关注"}
+                                  </button>
+                                ) : (
+                                  <span className="user-social-self">自己</span>
+                                )}
+                              </article>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                      {userSocialPage && userSocialPage.users.length === 0 && !loadingUserSocial && !userSocialError ? (
+                        <div className="empty-box">{userSocialKind === "followeds" ? "还没有读取到粉丝。" : "还没有读取到关注用户。"}</div>
+                      ) : null}
+                      {userSocialPage?.hasMore ? (
+                        <button
+                          type="button"
+                          className="secondary-button compact user-social-more"
+                          disabled={loadingUserSocial}
+                          onClick={() => void loadUserSocial(userSocialKind, userSocialPage.page + 1, true)}
+                        >
+                          {loadingUserSocial ? "读取中" : "加载更多"}
+                        </button>
+                      ) : null}
+                    </section>
+                  ) : null}
 
                   {userProfileDisplay.playlists.length > 0 ? (
                     <section className="user-profile-playlists">

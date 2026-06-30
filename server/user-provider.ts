@@ -1,9 +1,12 @@
 import { createRequire } from "node:module";
 import { getSettings } from "./settings-store.js";
-import type { UserProfile, UserProfilePlaylist } from "./types.js";
+import type { UserFollowActionResult, UserProfile, UserProfilePlaylist, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types.js";
 
 const require = createRequire(import.meta.url);
-const { user_detail, user_playlist } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
+const { follow, user_detail, user_followeds, user_follows, user_mutualfollow_get, user_playlist } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi") & {
+  user_mutualfollow_get: (params: { uid: string; cookie?: string }) => Promise<{ body: unknown }>;
+  user_followeds: (params: { uid: string; limit: number; offset: number; cookie?: string }) => Promise<{ body: unknown }>;
+};
 
 type RawUserProfile = {
   userId?: number;
@@ -42,6 +45,29 @@ type RawUserPlaylist = {
   creator?: {
     userId?: number;
   };
+};
+
+type RawSocialUser = {
+  userId?: number | string;
+  nickname?: string;
+  avatarUrl?: string;
+  signature?: string;
+  followed?: boolean;
+  mutual?: boolean;
+  followeds?: number;
+  follows?: number;
+};
+
+type UserSocialBody = {
+  code?: number;
+  message?: string;
+  msg?: string;
+  follow?: RawSocialUser[];
+  followeds?: RawSocialUser[];
+  more?: boolean;
+  size?: number;
+  total?: number;
+  count?: number;
 };
 
 function formatImageUrl(url: string | undefined, size = 240) {
@@ -121,15 +147,42 @@ function mapPlaylist(playlist: RawUserPlaylist, userId: string): UserProfilePlay
   };
 }
 
+function mapSocialUser(user: RawSocialUser): UserSocialUser | null {
+  const id = user.userId ? String(user.userId) : "";
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    nickname: user.nickname?.trim() || `UID ${id}`,
+    avatarUrl: formatImageUrl(user.avatarUrl, 120),
+    signature: user.signature?.trim() || "这个人还没有写签名。",
+    followed: Boolean(user.followed),
+    mutual: Boolean(user.mutual),
+    followeds: toNumber(user.followeds),
+    follows: toNumber(user.follows)
+  };
+}
+
+async function getNeteaseRequestConfig(options: { requireCookie?: boolean } = {}) {
+  const settings = await getSettings();
+  const cookie = settings.neteaseCookie.trim();
+
+  if (options.requireCookie && !cookie) {
+    throw new Error("需要先配置有效的网易云 Cookie。");
+  }
+
+  return cookie ? { cookie } : {};
+}
+
 export async function getUserProfile(userId: string): Promise<UserProfile> {
   const safeUserId = userId.trim();
   if (!safeUserId) {
     throw new Error("缺少用户 ID。");
   }
 
-  const settings = await getSettings();
-  const cookie = settings.neteaseCookie.trim();
-  const requestConfig = cookie ? { cookie } : {};
+  const requestConfig = await getNeteaseRequestConfig();
   const [detailResponse, playlistResponse] = await Promise.all([
     user_detail({ uid: safeUserId, ...requestConfig }),
     user_playlist({ uid: safeUserId, limit: 6, offset: 0, ...requestConfig }).catch(() => ({ body: {} }))
@@ -169,5 +222,82 @@ export async function getUserProfile(userId: string): Promise<UserProfile> {
     createdAtText: formatDateText(profile.createTime),
     vipType: profile.vipType,
     playlists
+  };
+}
+
+export async function getUserSocialList(userId: string, kind: UserSocialListKind, page = 1, limit = 30): Promise<UserSocialPage> {
+  const safeUserId = userId.trim();
+  if (!safeUserId) {
+    throw new Error("缺少用户 ID。");
+  }
+
+  const safeKind: UserSocialListKind = kind === "followeds" ? "followeds" : "follows";
+  const safePage = Math.max(1, Math.floor(Number(page) || 1));
+  const safeLimit = Math.min(60, Math.max(1, Math.floor(Number(limit) || 30)));
+  const offset = (safePage - 1) * safeLimit;
+  const requestConfig = await getNeteaseRequestConfig();
+  const response = safeKind === "followeds"
+    ? await user_followeds({ uid: safeUserId, limit: safeLimit, offset, ...requestConfig })
+    : await user_follows({ uid: safeUserId, limit: safeLimit, offset, ...requestConfig });
+  const body = response.body as UserSocialBody;
+
+  if (typeof body.code === "number" && body.code !== 200) {
+    throw new Error(body.message ?? body.msg ?? `获取用户社交列表失败：${body.code}`);
+  }
+
+  const rawUsers = safeKind === "followeds" ? body.followeds ?? [] : body.follow ?? [];
+  const users = rawUsers
+    .map(mapSocialUser)
+    .filter((user): user is UserSocialUser => Boolean(user));
+  const total = body.total ?? body.size ?? body.count;
+
+  return {
+    userId: safeUserId,
+    kind: safeKind,
+    users,
+    page: safePage,
+    limit: safeLimit,
+    total,
+    hasMore: Boolean(body.more ?? users.length >= safeLimit)
+  };
+}
+
+export async function getUserMutualFollow(userId: string) {
+  const safeUserId = userId.trim();
+  if (!safeUserId) {
+    throw new Error("缺少用户 ID。");
+  }
+
+  const requestConfig = await getNeteaseRequestConfig({ requireCookie: true });
+  const response = await user_mutualfollow_get({ uid: safeUserId, ...requestConfig });
+  const body = response.body as { code?: number; message?: string; msg?: string; data?: unknown; mutual?: unknown; follow?: unknown };
+
+  if (typeof body.code === "number" && body.code !== 200) {
+    throw new Error(body.message ?? body.msg ?? `获取互关状态失败：${body.code}`);
+  }
+
+  return {
+    userId: safeUserId,
+    mutual: Boolean(body.data ?? body.mutual ?? body.follow)
+  };
+}
+
+export async function setUserFollowed(userId: string, shouldFollow: boolean): Promise<UserFollowActionResult> {
+  const safeUserId = userId.trim();
+  if (!safeUserId) {
+    throw new Error("缺少用户 ID。");
+  }
+
+  const requestConfig = await getNeteaseRequestConfig({ requireCookie: true });
+  const response = await follow({ id: safeUserId, t: shouldFollow ? 1 : 0, ...requestConfig });
+  const body = response.body as { code?: number; message?: string; msg?: string };
+
+  if (typeof body.code === "number" && body.code !== 200) {
+    throw new Error(body.message ?? body.msg ?? `${shouldFollow ? "关注" : "取消关注"}失败：${body.code}`);
+  }
+
+  return {
+    userId: safeUserId,
+    followed: shouldFollow
   };
 }

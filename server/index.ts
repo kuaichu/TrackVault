@@ -21,7 +21,7 @@ import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./se
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
 import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, getTaskFileForDownload, resolveDirectDownload, resolveSongStream } from "./task-store.js";
 import { checkNeteaseQrLogin, loginWithNeteaseCellphone, sendNeteaseCaptcha, startNeteaseQrLogin } from "./netease-auth.js";
-import { getUserProfile } from "./user-provider.js";
+import { getUserMutualFollow, getUserProfile, getUserSocialList, setUserFollowed } from "./user-provider.js";
 import { formatTransferExport } from "./playlist-transfer/export-formatters.js";
 import { buildNeteaseImportedPlaylistAudit } from "./playlist-transfer/netease-import-audit.js";
 import { cancelNeteaseImportAuditJob, formatNeteaseImportAuditJobExport, getNeteaseImportAuditJob, startNeteaseImportAuditJob } from "./playlist-transfer/netease-import-audit-job.js";
@@ -247,6 +247,40 @@ app.get("/api/users/:id", async (request, response) => {
   } catch (error) {
     response.status(502).json({
       message: error instanceof Error ? error.message : "获取用户信息失败"
+    });
+  }
+});
+
+app.get("/api/users/:id/social", async (request, response) => {
+  const kind = request.query.kind === "followeds" ? "followeds" : "follows";
+  const page = Number(request.query.page);
+  const limit = Number(request.query.limit);
+
+  try {
+    response.json(await getUserSocialList(request.params.id, kind, page, limit));
+  } catch (error) {
+    response.status(502).json({
+      message: error instanceof Error ? error.message : "获取好友列表失败"
+    });
+  }
+});
+
+app.get("/api/users/:id/mutual-follow", async (request, response) => {
+  try {
+    response.json(await getUserMutualFollow(request.params.id));
+  } catch (error) {
+    response.status(401).json({
+      message: error instanceof Error ? error.message : "获取互关状态失败"
+    });
+  }
+});
+
+app.post("/api/users/:id/follow", async (request, response) => {
+  try {
+    response.json(await setUserFollowed(request.params.id, Boolean(request.body?.followed)));
+  } catch (error) {
+    response.status(401).json({
+      message: error instanceof Error ? error.message : "关注操作失败"
     });
   }
 });

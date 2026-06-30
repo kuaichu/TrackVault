@@ -135,6 +135,34 @@ export type UserProfile = {
   playlists: UserProfilePlaylist[];
 };
 
+export type UserSocialListKind = "follows" | "followeds";
+
+export type UserSocialUser = {
+  id: string;
+  nickname: string;
+  avatarUrl?: string;
+  signature: string;
+  followed: boolean;
+  mutual: boolean;
+  followeds: number;
+  follows: number;
+};
+
+export type UserSocialPage = {
+  userId: string;
+  kind: UserSocialListKind;
+  users: UserSocialUser[];
+  page: number;
+  limit: number;
+  total?: number;
+  hasMore: boolean;
+};
+
+export type UserFollowActionResult = {
+  userId: string;
+  followed: boolean;
+};
+
 export type UserPlaylist = {
   id: string;
   name: string;
