@@ -21,7 +21,7 @@ import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./se
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
 import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, getTaskFileForDownload, resolveDirectDownload, resolveSongStream } from "./task-store.js";
 import { checkNeteaseQrLogin, loginWithNeteaseCellphone, sendNeteaseCaptcha, startNeteaseQrLogin } from "./netease-auth.js";
-import { getUserMutualFollow, getUserProfile, getUserSocialList, setUserFollowed } from "./user-provider.js";
+import { getUserEvents, getUserMutualFollow, getUserProfile, getUserSocialList, setUserFollowed } from "./user-provider.js";
 import { formatTransferExport } from "./playlist-transfer/export-formatters.js";
 import { buildNeteaseImportedPlaylistAudit } from "./playlist-transfer/netease-import-audit.js";
 import { cancelNeteaseImportAuditJob, formatNeteaseImportAuditJobExport, getNeteaseImportAuditJob, startNeteaseImportAuditJob } from "./playlist-transfer/netease-import-audit-job.js";
@@ -261,6 +261,19 @@ app.get("/api/users/:id/social", async (request, response) => {
   } catch (error) {
     response.status(502).json({
       message: error instanceof Error ? error.message : "获取好友列表失败"
+    });
+  }
+});
+
+app.get("/api/users/:id/events", async (request, response) => {
+  const lasttime = Number(request.query.lasttime);
+  const limit = Number(request.query.limit);
+
+  try {
+    response.json(await getUserEvents(request.params.id, lasttime, limit));
+  } catch (error) {
+    response.status(502).json({
+      message: error instanceof Error ? error.message : "获取用户动态失败"
     });
   }
 });

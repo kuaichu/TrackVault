@@ -35,6 +35,7 @@ import type {
   TransferExportResult,
   TransferImportRequest,
   UserProfile,
+  UserEventsPage,
   UserFollowActionResult,
   UserSocialListKind,
   UserSocialPage,
@@ -463,6 +464,20 @@ export async function getUserSocialList(userId: string, kind: UserSocialListKind
   }
 
   return (await response.json()) as UserSocialPage;
+}
+
+export async function getUserEvents(userId: string, lasttime = -1, limit = 20): Promise<UserEventsPage> {
+  const params = new URLSearchParams({
+    lasttime: String(lasttime),
+    limit: String(limit)
+  });
+  const response = await apiFetch(`/api/users/${encodeURIComponent(userId)}/events?${params.toString()}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取用户动态失败");
+  }
+
+  return (await response.json()) as UserEventsPage;
 }
 
 export async function setUserFollowed(userId: string, followed: boolean): Promise<UserFollowActionResult> {

@@ -27,6 +27,7 @@ import {
   getPlaylists,
   getSongCommentReplies,
   getSongComments,
+  getUserEvents,
   getUserProfile,
   getUserSocialList,
   getSearchHistory,
@@ -59,13 +60,14 @@ import {
   replyToSongComment,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, SongComment, SongCommentRepliesPage, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, SongComment, SongCommentRepliesPage, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
 const COMMENT_PAGE_SIZE = 20;
 const COMMENT_REPLY_PAGE_SIZE = 20;
 const USER_SOCIAL_PAGE_SIZE = 30;
+const USER_EVENTS_PAGE_SIZE = 20;
 const neteaseEmojiMap: Record<string, string> = {
   "[爱心]": "\u2764\uFE0F",
   "[心碎]": "\uD83D\uDC94",
@@ -147,6 +149,7 @@ type DownloadIssueDialog = {
   attemptedLabel: string;
 };
 type ResultSource = "search" | "playlist" | "cloud" | "daily" | "discover" | "artist" | "album";
+type UserProfileView = "profile" | UserSocialListKind | "events";
 type PlaylistSortMode = "default" | "title-asc" | "title-desc" | "artist-asc" | "artist-desc";
 type FloatingMenuStyle = Pick<CSSProperties, "top" | "left" | "width" | "maxHeight">;
 type SongContextMenuState = { song: Song; x: number; y: number };
@@ -562,6 +565,40 @@ function formatGenderLabel(gender: UserProfile["gender"]) {
   return "未知";
 }
 
+function formatUserEventType(type: number | undefined) {
+  const labels: Record<number, string> = {
+    13: "分享歌单",
+    17: "分享节目",
+    18: "分享单曲",
+    19: "分享专辑",
+    21: "分享视频",
+    22: "转发动态",
+    24: "分享专栏",
+    28: "分享节目",
+    35: "分享歌单",
+    39: "发布视频",
+    41: "分享视频"
+  };
+
+  return typeof type === "number" ? labels[type] ?? "用户动态" : "用户动态";
+}
+
+function formatUserEventResourceType(resource: UserEventItem["resource"]) {
+  if (!resource) {
+    return "";
+  }
+
+  const labels: Record<NonNullable<UserEventItem["resource"]>["type"], string> = {
+    song: "单曲",
+    playlist: "歌单",
+    album: "专辑",
+    video: "视频",
+    resource: "资源"
+  };
+
+  return labels[resource.type];
+}
+
 function getDailyRecommendDateLabel(now = new Date()) {
   const date = new Date(now);
 
@@ -905,11 +942,15 @@ export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loadingUserProfile, setLoadingUserProfile] = useState(false);
   const [userProfileError, setUserProfileError] = useState("");
+  const [userProfileView, setUserProfileView] = useState<UserProfileView>("profile");
   const [userSocialKind, setUserSocialKind] = useState<UserSocialListKind | null>(null);
   const [userSocialPage, setUserSocialPage] = useState<UserSocialPage | null>(null);
   const [loadingUserSocial, setLoadingUserSocial] = useState(false);
   const [userSocialError, setUserSocialError] = useState("");
   const [userSocialActionIds, setUserSocialActionIds] = useState<string[]>([]);
+  const [userEventsPage, setUserEventsPage] = useState<UserEventsPage | null>(null);
+  const [loadingUserEvents, setLoadingUserEvents] = useState(false);
+  const [userEventsError, setUserEventsError] = useState("");
   const [volume, setVolume] = useState(initialPlayerState.volume);
   const [playerError, setPlayerError] = useState("");
   const [likedSongIds, setLikedSongIds] = useState<string[]>([]);
@@ -2228,11 +2269,15 @@ export default function App() {
     setUserProfile(cachedProfile ? cachedProfile.profile : null);
     setLoadingUserProfile(!isFreshCachedProfile);
     setUserProfileError("");
+    setUserProfileView("profile");
     setUserSocialKind(null);
     setUserSocialPage(null);
     setLoadingUserSocial(false);
     setUserSocialError("");
     setUserSocialActionIds([]);
+    setUserEventsPage(null);
+    setLoadingUserEvents(false);
+    setUserEventsError("");
   }
 
   function closeUserProfile() {
@@ -2240,11 +2285,22 @@ export default function App() {
     setUserProfile(null);
     setLoadingUserProfile(false);
     setUserProfileError("");
+    setUserProfileView("profile");
     setUserSocialKind(null);
     setUserSocialPage(null);
     setLoadingUserSocial(false);
     setUserSocialError("");
     setUserSocialActionIds([]);
+    setUserEventsPage(null);
+    setLoadingUserEvents(false);
+    setUserEventsError("");
+  }
+
+  function backToUserProfileHome() {
+    setUserProfileView("profile");
+    setUserSocialKind(null);
+    setUserSocialError("");
+    setUserEventsError("");
   }
 
   function openMyUserProfile() {
@@ -2278,6 +2334,39 @@ export default function App() {
     void loadPlaylistSongs(mappedPlaylist, 1, "");
   }
 
+  function openUserEventResource(event: UserEventItem) {
+    const resource = event.resource;
+    if (!resource?.id) {
+      return;
+    }
+
+    if (resource.type === "playlist") {
+      closeUserProfile();
+      void loadPlaylistSongs(
+        {
+          id: resource.id,
+          name: resource.title,
+          coverUrl: resource.coverUrl,
+          trackCount: 0,
+          creatorName: event.nickname,
+          playCount: 0,
+          owned: false
+        },
+        1,
+        ""
+      );
+      return;
+    }
+
+    if (resource.type === "album") {
+      closeUserProfile();
+      void loadAlbumPage(resource.id, resource.title);
+      return;
+    }
+
+    setMessage(`${formatUserEventResourceType(resource)}资源已展示，暂时不直接跳转。`);
+  }
+
   async function loadUserSocial(kind: UserSocialListKind, page = 1, append = false) {
     const targetUserId = userProfileDisplay?.id ?? userProfileTarget?.id ?? "";
     if (!targetUserId) {
@@ -2285,6 +2374,9 @@ export default function App() {
       return;
     }
 
+    setUserProfileView(kind);
+    setUserSocialPage((current) => (current?.kind === kind ? current : null));
+    setUserEventsError("");
     setLoadingUserSocial(true);
     setUserSocialError("");
 
@@ -2307,14 +2399,42 @@ export default function App() {
   }
 
   function openUserSocial(kind: UserSocialListKind) {
-    if (userSocialKind === kind && userSocialPage) {
-      setUserSocialKind(null);
-      setUserSocialPage(null);
-      setUserSocialError("");
+    void loadUserSocial(kind, 1, false);
+  }
+
+  async function loadUserEvents(append = false) {
+    const targetUserId = userProfileDisplay?.id ?? userProfileTarget?.id ?? "";
+    if (!targetUserId) {
+      setUserEventsError("缺少用户 ID，无法读取动态。");
       return;
     }
 
-    void loadUserSocial(kind, 1, false);
+    const lasttime = append ? userEventsPage?.lasttime ?? -1 : -1;
+    setUserProfileView("events");
+    setUserSocialKind(null);
+    setUserSocialError("");
+    setLoadingUserEvents(true);
+    setUserEventsError("");
+
+    try {
+      const nextPage = await getUserEvents(targetUserId, lasttime, USER_EVENTS_PAGE_SIZE);
+      setUserEventsPage((current) =>
+        append && current && current.userId === nextPage.userId
+          ? {
+              ...nextPage,
+              events: [...current.events, ...nextPage.events]
+            }
+          : nextPage
+      );
+    } catch (error) {
+      setUserEventsError(error instanceof Error ? error.message : "获取用户动态失败");
+    } finally {
+      setLoadingUserEvents(false);
+    }
+  }
+
+  function openUserEvents() {
+    void loadUserEvents(false);
   }
 
   async function toggleSocialUserFollow(user: UserSocialUser) {
@@ -4244,6 +4364,14 @@ export default function App() {
   const userProfileDisplay = userProfile ?? null;
   const userProfileName = userProfileDisplay?.nickname ?? userProfileTarget?.fallbackName ?? "网易云用户";
   const userProfileAvatarUrl = userProfileDisplay?.avatarUrl ?? userProfileTarget?.fallbackAvatarUrl;
+  const isUserProfileHome = userProfileView === "profile";
+  const userProfileSubTitle = userProfileView === "events" ? "动态" : userProfileView === "followeds" ? "粉丝" : "关注";
+  const userProfileSubCount =
+    userProfileView === "events"
+      ? `${formatCompactCount(userEventsPage?.events.length ?? userProfileDisplay?.eventCount ?? 0)} 条`
+      : userProfileView === "followeds"
+        ? `${formatCompactCount(userSocialPage?.total ?? userProfileDisplay?.followeds ?? 0)} 人`
+        : `${formatCompactCount(userSocialPage?.total ?? userProfileDisplay?.follows ?? 0)} 人`;
 
   const renderCommentRow = (comment: SongComment, keyPrefix = "", options: { isReply?: boolean } = {}) => {
     const isReply = Boolean(options.isReply);
@@ -4350,6 +4478,64 @@ export default function App() {
             </div>
           ) : null}
         </div>
+      </article>
+    );
+  };
+
+  const renderUserEventCard = (event: UserEventItem) => {
+    const resourceLabel = formatUserEventResourceType(event.resource);
+
+    return (
+      <article key={event.id} className="user-event-card">
+        <header className="user-event-head">
+          <button
+            type="button"
+            className="user-event-author"
+            onClick={() => openUserProfile({ id: event.userId, fallbackName: event.nickname, fallbackAvatarUrl: event.avatarUrl })}
+          >
+            <span className="user-event-avatar">
+              {event.avatarUrl ? <img src={event.avatarUrl} alt="" loading="lazy" /> : event.nickname.slice(0, 1)}
+            </span>
+            <span>
+              <strong>{event.nickname}</strong>
+              <small>{event.timeText} · {formatUserEventType(event.type)}</small>
+            </span>
+          </button>
+        </header>
+
+        <p className="user-event-text">{renderCommentContent(event.text)}</p>
+
+        {event.pics.length > 0 ? (
+          <div className={event.pics.length === 1 ? "user-event-pics single" : "user-event-pics"}>
+            {event.pics.slice(0, 9).map((picUrl, index) => (
+              <img key={`${event.id}-pic-${index}`} src={picUrl} alt="" loading="lazy" />
+            ))}
+          </div>
+        ) : null}
+
+        {event.resource ? (
+          <button
+            type="button"
+            className="user-event-resource"
+            onClick={() => openUserEventResource(event)}
+            title={event.resource.type === "playlist" || event.resource.type === "album" ? `打开${resourceLabel}：${event.resource.title}` : event.resource.title}
+          >
+            <span className="user-event-resource-cover">
+              {event.resource.coverUrl ? <img src={event.resource.coverUrl} alt="" loading="lazy" /> : <MusicGlyph />}
+            </span>
+            <span className="user-event-resource-copy">
+              <em>{resourceLabel}</em>
+              <strong>{event.resource.title}</strong>
+              {event.resource.subtitle ? <small>{event.resource.subtitle}</small> : null}
+            </span>
+          </button>
+        ) : null}
+
+        <footer className="user-event-stats">
+          <span>赞 {formatCompactCount(event.likedCount)}</span>
+          <span>评论 {formatCompactCount(event.commentCount)}</span>
+          <span>分享 {formatCompactCount(event.shareCount)}</span>
+        </footer>
       </article>
     );
   };
@@ -6389,141 +6575,175 @@ export default function App() {
               {!userProfileDisplay && userProfileError ? <div className="empty-box">{userProfileError}</div> : null}
               {userProfileDisplay ? (
                 <>
-                  <p className="user-profile-signature">{userProfileDisplay.signature}</p>
-                  <div className="user-profile-stats">
-                    <div>
-                      <strong>{userProfileDisplay.level}</strong>
-                      <span>等级</span>
-                    </div>
-                    <div>
-                      <strong>{formatCompactCount(userProfileDisplay.listenSongs)}</strong>
-                      <span>听歌</span>
-                    </div>
-                    <button
-                      type="button"
-                      className={userSocialKind === "followeds" ? "user-profile-stat-button active" : "user-profile-stat-button"}
-                      onClick={() => openUserSocial("followeds")}
-                      aria-pressed={userSocialKind === "followeds"}
-                    >
-                      <strong>{formatCompactCount(userProfileDisplay.followeds)}</strong>
-                      <span>粉丝</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={userSocialKind === "follows" ? "user-profile-stat-button active" : "user-profile-stat-button"}
-                      onClick={() => openUserSocial("follows")}
-                      aria-pressed={userSocialKind === "follows"}
-                    >
-                      <strong>{formatCompactCount(userProfileDisplay.follows)}</strong>
-                      <span>关注</span>
-                    </button>
-                  </div>
-
-                  <div className="user-profile-meta">
-                    <span>{formatGenderLabel(userProfileDisplay.gender)}</span>
-                    {userProfileDisplay.ageText ? <span>{userProfileDisplay.ageText}</span> : null}
-                    {userProfileDisplay.createdAtText ? <span>{userProfileDisplay.createdAtText} 加入</span> : null}
-                    <span>{formatCompactCount(userProfileDisplay.eventCount)} 动态</span>
-                    <span>{formatCompactCount(userProfileDisplay.playlistCount)} 歌单</span>
-                  </div>
-
-                  {userSocialKind ? (
-                    <section className="user-profile-social">
-                      <div className="user-profile-section-head">
-                        <h3>{userSocialKind === "followeds" ? "粉丝" : "关注"}</h3>
-                        <span>
-                          {loadingUserSocial && !userSocialPage
-                            ? "读取中"
-                            : `${userSocialPage?.total ?? (userSocialKind === "followeds" ? userProfileDisplay.followeds : userProfileDisplay.follows)} 人`}
-                        </span>
-                      </div>
-                      {userSocialError ? <div className="empty-box">{userSocialError}</div> : null}
-                      {loadingUserSocial && !userSocialPage ? <div className="empty-box">正在读取好友列表...</div> : null}
-                      {userSocialPage && userSocialPage.users.length > 0 ? (
-                        <div className="user-social-list">
-                          {userSocialPage.users.map((user) => {
-                            const isSelf = accountProfile?.provider === "netease" && accountProfile.id === user.id;
-                            const actionBusy = userSocialActionIds.includes(user.id);
-
-                            return (
-                              <article key={user.id} className="user-social-row">
-                                <button
-                                  type="button"
-                                  className="user-social-main"
-                                  onClick={() => openUserProfile({ id: user.id, fallbackName: user.nickname, fallbackAvatarUrl: user.avatarUrl })}
-                                >
-                                  <span className="user-social-avatar">
-                                    {user.avatarUrl ? <img src={user.avatarUrl} alt="" loading="lazy" /> : user.nickname.slice(0, 1)}
-                                  </span>
-                                  <span className="user-social-copy">
-                                    <strong>{user.nickname}</strong>
-                                    <small>{user.signature}</small>
-                                  </span>
-                                </button>
-                                <span className={user.mutual ? "user-social-badge mutual" : "user-social-badge"}>
-                                  {user.mutual ? "互关" : user.followed ? "已关注" : `${formatCompactCount(user.followeds)} 粉丝`}
-                                </span>
-                                {!isSelf ? (
-                                  <button
-                                    type="button"
-                                    className={user.followed ? "secondary-button compact user-social-follow active" : "secondary-button compact user-social-follow"}
-                                    disabled={actionBusy}
-                                    onClick={() => void toggleSocialUserFollow(user)}
-                                  >
-                                    {actionBusy ? "处理中" : user.followed ? "取消关注" : "关注"}
-                                  </button>
-                                ) : (
-                                  <span className="user-social-self">自己</span>
-                                )}
-                              </article>
-                            );
-                          })}
+                  {isUserProfileHome ? (
+                    <>
+                      <p className="user-profile-signature">{userProfileDisplay.signature}</p>
+                      <div className="user-profile-stats">
+                        <div>
+                          <strong>{userProfileDisplay.level}</strong>
+                          <span>等级</span>
                         </div>
-                      ) : null}
-                      {userSocialPage && userSocialPage.users.length === 0 && !loadingUserSocial && !userSocialError ? (
-                        <div className="empty-box">{userSocialKind === "followeds" ? "还没有读取到粉丝。" : "还没有读取到关注用户。"}</div>
-                      ) : null}
-                      {userSocialPage?.hasMore ? (
+                        <div>
+                          <strong>{formatCompactCount(userProfileDisplay.listenSongs)}</strong>
+                          <span>听歌</span>
+                        </div>
                         <button
                           type="button"
-                          className="secondary-button compact user-social-more"
-                          disabled={loadingUserSocial}
-                          onClick={() => void loadUserSocial(userSocialKind, userSocialPage.page + 1, true)}
+                          className="user-profile-stat-button"
+                          onClick={() => openUserSocial("followeds")}
                         >
-                          {loadingUserSocial ? "读取中" : "加载更多"}
+                          <strong>{formatCompactCount(userProfileDisplay.followeds)}</strong>
+                          <span>粉丝</span>
                         </button>
-                      ) : null}
-                    </section>
-                  ) : null}
+                        <button
+                          type="button"
+                          className="user-profile-stat-button"
+                          onClick={() => openUserSocial("follows")}
+                        >
+                          <strong>{formatCompactCount(userProfileDisplay.follows)}</strong>
+                          <span>关注</span>
+                        </button>
+                      </div>
 
-                  {userProfileDisplay.playlists.length > 0 ? (
-                    <section className="user-profile-playlists">
-                      <div className="user-profile-section-head">
-                        <h3>公开歌单</h3>
-                        <span>{userProfileDisplay.playlists.length} 个</span>
+                      <div className="user-profile-meta">
+                        <span>{formatGenderLabel(userProfileDisplay.gender)}</span>
+                        {userProfileDisplay.ageText ? <span>{userProfileDisplay.ageText}</span> : null}
+                        {userProfileDisplay.createdAtText ? <span>{userProfileDisplay.createdAtText} 加入</span> : null}
+                        <button type="button" className="user-profile-meta-button" onClick={openUserEvents}>
+                          {formatCompactCount(userProfileDisplay.eventCount)} 动态
+                        </button>
+                        <span>{formatCompactCount(userProfileDisplay.playlistCount)} 歌单</span>
                       </div>
-                      <div className="user-profile-playlist-list">
-                        {userProfileDisplay.playlists.map((playlist) => (
-                          <button
-                            key={playlist.id}
-                            type="button"
-                            className="user-profile-playlist"
-                            onClick={() => openProfilePlaylist(playlist)}
-                            title={`打开歌单：${playlist.name}`}
-                          >
-                            <div className="user-profile-playlist-cover">
-                              {playlist.coverUrl ? <img src={playlist.coverUrl} alt="" loading="lazy" /> : <span>{playlist.name.slice(0, 1)}</span>}
-                            </div>
-                            <div>
-                              <strong>{playlist.name}</strong>
-                              <span>{playlist.trackCount} 首 · 播放 {formatCompactCount(playlist.playCount)}</span>
-                            </div>
-                            <em className={playlist.owned ? "owned" : "collected"}>{playlist.owned ? "创建" : "收藏"}</em>
-                          </button>
-                        ))}
+
+                      {userProfileDisplay.playlists.length > 0 ? (
+                        <section className="user-profile-playlists">
+                          <div className="user-profile-section-head">
+                            <h3>公开歌单</h3>
+                            <span>{userProfileDisplay.playlists.length} 个</span>
+                          </div>
+                          <div className="user-profile-playlist-list">
+                            {userProfileDisplay.playlists.map((playlist) => (
+                              <button
+                                key={playlist.id}
+                                type="button"
+                                className="user-profile-playlist"
+                                onClick={() => openProfilePlaylist(playlist)}
+                                title={`打开歌单：${playlist.name}`}
+                              >
+                                <div className="user-profile-playlist-cover">
+                                  {playlist.coverUrl ? <img src={playlist.coverUrl} alt="" loading="lazy" /> : <span>{playlist.name.slice(0, 1)}</span>}
+                                </div>
+                                <div>
+                                  <strong>{playlist.name}</strong>
+                                  <span>{playlist.trackCount} 首 · 播放 {formatCompactCount(playlist.playCount)}</span>
+                                </div>
+                                <em className={playlist.owned ? "owned" : "collected"}>{playlist.owned ? "创建" : "收藏"}</em>
+                              </button>
+                            ))}
+                          </div>
+                        </section>
+                      ) : null}
+                    </>
+                  ) : (
+                    <section className="user-profile-subview">
+                      <div className="user-profile-subhead">
+                        <button type="button" className="user-profile-subback" onClick={backToUserProfileHome}>
+                          <svg aria-hidden="true" viewBox="0 0 24 24">
+                            <path d="m15 6-6 6 6 6" />
+                          </svg>
+                          返回资料
+                        </button>
+                        <div>
+                          <strong>{userProfileSubTitle}</strong>
+                          <span>{loadingUserSocial || loadingUserEvents ? "读取中" : userProfileSubCount}</span>
+                        </div>
                       </div>
+
+                      {userProfileView === "events" ? (
+                        <div className="user-profile-events">
+                          {userEventsError ? <div className="empty-box">{userEventsError}</div> : null}
+                          {loadingUserEvents && !userEventsPage ? <div className="empty-box">正在读取动态...</div> : null}
+                          {userEventsPage && userEventsPage.events.length > 0 ? (
+                            <div className="user-event-list">
+                              {userEventsPage.events.map((event) => renderUserEventCard(event))}
+                            </div>
+                          ) : null}
+                          {userEventsPage && userEventsPage.events.length === 0 && !loadingUserEvents && !userEventsError ? (
+                            <div className="empty-box">暂时没有读取到动态。</div>
+                          ) : null}
+                          {userEventsPage?.hasMore ? (
+                            <button
+                              type="button"
+                              className="secondary-button compact user-social-more"
+                              disabled={loadingUserEvents}
+                              onClick={() => void loadUserEvents(true)}
+                            >
+                              {loadingUserEvents ? "读取中" : "加载更多"}
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div className="user-profile-social">
+                          {userSocialError ? <div className="empty-box">{userSocialError}</div> : null}
+                          {loadingUserSocial && !userSocialPage ? <div className="empty-box">正在读取好友列表...</div> : null}
+                          {userSocialPage && userSocialPage.users.length > 0 ? (
+                            <div className="user-social-list">
+                              {userSocialPage.users.map((user) => {
+                                const isSelf = accountProfile?.provider === "netease" && accountProfile.id === user.id;
+                                const actionBusy = userSocialActionIds.includes(user.id);
+
+                                return (
+                                  <article key={user.id} className="user-social-row">
+                                    <button
+                                      type="button"
+                                      className="user-social-main"
+                                      onClick={() => openUserProfile({ id: user.id, fallbackName: user.nickname, fallbackAvatarUrl: user.avatarUrl })}
+                                    >
+                                      <span className="user-social-avatar">
+                                        {user.avatarUrl ? <img src={user.avatarUrl} alt="" loading="lazy" /> : user.nickname.slice(0, 1)}
+                                      </span>
+                                      <span className="user-social-copy">
+                                        <strong>{user.nickname}</strong>
+                                        <small>{user.signature}</small>
+                                      </span>
+                                    </button>
+                                    <span className={user.mutual ? "user-social-badge mutual" : "user-social-badge"}>
+                                      {user.mutual ? "互关" : user.followed ? "已关注" : `${formatCompactCount(user.followeds)} 粉丝`}
+                                    </span>
+                                    {!isSelf ? (
+                                      <button
+                                        type="button"
+                                        className={user.followed ? "secondary-button compact user-social-follow active" : "secondary-button compact user-social-follow"}
+                                        disabled={actionBusy}
+                                        onClick={() => void toggleSocialUserFollow(user)}
+                                      >
+                                        {actionBusy ? "处理中" : user.followed ? "取消关注" : "关注"}
+                                      </button>
+                                    ) : (
+                                      <span className="user-social-self">自己</span>
+                                    )}
+                                  </article>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                          {userSocialPage && userSocialPage.users.length === 0 && !loadingUserSocial && !userSocialError ? (
+                            <div className="empty-box">{userProfileView === "followeds" ? "还没有读取到粉丝。" : "还没有读取到关注用户。"}</div>
+                          ) : null}
+                          {userSocialPage?.hasMore ? (
+                            <button
+                              type="button"
+                              className="secondary-button compact user-social-more"
+                              disabled={loadingUserSocial}
+                              onClick={() => void loadUserSocial(userSocialPage.kind, userSocialPage.page + 1, true)}
+                            >
+                              {loadingUserSocial ? "读取中" : "加载更多"}
+                            </button>
+                          ) : null}
+                        </div>
+                      )}
                     </section>
-                  ) : null}
+                  )}
                 </>
               ) : null}
             </div>

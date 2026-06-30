@@ -158,6 +158,39 @@ export type UserSocialPage = {
   hasMore: boolean;
 };
 
+export type UserEventResourceType = "song" | "playlist" | "album" | "video" | "resource";
+
+export type UserEventResource = {
+  type: UserEventResourceType;
+  id: string;
+  title: string;
+  subtitle?: string;
+  coverUrl?: string;
+};
+
+export type UserEventItem = {
+  id: string;
+  userId: string;
+  nickname: string;
+  avatarUrl?: string;
+  text: string;
+  timeText: string;
+  time?: number;
+  type?: number;
+  pics: string[];
+  resource?: UserEventResource;
+  likedCount: number;
+  commentCount: number;
+  shareCount: number;
+};
+
+export type UserEventsPage = {
+  userId: string;
+  events: UserEventItem[];
+  lasttime?: number;
+  hasMore: boolean;
+};
+
 export type UserFollowActionResult = {
   userId: string;
   followed: boolean;

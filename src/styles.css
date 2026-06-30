@@ -744,7 +744,8 @@ input[type="range"] {
   gap: 8px;
 }
 
-.user-profile-meta span {
+.user-profile-meta span,
+.user-profile-meta-button {
   padding: 7px 10px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.055);
@@ -753,9 +754,111 @@ input[type="range"] {
   font-weight: 800;
 }
 
+.user-profile-meta-button {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.user-profile-meta-button:hover,
+.user-profile-meta-button:focus-visible {
+  border-color: rgba(255, 180, 93, 0.24);
+  background: rgba(255, 155, 87, 0.12);
+  color: #ffd7a4;
+}
+
 .user-profile-playlists {
   display: grid;
   gap: 10px;
+}
+
+.user-profile-subview,
+.user-profile-events {
+  display: grid;
+  gap: 12px;
+}
+
+.user-profile-subhead {
+  position: sticky;
+  top: -18px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -18px -20px 0;
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(11, 16, 24, 0.96);
+  backdrop-filter: blur(16px);
+}
+
+.user-profile-subhead div {
+  min-width: 0;
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.user-profile-subhead strong,
+.user-profile-subhead span {
+  display: block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-profile-subhead strong {
+  color: var(--text-primary);
+  font-size: 0.96rem;
+}
+
+.user-profile-subhead span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.user-profile-subback {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.user-profile-subback:hover,
+.user-profile-subback:focus-visible {
+  border-color: rgba(255, 180, 93, 0.24);
+  background: rgba(255, 155, 87, 0.12);
+  color: #ffd7a4;
+}
+
+.user-profile-subback svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .user-profile-social {
@@ -895,6 +998,201 @@ input[type="range"] {
 
 .user-social-more {
   justify-self: center;
+}
+
+.user-event-list {
+  display: grid;
+  gap: 10px;
+}
+
+.user-event-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(17, 24, 35, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.user-event-head {
+  min-width: 0;
+}
+
+.user-event-author {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.user-event-author strong,
+.user-event-author small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-event-author strong {
+  color: var(--text-primary);
+  font-size: 0.92rem;
+}
+
+.user-event-author small {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.user-event-avatar {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 13px;
+  background: rgba(255, 155, 87, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #ffd7a4;
+  font-weight: 900;
+}
+
+.user-event-avatar img,
+.user-event-resource-cover img,
+.user-event-pics img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-event-text {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.user-event-pics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.user-event-pics.single {
+  grid-template-columns: minmax(0, 220px);
+}
+
+.user-event-pics img {
+  aspect-ratio: 1;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.user-event-pics.single img {
+  aspect-ratio: 4 / 3;
+}
+
+.user-event-resource {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 9px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.045);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.user-event-resource:hover,
+.user-event-resource:focus-visible {
+  border-color: rgba(255, 180, 93, 0.22);
+  background: rgba(255, 155, 87, 0.08);
+  transform: translateY(-1px);
+}
+
+.user-event-resource-cover {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgba(255, 155, 87, 0.12);
+  color: #ffd7a4;
+}
+
+.user-event-resource-cover .music-glyph {
+  width: 24px;
+  height: 24px;
+}
+
+.user-event-resource-copy {
+  min-width: 0;
+}
+
+.user-event-resource-copy em,
+.user-event-resource-copy strong,
+.user-event-resource-copy small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-event-resource-copy em {
+  color: #ffd7a4;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.user-event-resource-copy strong {
+  margin-top: 3px;
+  color: var(--text-primary);
+  font-size: 0.92rem;
+}
+
+.user-event-resource-copy small {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.user-event-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.user-event-stats span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .user-profile-playlist {
