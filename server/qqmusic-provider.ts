@@ -272,9 +272,10 @@ export async function checkQqMusicCookie(cookie: string): Promise<QqMusicCookieC
     };
   } catch (error) {
     return {
-      ok: false,
+      ok: true,
       uin: cookieObj.uin,
-      message: `QQ 音乐 Cookie 检测失败：${getQqErrorMessage(error)}`
+      message: `QQ 音乐 Cookie 已保存，但刷新 key 失败：${getQqErrorMessage(error)}。如果试听/下载仍失败，请重新登录 QQ 音乐后再提取。`,
+      refreshedCookie: serializeQqCookie(cookieObj)
     };
   }
 }

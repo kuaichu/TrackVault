@@ -3413,7 +3413,7 @@ export default function App() {
         qqMusicCookie: result.refreshedCookie ?? cookie
       });
       setSettings(saved);
-      setMessage(`QQ 音乐 Cookie 已导入：${result.uin ?? "QQ 账号"}`);
+      setMessage(result.message || `QQ 音乐 Cookie 已导入：${result.uin ?? "QQ 账号"}`);
       closeQqLogin();
     } catch (error) {
       setQqLoginMessage(error instanceof Error ? error.message : "QQ 音乐 Cookie 导入失败");
