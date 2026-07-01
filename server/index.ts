@@ -9,7 +9,7 @@ import { getCurrentUserKey, getSession, loginSession, logoutSession } from "./ac
 import { getCloudSongs } from "./cloud-provider.js";
 import { getSongCommentReplies, getSongComments, replyToSongComment, setSongCommentLiked } from "./comment-provider.js";
 import { getDiscoverSongs } from "./discover-provider.js";
-import { addFlacMetadataToDownload, isFlacDownloadTarget } from "./download-metadata.js";
+import { addFlacMetadataToDownload, getHighResolutionCoverUrl, isFlacDownloadTarget } from "./download-metadata.js";
 import { getHeartbeatSongs } from "./heartbeat-provider.js";
 import { getArtistProfile, resolveArtistIdByName } from "./artist-provider.js";
 import { getPlayHistory, getSearchHistory, removeSearchHistory, savePlayHistory, saveSearchHistory } from "./history-store.js";
@@ -89,7 +89,7 @@ app.get("/api/media/cover", async (request, response) => {
   const rawUrl = typeof request.query.url === "string" ? request.query.url : "";
 
   try {
-    const coverUrl = new URL(rawUrl);
+    const coverUrl = new URL(getHighResolutionCoverUrl(rawUrl));
     if ((coverUrl.protocol !== "https:" && coverUrl.protocol !== "http:") || !isAllowedCoverHost(coverUrl.hostname)) {
       response.status(400).json({ message: "封面地址不在允许的音乐图片域名内" });
       return;

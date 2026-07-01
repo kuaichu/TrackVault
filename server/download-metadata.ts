@@ -46,7 +46,7 @@ async function fetchCover(song: Song): Promise<FlacCoverData | null> {
     return null;
   }
 
-  const coverUrl = new URL(song.coverUrl);
+  const coverUrl = new URL(getHighResolutionCoverUrl(song.coverUrl));
   if ((coverUrl.protocol !== "https:" && coverUrl.protocol !== "http:") || !isAllowedCoverHost(coverUrl.hostname)) {
     return null;
   }
@@ -75,6 +75,32 @@ async function fetchCover(song: Song): Promise<FlacCoverData | null> {
     mimeType: contentType,
     bytes
   };
+}
+
+export function getHighResolutionCoverUrl(rawUrl: string) {
+  const trimmedUrl = rawUrl.trim();
+  if (!trimmedUrl) {
+    return trimmedUrl;
+  }
+
+  try {
+    const url = new URL(trimmedUrl);
+    const host = url.hostname.toLowerCase();
+
+    if (host === "music.126.net" || host.endsWith(".music.126.net")) {
+      url.searchParams.set("param", "1000y1000");
+      return url.toString();
+    }
+
+    if (host === "y.gtimg.cn" || host.endsWith(".y.gtimg.cn")) {
+      url.pathname = url.pathname.replace(/R\d+x\d+M000/i, "R800x800M000");
+      return url.toString();
+    }
+
+    return trimmedUrl;
+  } catch {
+    return trimmedUrl;
+  }
 }
 
 async function fetchLyricsText(song: Song) {
