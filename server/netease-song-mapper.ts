@@ -1,4 +1,5 @@
 import type { DownloadQualityOption, Song } from "./types.js";
+import { getNeteaseSongAvailability, type NeteaseAvailabilityLike, type NeteasePrivilegeLike } from "./song-availability.js";
 
 type NeteaseArtistLike = {
   id?: number | string;
@@ -11,7 +12,7 @@ type NeteaseAlbumLike = {
   picUrl?: string;
 };
 
-export type NeteaseSongLike = {
+export type NeteaseSongLike = NeteaseAvailabilityLike & {
   id?: number | string;
   name?: string;
   dt?: number;
@@ -26,6 +27,7 @@ export type NeteaseSongLike = {
   sqMusic?: unknown | null;
   hr?: unknown | null;
   hrMusic?: unknown | null;
+  privilege?: NeteasePrivilegeLike | null;
 };
 
 function formatDuration(durationMs: number | undefined) {
@@ -108,6 +110,7 @@ export function mapNeteaseSong(song: NeteaseSongLike, source: string): Song | nu
     duration: formatDuration(song.dt ?? song.duration),
     quality: getQualityLabel(song),
     availableQualities: getAvailableQualities(song),
+    availability: getNeteaseSongAvailability(song),
     source
   };
 }

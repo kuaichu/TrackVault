@@ -3,6 +3,7 @@ import type { SearchType } from "NeteaseCloudMusicApi";
 import type { DownloadQualityOption, Song } from "./types.js";
 import { getSettings } from "./settings-store.js";
 import { searchQqMusicSongs } from "./qqmusic-provider.js";
+import { getNeteaseSongAvailability, type NeteasePrivilegeLike } from "./song-availability.js";
 
 const require = createRequire(import.meta.url);
 const { search, song_detail } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
@@ -35,6 +36,12 @@ type SearchSong = {
   h?: unknown | null;
   sq?: unknown | null;
   hr?: unknown | null;
+  fee?: number;
+  st?: number;
+  cp?: number;
+  copyright?: number;
+  noCopyrightRcmd?: unknown | null;
+  privilege?: NeteasePrivilegeLike | null;
 };
 
 type DetailSong = {
@@ -45,6 +52,12 @@ type DetailSong = {
   h?: unknown | null;
   sq?: unknown | null;
   hr?: unknown | null;
+  fee?: number;
+  st?: number;
+  cp?: number;
+  copyright?: number;
+  noCopyrightRcmd?: unknown | null;
+  privilege?: NeteasePrivilegeLike | null;
 };
 
 type QualityFlags = {
@@ -118,7 +131,12 @@ async function getSongDetailMap(songIds: string[]) {
     cookie: settings.neteaseCookie || undefined
   });
 
-  const songs = ((response.body as { songs?: DetailSong[] }).songs ?? []) as DetailSong[];
+  const body = response.body as { songs?: DetailSong[]; privileges?: NeteasePrivilegeLike[] };
+  const songs = (body.songs ?? []) as DetailSong[];
+  const privilegeMap = new Map((body.privileges ?? []).map((privilege) => [String((privilege as { id?: number | string }).id), privilege]));
+  songs.forEach((song) => {
+    song.privilege = privilegeMap.get(String(song.id)) ?? song.privilege;
+  });
   return new Map(songs.map((song) => [String(song.id), song]));
 }
 
@@ -168,6 +186,7 @@ async function searchNeteaseSongs(query: string): Promise<Song[]> {
       duration: formatDuration(song.dt ?? song.duration),
       quality: getQualityLabel(detailSong ?? song),
       availableQualities: getAvailableQualities(detailSong ?? song),
+      availability: getNeteaseSongAvailability(detailSong ?? song),
       source: "netease"
     };
   });

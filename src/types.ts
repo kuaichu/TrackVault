@@ -12,6 +12,20 @@ export type DownloadQualityOption = {
   label: string;
 };
 
+export type SongAvailabilityState = "available" | "vip" | "copyright" | "restricted";
+
+export type SongCapability = {
+  status: SongAvailabilityState;
+  locked: boolean;
+  label: string;
+  reason: string;
+};
+
+export type SongAvailability = {
+  playback: SongCapability;
+  download: SongCapability;
+};
+
 export type SongArtist = {
   id?: string;
   name: string;
@@ -31,6 +45,7 @@ export type Song = {
   duration: string;
   quality: string;
   availableQualities: DownloadQualityOption[];
+  availability?: SongAvailability;
   source: string;
 };
 

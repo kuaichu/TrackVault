@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { getSettings } from "./settings-store.js";
 import type { DownloadQualityOption, Song } from "./types.js";
+import { getNeteaseSongAvailability, type NeteasePrivilegeLike } from "./song-availability.js";
 
 const require = createRequire(import.meta.url);
 const { recommend_songs } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
@@ -21,11 +22,18 @@ type RecommendSong = {
   h?: unknown | null;
   sq?: unknown | null;
   hr?: unknown | null;
+  fee?: number;
+  st?: number;
+  cp?: number;
+  copyright?: number;
+  noCopyrightRcmd?: unknown | null;
+  privilege?: NeteasePrivilegeLike | null;
 };
 
 type RecommendBody = {
   data?: {
     dailySongs?: RecommendSong[];
+    privileges?: NeteasePrivilegeLike[];
   };
 };
 
@@ -109,6 +117,7 @@ function mapRecommendSong(song: RecommendSong): Song {
     duration: formatDuration(song.dt),
     quality: getQualityLabel(song),
     availableQualities: getAvailableQualities(song),
+    availability: getNeteaseSongAvailability(song),
     source: "netease-daily"
   };
 }
@@ -118,5 +127,10 @@ export async function getDailyRecommendSongs(): Promise<Song[]> {
   const response = await recommend_songs({ cookie });
   const body = response.body as RecommendBody;
 
-  return (body.data?.dailySongs ?? []).map(mapRecommendSong);
+  const privilegeMap = new Map((body.data?.privileges ?? []).map((privilege) => [String((privilege as { id?: number | string }).id), privilege]));
+
+  return (body.data?.dailySongs ?? []).map((song) => mapRecommendSong({
+    ...song,
+    privilege: privilegeMap.get(String(song.id)) ?? song.privilege
+  }));
 }

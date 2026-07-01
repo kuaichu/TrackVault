@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { getSettings } from "./settings-store.js";
 import type { DownloadQualityOption, Song } from "./types.js";
+import { getNeteaseSongAvailability, type NeteasePrivilegeLike } from "./song-availability.js";
 
 const require = createRequire(import.meta.url);
 const { personalized_newsong } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
@@ -26,6 +27,12 @@ type PersonalizedNewSongItem = {
     hMusic?: unknown | null;
     sqMusic?: unknown | null;
     hrMusic?: unknown | null;
+    fee?: number;
+    st?: number;
+    cp?: number;
+    copyright?: number;
+    noCopyrightRcmd?: unknown | null;
+    privilege?: NeteasePrivilegeLike | null;
   };
 };
 
@@ -108,6 +115,7 @@ function mapDiscoverSong(item: PersonalizedNewSongItem): Song | null {
     duration: formatDuration(song.duration),
     quality: getQualityLabel(song),
     availableQualities: getAvailableQualities(song),
+    availability: getNeteaseSongAvailability(song),
     source: "netease-discover"
   };
 }

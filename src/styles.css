@@ -3033,6 +3033,46 @@ input[type="range"] {
   margin-top: 4px;
 }
 
+.song-availability-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.song-availability-badge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.song-availability-badge.vip {
+  color: #ffd89a;
+  background: rgba(255, 180, 93, 0.12);
+  border-color: rgba(255, 180, 93, 0.24);
+}
+
+.song-availability-badge.blocked {
+  color: #ffb7bd;
+  background: rgba(255, 105, 117, 0.12);
+  border-color: rgba(255, 105, 117, 0.24);
+}
+
+.song-availability-badge.warn {
+  color: #f7c98d;
+  background: rgba(247, 201, 141, 0.1);
+  border-color: rgba(247, 201, 141, 0.2);
+}
+
 .result-meta .artist-link-button,
 .result-meta .album-link-button {
   min-width: 0;
@@ -11077,6 +11117,72 @@ body {
   line-height: 1.45;
 }
 
+.song-detail-availability {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.song-detail-availability-card {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 13px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.song-detail-availability-card span {
+  width: max-content;
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: rgba(222, 233, 248, 0.78);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.song-detail-availability-card strong {
+  color: var(--text-primary);
+  font-size: 0.96rem;
+}
+
+.song-detail-availability-card small {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.song-detail-availability-card.vip {
+  border-color: rgba(255, 180, 93, 0.22);
+  background:
+    linear-gradient(180deg, rgba(255, 180, 93, 0.1), rgba(255, 180, 93, 0.02)),
+    rgba(255, 255, 255, 0.04);
+}
+
+.song-detail-availability-card.vip span {
+  color: #ffd89a;
+  background: rgba(255, 180, 93, 0.13);
+}
+
+.song-detail-availability-card.copyright {
+  border-color: rgba(255, 105, 117, 0.24);
+  background:
+    linear-gradient(180deg, rgba(255, 105, 117, 0.11), rgba(255, 105, 117, 0.02)),
+    rgba(255, 255, 255, 0.04);
+}
+
+.song-detail-availability-card.copyright span {
+  color: #ffb7bd;
+  background: rgba(255, 105, 117, 0.13);
+}
+
+.song-detail-availability-card.restricted {
+  border-color: rgba(247, 201, 141, 0.2);
+}
+
 .song-detail-quality-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -11493,6 +11599,10 @@ body {
   }
 
   .song-detail-quality-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .song-detail-availability {
     grid-template-columns: 1fr;
   }
 

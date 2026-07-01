@@ -1351,6 +1351,58 @@ export default function App() {
     return `${getSongProviderLabel(song)} · ${song.quality}`;
   }
 
+  function getSongAvailabilityBadges(song: Song) {
+    const badges: Array<{ key: string; label: string; tone: "vip" | "blocked" | "warn" }> = [];
+    const playback = song.availability?.playback;
+    const download = song.availability?.download;
+
+    if (playback?.status === "copyright") {
+      badges.push({ key: "copyright", label: "无版权", tone: "blocked" });
+    } else if (playback?.status === "vip") {
+      badges.push({ key: "vip-playback", label: playback.locked ? "VIP试听" : "VIP", tone: "vip" });
+    }
+
+    if (download?.status === "vip" && !badges.some((badge) => badge.key.startsWith("vip"))) {
+      badges.push({ key: "vip-download", label: "VIP下载", tone: "vip" });
+    } else if (download?.status === "restricted") {
+      badges.push({ key: "download-restricted", label: "下载受限", tone: "warn" });
+    }
+
+    return badges;
+  }
+
+  function isSongPlaybackLocked(song: Song) {
+    return Boolean(song.availability?.playback.locked);
+  }
+
+  function isSongDownloadLocked(song: Song) {
+    return Boolean(song.availability?.download.locked);
+  }
+
+  function getSongPlaybackBlockedText(song: Song) {
+    return song.availability?.playback.reason ?? "当前歌曲暂不可播放。";
+  }
+
+  function getSongDownloadBlockedText(song: Song) {
+    return song.availability?.download.reason ?? "当前歌曲暂不可下载。";
+  }
+
+  function renderSongAvailabilityBadges(song: Song) {
+    const badges = getSongAvailabilityBadges(song);
+
+    if (badges.length === 0) {
+      return null;
+    }
+
+    return (
+      <span className="song-availability-badges">
+        {badges.map((badge) => (
+          <em key={badge.key} className={`song-availability-badge ${badge.tone}`}>{badge.label}</em>
+        ))}
+      </span>
+    );
+  }
+
   function getProbeStatusText(probe: SongAudioProbe | null, fallbackLabel: string) {
     if (!probe) {
       return `待检测 · 将请求 ${fallbackLabel}`;
@@ -2729,6 +2781,13 @@ export default function App() {
       return;
     }
 
+    if (isSongPlaybackLocked(song)) {
+      const blockedText = getSongPlaybackBlockedText(song);
+      setPlayerError(blockedText);
+      setMessage(blockedText);
+      return;
+    }
+
     syncAudioForSong(song, true);
   }
 
@@ -3214,6 +3273,29 @@ export default function App() {
     return messageText.includes("低于你选择") || messageText.includes("实际文件是");
   }
 
+  function getDownloadIssueTitle(issue: DownloadIssueDialog) {
+    const downloadStatus = issue.song.availability?.download.status;
+
+    if (downloadStatus === "vip") {
+      return "需要黑胶 VIP";
+    }
+
+    if (downloadStatus === "copyright") {
+      return "暂无下载版权";
+    }
+
+    if (downloadStatus === "restricted") {
+      return "下载权限需校验";
+    }
+
+    return isDowngradedQualityError(issue.message) ? "当前音质不可用" : "下载失败";
+  }
+
+  function getDownloadIssueEyebrow(issue: DownloadIssueDialog) {
+    const downloadStatus = issue.song.availability?.download.status;
+    return downloadStatus === "vip" || downloadStatus === "copyright" || downloadStatus === "restricted" ? "Availability" : "Download Quality";
+  }
+
   async function runDirectDownload(song: Song, level: DownloadQualityLevel, options: { showIssueDialog?: boolean } = {}) {
     if (directDownloadingSongId || batchDownloading) {
       return;
@@ -3262,6 +3344,18 @@ export default function App() {
     if (!accountIsLoggedIn) {
       setMessage("下载需要先登录账号，已为你打开登录窗口。");
       await handleStartQrLogin();
+      return;
+    }
+
+    if (isSongDownloadLocked(song)) {
+      const blockedText = getSongDownloadBlockedText(song);
+      setDownloadIssue({
+        song,
+        message: blockedText,
+        attemptedLevel: getSelectedLevel(song),
+        attemptedLabel: getSelectedLabel(song)
+      });
+      setMessage(blockedText);
       return;
     }
 
@@ -3319,6 +3413,12 @@ export default function App() {
 
     try {
       for (const song of songs) {
+        if (isSongDownloadLocked(song)) {
+          failedCount += 1;
+          firstFailureMessage ||= `${song.title}：${getSongDownloadBlockedText(song)}`;
+          continue;
+        }
+
         try {
           setMessage(`正在直连下载 ${successCount + failedCount + 1}/${songs.length}：${song.title}`);
           await startDirectSongDownload(song, getDownloadLevel(song), (progress) => {
@@ -3822,6 +3922,13 @@ export default function App() {
       return;
     }
 
+    if (isSongPlaybackLocked(currentTrack)) {
+      const blockedText = getSongPlaybackBlockedText(currentTrack);
+      setPlayerError(blockedText);
+      setMessage(blockedText);
+      return;
+    }
+
     const nextUrl = getStreamUrl(currentTrack, getPlaybackLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
     const hasSource = audio.dataset.streamUrl === nextUrl;
 
@@ -4022,18 +4129,20 @@ export default function App() {
   }
 
   function getNextSongFromQueue(queue: Song[], options: { excludeSongId?: string; mode?: PlaybackMode } = {}) {
-    if (queue.length === 0) {
+    const playableQueue = queue.filter((song) => !isSongPlaybackLocked(song));
+
+    if (playableQueue.length === 0) {
       return null;
     }
 
     if (options.mode === "shuffle" || options.mode === "heartbeat") {
-      const candidates = options.excludeSongId ? queue.filter((song) => song.id !== options.excludeSongId) : queue;
-      const nextPool = candidates.length > 0 ? candidates : queue;
+      const candidates = options.excludeSongId ? playableQueue.filter((song) => song.id !== options.excludeSongId) : playableQueue;
+      const nextPool = candidates.length > 0 ? candidates : playableQueue;
       return nextPool[Math.floor(Math.random() * nextPool.length)] ?? null;
     }
 
-    const currentIndex = queue.findIndex((song) => song.id === options.excludeSongId);
-    return currentIndex >= 0 && currentIndex < queue.length - 1 ? queue[currentIndex + 1] : queue[0];
+    const currentIndex = playableQueue.findIndex((song) => song.id === options.excludeSongId);
+    return currentIndex >= 0 && currentIndex < playableQueue.length - 1 ? playableQueue[currentIndex + 1] : playableQueue[0];
   }
 
   function getHeartbeatPlaylistId() {
@@ -4109,6 +4218,8 @@ export default function App() {
     const nextSong = await resolveNextPlaybackSong(queue);
     if (nextSong && !playbackLocked) {
       syncAudioForSong(nextSong, true);
+    } else if (!nextSong) {
+      setMessage("队列里的歌曲都需要会员或暂无版权，暂时没有可播放的下一首。");
     }
   }
 
@@ -6067,7 +6178,7 @@ export default function App() {
               <PlayerIcon name={playbackModeButtonMeta.icon} />
             </button>
             <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后上一首" : "上一首"} title={playbackLocked ? "登录后播放" : "上一首"} disabled={playbackLocked || !currentTrack} onClick={handleReplay}><PlayerIcon name="previous" /></button>
-            <button type="button" className={[playbackLocked ? "dock-icon primary locked-playback-button" : "dock-icon primary", isPlaying ? "is-playing" : "is-paused"].join(" ")} onClick={handleTogglePlayback} disabled={playbackLocked || (!currentTrack && !hasPlaybackQueue)} aria-label={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"} title={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"}>{playbackLocked ? <LockIcon /> : <PlayerIcon name={isPlaying ? "pause" : "play"} />}</button>
+            <button type="button" className={[playbackLocked || Boolean(currentTrack && isSongPlaybackLocked(currentTrack)) ? "dock-icon primary locked-playback-button" : "dock-icon primary", isPlaying ? "is-playing" : "is-paused"].join(" ")} onClick={handleTogglePlayback} disabled={playbackLocked || Boolean(currentTrack && isSongPlaybackLocked(currentTrack)) || (!currentTrack && !hasPlaybackQueue)} aria-label={playbackLocked ? "登录后播放" : currentTrack && isSongPlaybackLocked(currentTrack) ? "当前歌曲暂不可播放" : isPlaying ? "暂停" : "播放"} title={playbackLocked ? "登录后播放" : currentTrack && isSongPlaybackLocked(currentTrack) ? getSongPlaybackBlockedText(currentTrack) : isPlaying ? "暂停" : "播放"}>{playbackLocked || currentTrack && isSongPlaybackLocked(currentTrack) ? <LockIcon /> : <PlayerIcon name={isPlaying ? "pause" : "play"} />}</button>
             <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后下一首" : "下一首"} title={playbackLocked ? "登录后播放" : "下一首"} disabled={playbackLocked || !hasPlaybackQueue} onClick={handleNextTrack}><PlayerIcon name="next" /></button>
           </div>
 
@@ -6091,14 +6202,14 @@ export default function App() {
         <div className="dock-volume player-bar-tools">
           <button
             type="button"
-            className={!hasNeteaseDownloadAuth ? "dock-queue-button player-download-button locked-download-button" : "dock-queue-button player-download-button"}
+            className={!hasNeteaseDownloadAuth || Boolean(currentTrack && isSongDownloadLocked(currentTrack)) ? "dock-queue-button player-download-button locked-download-button" : "dock-queue-button player-download-button"}
             onClick={() => currentTrack ? void handleDownload(currentTrack) : undefined}
-            aria-label={!hasNeteaseDownloadAuth ? "登录后下载当前歌曲" : currentTrack ? `下载 ${currentTrack.title}` : "下载当前歌曲"}
-            title={!hasNeteaseDownloadAuth ? "登录后下载" : directDownloadingSongId === currentTrack?.id ? "正在下载" : "下载当前歌曲"}
-            disabled={!currentTrack || Boolean(directDownloadingSongId || batchDownloading)}
+            aria-label={!hasNeteaseDownloadAuth ? "登录后下载当前歌曲" : currentTrack && isSongDownloadLocked(currentTrack) ? "当前歌曲暂不可下载" : currentTrack ? `下载 ${currentTrack.title}` : "下载当前歌曲"}
+            title={!hasNeteaseDownloadAuth ? "登录后下载" : currentTrack && isSongDownloadLocked(currentTrack) ? getSongDownloadBlockedText(currentTrack) : directDownloadingSongId === currentTrack?.id ? "正在下载" : "下载当前歌曲"}
+            disabled={!currentTrack || Boolean(directDownloadingSongId || batchDownloading || currentTrack && isSongDownloadLocked(currentTrack))}
           >
             <DownloadIcon />
-            {!hasNeteaseDownloadAuth ? <span className="download-lock-badge"><LockIcon /></span> : null}
+            {!hasNeteaseDownloadAuth || currentTrack && isSongDownloadLocked(currentTrack) ? <span className="download-lock-badge"><LockIcon /></span> : null}
           </button>
           <button type="button" className="dock-queue-button" onClick={() => setIsPlayerExpanded(true)} aria-label="打开全屏播放器"><PlayerIcon name="queue" /></button>
           {currentTrack ? (
@@ -7347,6 +7458,7 @@ export default function App() {
                       <div className="result-copy">
                         <strong>{song.title}</strong>
                         <span>{getSongQualityLine(song)}</span>
+                        {renderSongAvailabilityBadges(song)}
                       </div>
                     </div>
 
@@ -7369,14 +7481,14 @@ export default function App() {
                       </button>
                       <button
                         type="button"
-                        className={playbackLocked ? "row-icon-button locked-playback-button" : "row-icon-button"}
-                        aria-label={playbackLocked ? `登录后试听 ${song.title}` : `试听 ${song.title}`}
-                        title={playbackLocked ? "登录后试听" : "试听"}
-                        disabled={playbackLocked}
+                        className={playbackLocked || isSongPlaybackLocked(song) ? "row-icon-button locked-playback-button" : "row-icon-button"}
+                        aria-label={playbackLocked ? `登录后试听 ${song.title}` : isSongPlaybackLocked(song) ? `${song.title} 暂不可播放` : `试听 ${song.title}`}
+                        title={playbackLocked ? "登录后试听" : isSongPlaybackLocked(song) ? getSongPlaybackBlockedText(song) : "试听"}
+                        disabled={playbackLocked || isSongPlaybackLocked(song)}
                         onClick={(event) => { event.stopPropagation(); handlePreview(song); }}
                       >
                         <PreviewIcon />
-                        {playbackLocked ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                        {playbackLocked || isSongPlaybackLocked(song) ? <span className="download-lock-badge"><LockIcon /></span> : null}
                       </button>
                       {!isQqDataMode ? (
                         <button
@@ -7393,14 +7505,14 @@ export default function App() {
                       ) : null}
                       <button
                         type="button"
-                        className={!hasNeteaseDownloadAuth ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
-                        aria-label={!hasNeteaseDownloadAuth ? `登录后下载 ${song.title}` : directDownloadingSongId === song.id ? `正在下载 ${song.title}` : `下载 ${song.title}`}
-                        title={!hasNeteaseDownloadAuth ? "登录后下载" : directDownloadingSongId === song.id ? "正在下载" : "下载"}
-                        disabled={Boolean(directDownloadingSongId || batchDownloading)}
+                        className={!hasNeteaseDownloadAuth || isSongDownloadLocked(song) ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
+                        aria-label={!hasNeteaseDownloadAuth ? `登录后下载 ${song.title}` : isSongDownloadLocked(song) ? `${song.title} 暂不可下载` : directDownloadingSongId === song.id ? `正在下载 ${song.title}` : `下载 ${song.title}`}
+                        title={!hasNeteaseDownloadAuth ? "登录后下载" : isSongDownloadLocked(song) ? getSongDownloadBlockedText(song) : directDownloadingSongId === song.id ? "正在下载" : "下载"}
+                        disabled={Boolean(directDownloadingSongId || batchDownloading || isSongDownloadLocked(song))}
                         onClick={(event) => { event.stopPropagation(); void handleDownload(song); }}
                       >
                         <DownloadIcon />
-                        {!hasNeteaseDownloadAuth ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                        {!hasNeteaseDownloadAuth || isSongDownloadLocked(song) ? <span className="download-lock-badge"><LockIcon /></span> : null}
                       </button>
                     </div>
                   </article>
@@ -7650,6 +7762,7 @@ export default function App() {
                         <div className="result-copy">
                           <strong>{song.title}</strong>
                           <span>{getSongQualityLine(song)}</span>
+                          {renderSongAvailabilityBadges(song)}
                         </div>
                       </div>
 
@@ -7674,14 +7787,14 @@ export default function App() {
                         </button>
                         <button
                           type="button"
-                          className={playbackLocked ? "row-icon-button locked-playback-button" : "row-icon-button"}
-                          aria-label={playbackLocked ? `登录后试听 ${song.title}` : `试听 ${song.title}`}
-                          title={playbackLocked ? "登录后试听" : "试听"}
-                          disabled={playbackLocked}
+                          className={playbackLocked || isSongPlaybackLocked(song) ? "row-icon-button locked-playback-button" : "row-icon-button"}
+                          aria-label={playbackLocked ? `登录后试听 ${song.title}` : isSongPlaybackLocked(song) ? `${song.title} 暂不可播放` : `试听 ${song.title}`}
+                          title={playbackLocked ? "登录后试听" : isSongPlaybackLocked(song) ? getSongPlaybackBlockedText(song) : "试听"}
+                          disabled={playbackLocked || isSongPlaybackLocked(song)}
                           onClick={() => handlePreview(song)}
                         >
                           <PreviewIcon />
-                          {playbackLocked ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                          {playbackLocked || isSongPlaybackLocked(song) ? <span className="download-lock-badge"><LockIcon /></span> : null}
                         </button>
                         {!isQqDataMode ? (
                           <button
@@ -7698,14 +7811,14 @@ export default function App() {
                         ) : null}
                         <button
                           type="button"
-                          className={!hasNeteaseDownloadAuth ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
-                          aria-label={!hasNeteaseDownloadAuth ? `登录后下载 ${song.title}` : directDownloadingSongId === song.id ? `正在下载 ${song.title}` : `下载 ${song.title}`}
-                          title={!hasNeteaseDownloadAuth ? "登录后下载" : directDownloadingSongId === song.id ? "正在下载" : "下载"}
-                          disabled={Boolean(directDownloadingSongId || batchDownloading)}
+                          className={!hasNeteaseDownloadAuth || isSongDownloadLocked(song) ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
+                          aria-label={!hasNeteaseDownloadAuth ? `登录后下载 ${song.title}` : isSongDownloadLocked(song) ? `${song.title} 暂不可下载` : directDownloadingSongId === song.id ? `正在下载 ${song.title}` : `下载 ${song.title}`}
+                          title={!hasNeteaseDownloadAuth ? "登录后下载" : isSongDownloadLocked(song) ? getSongDownloadBlockedText(song) : directDownloadingSongId === song.id ? "正在下载" : "下载"}
+                          disabled={Boolean(directDownloadingSongId || batchDownloading || isSongDownloadLocked(song))}
                           onClick={() => void handleDownload(song)}
                         >
                           <DownloadIcon />
-                          {!hasNeteaseDownloadAuth ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                          {!hasNeteaseDownloadAuth || isSongDownloadLocked(song) ? <span className="download-lock-badge"><LockIcon /></span> : null}
                         </button>
                       </div>
                     </article>
@@ -8432,12 +8545,13 @@ export default function App() {
                 <div className="song-detail-actions" aria-label="歌曲操作">
                   <button
                     type="button"
-                    className="row-icon-button"
-                    disabled={playbackLocked}
-                    title={playbackLocked ? "登录后试听" : "试听"}
+                    className={playbackLocked || isSongPlaybackLocked(detailSong) ? "row-icon-button locked-playback-button" : "row-icon-button"}
+                    disabled={playbackLocked || isSongPlaybackLocked(detailSong)}
+                    title={playbackLocked ? "登录后试听" : isSongPlaybackLocked(detailSong) ? getSongPlaybackBlockedText(detailSong) : "试听"}
                     onClick={() => handlePreview(detailSong)}
                   >
                     <PreviewIcon />
+                    {playbackLocked || isSongPlaybackLocked(detailSong) ? <span className="download-lock-badge"><LockIcon /></span> : null}
                   </button>
                   <button
                     type="button"
@@ -8464,15 +8578,16 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    className="row-icon-button accent"
-                    disabled={Boolean(directDownloadingSongId || batchDownloading)}
-                    title={hasNeteaseDownloadAuth ? "下载" : "登录后下载"}
+                    className={!hasNeteaseDownloadAuth || isSongDownloadLocked(detailSong) ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
+                    disabled={Boolean(directDownloadingSongId || batchDownloading || isSongDownloadLocked(detailSong))}
+                    title={hasNeteaseDownloadAuth ? isSongDownloadLocked(detailSong) ? getSongDownloadBlockedText(detailSong) : "下载" : "登录后下载"}
                     onClick={() => {
                       closeSongDetail();
                       void handleDownload(detailSong);
                     }}
                   >
                     <DownloadIcon />
+                    {!hasNeteaseDownloadAuth || isSongDownloadLocked(detailSong) ? <span className="download-lock-badge"><LockIcon /></span> : null}
                   </button>
                   <button
                     type="button"
@@ -8491,6 +8606,21 @@ export default function App() {
                     <p>{sourceMeta.detail}</p>
                   </div>
                 </section>
+
+                {detailSong.availability ? (
+                  <section className="song-detail-availability" aria-label="版权与会员状态">
+                    <article className={`song-detail-availability-card ${detailSong.availability.playback.status}`}>
+                      <span>{detailSong.availability.playback.label}</span>
+                      <strong>{detailSong.availability.playback.locked ? "播放已锁定" : "播放可用"}</strong>
+                      <small>{detailSong.availability.playback.reason}</small>
+                    </article>
+                    <article className={`song-detail-availability-card ${detailSong.availability.download.status}`}>
+                      <span>{detailSong.availability.download.label}</span>
+                      <strong>{detailSong.availability.download.locked ? "下载已锁定" : "下载需校验"}</strong>
+                      <small>{detailSong.availability.download.reason}</small>
+                    </article>
+                  </section>
+                ) : null}
 
                 <section className="song-detail-quality-grid" aria-label="音源与音质">
                   <article className="song-detail-quality-card">
@@ -8800,12 +8930,12 @@ export default function App() {
       ) : null}
 
       {downloadIssue ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="下载音质不可用" onClick={() => setDownloadIssue(null)}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={getDownloadIssueTitle(downloadIssue)} onClick={() => setDownloadIssue(null)}>
           <section className="download-issue-card" onClick={(event) => event.stopPropagation()}>
             <header>
               <div>
-                <p className="eyebrow">Download Quality</p>
-                <h2>当前音质不可用</h2>
+                <p className="eyebrow">{getDownloadIssueEyebrow(downloadIssue)}</p>
+                <h2>{getDownloadIssueTitle(downloadIssue)}</h2>
               </div>
               <button type="button" className="modal-close" onClick={() => setDownloadIssue(null)} aria-label="关闭下载提示">
                 ×
@@ -8938,7 +9068,7 @@ export default function App() {
             <strong>{songContextMenu.song.title}</strong>
             <span>{songContextMenu.song.artist}</span>
           </div>
-          <button type="button" role="menuitem" disabled={playbackLocked} onClick={() => runSongContextAction(() => handlePreview(songContextMenu.song))}>
+          <button type="button" role="menuitem" disabled={playbackLocked || isSongPlaybackLocked(songContextMenu.song)} title={isSongPlaybackLocked(songContextMenu.song) ? getSongPlaybackBlockedText(songContextMenu.song) : undefined} onClick={() => runSongContextAction(() => handlePreview(songContextMenu.song))}>
             <span className="song-context-icon"><PlayerIcon name="play" /></span>
             播放
           </button>
@@ -8959,7 +9089,7 @@ export default function App() {
             <span className="song-context-icon"><PlaylistAddIcon /></span>
             收藏到歌单
           </button>
-          <button type="button" role="menuitem" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => runSongContextAction(() => handleDownload(songContextMenu.song))}>
+          <button type="button" role="menuitem" disabled={Boolean(directDownloadingSongId || batchDownloading || isSongDownloadLocked(songContextMenu.song))} title={isSongDownloadLocked(songContextMenu.song) ? getSongDownloadBlockedText(songContextMenu.song) : undefined} onClick={() => runSongContextAction(() => handleDownload(songContextMenu.song))}>
             <span className="song-context-icon"><DownloadIcon /></span>
             下载
           </button>

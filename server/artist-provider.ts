@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import type { SearchType } from "NeteaseCloudMusicApi";
 import { getSettings } from "./settings-store.js";
 import type { ArtistProfile, DownloadQualityOption, Song } from "./types.js";
+import { getNeteaseSongAvailability, type NeteasePrivilegeLike } from "./song-availability.js";
 
 const require = createRequire(import.meta.url);
 const { artist_desc, artist_detail, artist_top_song, artists, search } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
@@ -18,6 +19,7 @@ type ArtistInfoBody = {
     briefDesc?: string;
   };
   hotSongs?: ArtistSong[];
+  privileges?: NeteasePrivilegeLike[];
 };
 
 type ArtistDetailBody = {
@@ -56,6 +58,12 @@ type ArtistSong = {
   h?: unknown | null;
   sq?: unknown | null;
   hr?: unknown | null;
+  fee?: number;
+  st?: number;
+  cp?: number;
+  copyright?: number;
+  noCopyrightRcmd?: unknown | null;
+  privilege?: NeteasePrivilegeLike | null;
 };
 
 type ArtistSearchBody = {
@@ -141,6 +149,7 @@ function mapArtistSong(song: ArtistSong): Song | null {
     duration: formatDuration(song.dt),
     quality: getQualityLabel(song),
     availableQualities: getAvailableQualities(song),
+    availability: getNeteaseSongAvailability(song),
     source: "netease-artist"
   };
 }
@@ -193,7 +202,8 @@ export async function getArtistProfile(artistId: string): Promise<ArtistProfile>
   const artistDescBody = artistDescResponse.body as ArtistDescBody;
   const artist = artistInfoBody.artist;
   const detailArtist = artistDetailBody.data?.artist;
-  const topSongsBody = artistTopSongsResponse.body as { songs?: ArtistSong[] };
+  const topSongsBody = artistTopSongsResponse.body as { songs?: ArtistSong[]; privileges?: NeteasePrivilegeLike[] };
+  const privilegeMap = new Map((topSongsBody.privileges ?? []).map((privilege) => [String((privilege as { id?: number | string }).id), privilege]));
   const description =
     artistDescBody.briefDesc?.trim() ||
     artistDescBody.introduction?.map((item) => item.txt?.trim()).filter(Boolean).join("\n\n") ||
@@ -214,6 +224,12 @@ export async function getArtistProfile(artistId: string): Promise<ArtistProfile>
     musicCount: detailArtist?.musicSize ?? artist.musicSize ?? 0,
     albumCount: detailArtist?.albumSize ?? artist.albumSize ?? 0,
     mvCount: detailArtist?.mvSize ?? artist.mvSize ?? 0,
-    topSongs: (topSongsBody.songs ?? []).map(mapArtistSong).filter((song): song is Song => Boolean(song))
+    topSongs: (topSongsBody.songs ?? [])
+      .map((song) => ({
+        ...song,
+        privilege: privilegeMap.get(String(song.id)) ?? song.privilege
+      }))
+      .map(mapArtistSong)
+      .filter((song): song is Song => Boolean(song))
   };
 }

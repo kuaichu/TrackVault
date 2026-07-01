@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import type { SearchType } from "NeteaseCloudMusicApi";
 import { getSettings } from "./settings-store.js";
 import type { DownloadQualityOption, PlaylistSongsPage, PlaylistTrackRemoveResult, Song, UserPlaylist } from "./types.js";
+import { getNeteaseSongAvailability, type NeteasePrivilegeLike } from "./song-availability.js";
 
 const require = createRequire(import.meta.url);
 const { login_status, playlist_track_all, playlist_tracks, song_detail, user_playlist } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
@@ -54,6 +55,12 @@ type PlaylistTrack = {
   h?: unknown | null;
   sq?: unknown | null;
   hr?: unknown | null;
+  fee?: number;
+  st?: number;
+  cp?: number;
+  copyright?: number;
+  noCopyrightRcmd?: unknown | null;
+  privilege?: NeteasePrivilegeLike | null;
 };
 
 type DetailSong = PlaylistTrack;
@@ -167,7 +174,12 @@ async function getSongDetailMap(songIds: string[], cookie: string) {
       type: 1 as SearchType
     } as any);
 
-    const songs = ((response.body as { songs?: DetailSong[] }).songs ?? []) as DetailSong[];
+    const body = response.body as { songs?: DetailSong[]; privileges?: NeteasePrivilegeLike[] };
+    const songs = (body.songs ?? []) as DetailSong[];
+    const privilegeMap = new Map((body.privileges ?? []).map((privilege) => [String((privilege as { id?: number | string }).id), privilege]));
+    songs.forEach((song) => {
+      song.privilege = privilegeMap.get(String(song.id)) ?? song.privilege;
+    });
     for (const song of songs) {
       detailMap.set(String(song.id), song);
     }
@@ -215,6 +227,7 @@ function mapTrackToSong(track: PlaylistTrack, detailMap: Map<string, DetailSong>
     duration: formatDuration(track.dt),
     quality: getQualityLabel(detail),
     availableQualities: getAvailableQualities(detail),
+    availability: getNeteaseSongAvailability(detail),
     source: "netease"
   } satisfies Song;
 }

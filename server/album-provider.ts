@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { getSettings } from "./settings-store.js";
 import type { AlbumProfile, DownloadQualityOption, Song } from "./types.js";
+import { getNeteaseSongAvailability, type NeteasePrivilegeLike } from "./song-availability.js";
 
 const require = createRequire(import.meta.url);
 const { album, album_detail_dynamic } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
@@ -23,11 +24,18 @@ type AlbumSong = {
   h?: unknown | null;
   sq?: unknown | null;
   hr?: unknown | null;
+  fee?: number;
+  st?: number;
+  cp?: number;
+  copyright?: number;
+  noCopyrightRcmd?: unknown | null;
+  privilege?: NeteasePrivilegeLike | null;
 };
 
 type AlbumBody = {
   code?: number;
   songs?: AlbumSong[];
+  privileges?: NeteasePrivilegeLike[];
   album?: {
     id?: number;
     name?: string;
@@ -121,6 +129,7 @@ function mapAlbumSong(song: AlbumSong): Song | null {
     duration: formatDuration(song.dt),
     quality: getQualityLabel(song),
     availableQualities: getAvailableQualities(song),
+    availability: getNeteaseSongAvailability(song),
     source: "netease-album"
   };
 }
@@ -153,7 +162,14 @@ export async function getAlbumProfile(albumId: string): Promise<AlbumProfile> {
     throw new Error("未找到该专辑信息。");
   }
 
-  const songs = (body.songs ?? []).map(mapAlbumSong).filter((song): song is Song => Boolean(song));
+  const privilegeMap = new Map((body.privileges ?? []).map((privilege) => [String((privilege as { id?: number | string }).id), privilege]));
+  const songs = (body.songs ?? [])
+    .map((song) => ({
+      ...song,
+      privilege: privilegeMap.get(String(song.id)) ?? song.privilege
+    }))
+    .map(mapAlbumSong)
+    .filter((song): song is Song => Boolean(song));
   const dynamic = dynamicResponse.body as AlbumDynamicBody;
 
   return {
