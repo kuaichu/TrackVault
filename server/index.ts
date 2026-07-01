@@ -52,7 +52,18 @@ app.use((request, response, next) => {
   const querySessionId = typeof request.query.sid === "string" ? request.query.sid : "";
   runWithRequestContext(headerSessionId || querySessionId, next);
 });
-app.use(express.static(clientDistDir));
+app.use(express.static(clientDistDir, {
+  setHeaders(response, filePath) {
+    if (filePath.endsWith(".html")) {
+      response.setHeader("Cache-Control", "no-store");
+      return;
+    }
+
+    if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+      response.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
+    }
+  }
+}));
 
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true });
