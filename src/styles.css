@@ -10223,6 +10223,61 @@ body {
   color: #22140b;
 }
 
+.player-bar .dock-icon.primary,
+.player-bar-modal .dock-icon.primary {
+  transition:
+    background 260ms ease,
+    border-color 260ms ease,
+    box-shadow 260ms ease,
+    color 260ms ease,
+    transform 180ms ease;
+}
+
+.player-bar .dock-icon.primary .player-svg,
+.player-bar-modal .dock-icon.primary .player-svg {
+  transition: opacity 180ms ease, transform 180ms ease;
+  animation: playback-icon-fade 180ms ease;
+}
+
+.player-bar .dock-icon.primary.is-playing,
+.player-bar-modal .dock-icon.primary.is-playing {
+  transform: translateY(-1px);
+}
+
+.player-bar.player-dock .dock-icon.primary.is-playing {
+  border-color: rgba(255, 205, 113, 0.72);
+  background:
+    radial-gradient(circle at 35% 24%, rgba(255, 255, 255, 0.56), transparent 31%),
+    linear-gradient(135deg, #ffc15f 0%, #ffe08a 100%);
+  box-shadow:
+    0 12px 28px rgba(255, 188, 94, 0.3),
+    0 0 0 6px rgba(255, 180, 93, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.56);
+}
+
+.player-bar-modal .dock-icon.primary.is-playing {
+  border-color: rgba(var(--player-theme-accent), 0.78);
+  background:
+    radial-gradient(circle at 35% 24%, rgba(255, 255, 255, 0.6), transparent 31%),
+    linear-gradient(135deg, rgb(var(--player-theme-accent)), rgba(var(--player-theme-glow), 0.98));
+  box-shadow:
+    0 12px 28px rgba(var(--player-theme-glow), 0.3),
+    0 0 0 6px rgba(var(--player-theme-glow), 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.58);
+}
+
+@keyframes playback-icon-fade {
+  from {
+    opacity: 0.35;
+    transform: scale(0.82);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .player-bar.player-dock .dock-icon.mode-active {
   border-color: rgba(255, 180, 93, 0.34);
   background: rgba(255, 180, 93, 0.15);

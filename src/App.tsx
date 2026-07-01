@@ -482,6 +482,14 @@ function loadSearchHistory() {
   }
 }
 
+function isEditableKeyboardTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return Boolean(target.closest("input, textarea, select, button, a, [contenteditable='true'], [role='textbox'], [role='tab'], [role='menuitem']"));
+}
+
 function getDiscoverCacheKey(providerMode: ActiveProviderMode) {
   return `${DISCOVER_CACHE_STORAGE_KEY}:${providerMode}`;
 }
@@ -1542,12 +1550,15 @@ export default function App() {
       }));
   }
 
-  async function runSearch(nextQuery: string) {
+  async function runSearch(nextQuery: string, options: { providerMode?: ActiveProviderMode } = {}) {
     const trimmed = nextQuery.trim();
     if (!trimmed) {
       setResults([]);
       return;
     }
+
+    const targetProviderMode = options.providerMode ?? activeSearchProviderMode;
+    const targetProviderLabel = searchProviderOptions.find((option) => option.value === targetProviderMode)?.label ?? activeSearchProviderLabel;
 
     navigateTopLevel("search");
     setActivePlaylist(null);
@@ -1558,10 +1569,10 @@ export default function App() {
     const requestId = searchRequestIdRef.current + 1;
     searchRequestIdRef.current = requestId;
     setSearching(true);
-    setMessage(`正在通过${activeSearchProviderLabel}搜索 “${trimmed}”`);
+    setMessage(`正在通过${targetProviderLabel}搜索 “${trimmed}”`);
 
     try {
-      const data = await searchSongs(trimmed, activeSearchProviderMode);
+      const data = await searchSongs(trimmed, targetProviderMode);
       if (requestId !== searchRequestIdRef.current) {
         return;
       }
@@ -1572,7 +1583,7 @@ export default function App() {
       setResultSource("search");
       applyQualityDefaults(data);
       setCurrentTrack((current) => current ?? data[0] ?? null);
-      setMessage(`${activeSearchProviderLabel}共找到 ${data.length} 首歌曲`);
+      setMessage(`${targetProviderLabel}共找到 ${data.length} 首歌曲`);
     } catch (error) {
       if (requestId !== searchRequestIdRef.current) {
         return;
@@ -3300,7 +3311,9 @@ export default function App() {
       setPlaylistSongsTotal(0);
       setMessage(`已切换到${accountProviderHints[providerMode]}`);
 
-      if (mainTab === "search" && navKey === "discover") {
+      if (mainTab === "search" && resultSource === "search" && query.trim()) {
+        void runSearch(query, { providerMode });
+      } else if (mainTab === "search" && navKey === "discover") {
         void loadDiscoverSongs({ keepExisting: false, providerMode });
       } else if (mainTab === "search" && navKey === "playlists") {
         setResults([]);
@@ -4956,12 +4969,18 @@ export default function App() {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setIsPlayerExpanded(false);
+        return;
+      }
+
+      if ((event.key === " " || event.code === "Space") && !event.ctrlKey && !event.metaKey && !event.altKey && !isEditableKeyboardTarget(event.target)) {
+        event.preventDefault();
+        handleTogglePlayback();
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [handleTogglePlayback]);
 
   useEffect(() => {
     return () => {
@@ -5854,7 +5873,7 @@ export default function App() {
               <PlayerIcon name={playbackModeButtonMeta.icon} />
             </button>
             <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后上一首" : "上一首"} title={playbackLocked ? "登录后播放" : "上一首"} disabled={playbackLocked || !currentTrack} onClick={handleReplay}><PlayerIcon name="previous" /></button>
-            <button type="button" className={playbackLocked ? "dock-icon primary locked-playback-button" : "dock-icon primary"} onClick={handleTogglePlayback} disabled={playbackLocked || (!currentTrack && !hasPlaybackQueue)} aria-label={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"} title={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"}>{playbackLocked ? <LockIcon /> : <PlayerIcon name={isPlaying ? "pause" : "play"} />}</button>
+            <button type="button" className={[playbackLocked ? "dock-icon primary locked-playback-button" : "dock-icon primary", isPlaying ? "is-playing" : "is-paused"].join(" ")} onClick={handleTogglePlayback} disabled={playbackLocked || (!currentTrack && !hasPlaybackQueue)} aria-label={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"} title={playbackLocked ? "登录后播放" : isPlaying ? "暂停" : "播放"}>{playbackLocked ? <LockIcon /> : <PlayerIcon name={isPlaying ? "pause" : "play"} />}</button>
             <button type="button" className={playbackLocked ? "dock-icon locked-playback-button" : "dock-icon"} aria-label={playbackLocked ? "登录后下一首" : "下一首"} title={playbackLocked ? "登录后播放" : "下一首"} disabled={playbackLocked || !hasPlaybackQueue} onClick={handleNextTrack}><PlayerIcon name="next" /></button>
           </div>
 
