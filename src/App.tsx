@@ -2575,6 +2575,21 @@ export default function App() {
     audioFadeFrameRef.current = window.requestAnimationFrame(step);
   }
 
+  function startAudioFadeIn(audio: HTMLAudioElement) {
+    const targetVolume = getTargetAudioVolume();
+
+    if (targetVolume <= 0) {
+      audio.volume = 0;
+      return;
+    }
+
+    if (audioFadeFrameRef.current !== null) {
+      return;
+    }
+
+    animateAudioVolume(audio, Math.min(audio.volume, targetVolume), getTargetAudioVolume, AUDIO_FADE_IN_MS);
+  }
+
   function playAudioWithFade(audio: HTMLAudioElement, errorMessage: string) {
     cancelAudioFade();
     const playToken = audioFadeTokenRef.current;
@@ -2586,7 +2601,7 @@ export default function App() {
           return;
         }
 
-        animateAudioVolume(audio, 0, getTargetAudioVolume, AUDIO_FADE_IN_MS);
+        startAudioFadeIn(audio);
       })
       .catch(() => {
         if (playToken !== audioFadeTokenRef.current) {
@@ -5167,6 +5182,9 @@ export default function App() {
       playbackSecondsRef.current = nextSeconds;
       setPlaybackSeconds(nextSeconds);
       updateBufferedSeconds();
+      if (!audio.paused && audio.volume <= 0.001) {
+        startAudioFadeIn(audio);
+      }
     };
 
     const handleLoadedMetadata = () => {
@@ -5181,6 +5199,9 @@ export default function App() {
 
     const handleProgress = () => {
       updateBufferedSeconds();
+      if (!audio.paused && audio.volume <= 0.001) {
+        startAudioFadeIn(audio);
+      }
     };
 
     const handleEmptied = () => {
@@ -5190,6 +5211,9 @@ export default function App() {
     const handlePlay = () => {
       setIsPlaying(true);
       setPlayerError("");
+      if (audio.volume <= 0.001) {
+        startAudioFadeIn(audio);
+      }
       updateBufferedSeconds();
     };
 
