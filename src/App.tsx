@@ -5798,7 +5798,7 @@ export default function App() {
         className={isActivePlaylist ? "playlist-card active" : "playlist-card"}
         disabled={isLoadingThisPlaylist}
         onClick={() => void loadPlaylistSongs(playlist, 1, "")}
-        title={`打开歌单：${playlist.name}`}
+        aria-label={`打开歌单：${playlist.name}`}
       >
         <CoverArt
           song={{

@@ -4324,6 +4324,8 @@ input[type="range"] {
 
 .playlist-card {
   position: relative;
+  isolation: isolate;
+  overflow: hidden;
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr) 32px;
   gap: 14px;
@@ -4340,11 +4342,26 @@ input[type="range"] {
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition:
-    background 180ms ease,
-    border-color 180ms ease,
-    box-shadow 180ms ease,
-    transform 180ms ease;
+  transform: translateZ(0);
+  transition: border-color 120ms ease;
+}
+
+.playlist-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(135deg, rgba(255, 180, 93, 0.085), rgba(255, 255, 255, 0.014) 62%),
+    rgba(17, 25, 37, 0.55);
+  opacity: 0;
+  transition: opacity 90ms ease;
+  pointer-events: none;
+}
+
+.playlist-card > * {
+  position: relative;
+  z-index: 1;
 }
 
 .playlist-card.active {
@@ -4358,11 +4375,11 @@ input[type="range"] {
 .playlist-card:hover,
 .playlist-card:focus-visible {
   border-color: rgba(255, 180, 93, 0.26);
-  background:
-    linear-gradient(135deg, rgba(255, 180, 93, 0.09), rgba(255, 255, 255, 0.018) 62%),
-    rgba(17, 25, 37, 0.9);
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.16);
-  transform: translateY(-1px);
+}
+
+.playlist-card:hover::before,
+.playlist-card:focus-visible::before {
+  opacity: 1;
 }
 
 .playlist-card:focus-visible {
