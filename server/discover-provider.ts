@@ -4,7 +4,7 @@ import type { DownloadQualityOption, Song } from "./types.js";
 import { getNeteaseSongAvailability, type NeteasePrivilegeLike } from "./song-availability.js";
 
 const require = createRequire(import.meta.url);
-const { personalized_newsong } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
+const { personalized_newsong, song_detail } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
 const DISCOVER_CACHE_TTL_MS = 10 * 60 * 1000;
 
 let discoverCache: { fetchedAt: number; songs: Song[] } | null = null;
@@ -38,6 +38,10 @@ type PersonalizedNewSongItem = {
 
 type PersonalizedNewSongBody = {
   result?: PersonalizedNewSongItem[];
+};
+
+type SongDetailBody = {
+  privileges?: NeteasePrivilegeLike[];
 };
 
 function formatDuration(durationMs: number | undefined) {
@@ -120,6 +124,20 @@ function mapDiscoverSong(item: PersonalizedNewSongItem): Song | null {
   };
 }
 
+async function getSongPrivilegeMap(songIds: string[], cookie: string) {
+  if (songIds.length === 0) {
+    return new Map<string, NeteasePrivilegeLike>();
+  }
+
+  const response = await song_detail({
+    ids: songIds.join(","),
+    cookie: cookie || undefined
+  });
+  const body = response.body as SongDetailBody;
+
+  return new Map((body.privileges ?? []).map((privilege) => [String((privilege as { id?: number | string }).id), privilege]));
+}
+
 async function fetchDiscoverSongs(): Promise<Song[]> {
   const settings = await getSettings();
   const cookie = settings.neteaseCookie.trim();
@@ -128,8 +146,21 @@ async function fetchDiscoverSongs(): Promise<Song[]> {
     ...(cookie ? { cookie } : {})
   });
   const body = response.body as PersonalizedNewSongBody;
+  const items = body.result ?? [];
+  const privilegeMap = await getSongPrivilegeMap(items.map((item) => String(item.song?.id ?? "")).filter(Boolean), cookie);
 
-  return (body.result ?? []).map(mapDiscoverSong).filter((song): song is Song => Boolean(song));
+  return items
+    .map((item) => ({
+      ...item,
+      song: item.song
+        ? {
+            ...item.song,
+            privilege: privilegeMap.get(String(item.song.id)) ?? item.song.privilege
+          }
+        : item.song
+    }))
+    .map(mapDiscoverSong)
+    .filter((song): song is Song => Boolean(song));
 }
 
 async function refreshDiscoverCache() {

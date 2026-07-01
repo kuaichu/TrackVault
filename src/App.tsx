@@ -1364,7 +1364,7 @@ export default function App() {
 
     if (download?.status === "vip" && !badges.some((badge) => badge.key.startsWith("vip"))) {
       badges.push({ key: "vip-download", label: "VIP下载", tone: "vip" });
-    } else if (download?.status === "restricted") {
+    } else if (download?.status === "restricted" && download.locked) {
       badges.push({ key: "download-restricted", label: "下载受限", tone: "warn" });
     }
 
