@@ -266,6 +266,52 @@ function getQqResolvedMeta(qqType: QqResolvedSong["qqType"]) {
   return { extension: "mp3" as const, bitrate: 128000, label: "MP3 128K" };
 }
 
+function buildQqSongAudioProbe(
+  song: Song,
+  mode: SongAudioProbeMode,
+  requestedLevel: DownloadQualityLevel,
+  resolved: QqResolvedSong
+): SongAudioProbe {
+  const meta = getQqResolvedMeta(resolved.qqType);
+
+  return {
+    songId: song.id,
+    mode,
+    requestedLevel,
+    requestedLabel: getQqRequestedLabel(requestedLevel),
+    actualLabel: meta.label,
+    actualLevel: resolved.qqType,
+    actualBitrate: meta.bitrate,
+    actualType: meta.extension.toUpperCase(),
+    actualDuration: song.duration,
+    trial: false
+  };
+}
+
+function getQqDownloadProbeFallbackLevels(song: Song, requestedLevel: DownloadQualityLevel) {
+  const availableLevels = new Set((song.availableQualities ?? []).map((quality) => quality.level));
+  const levels: DownloadQualityLevel[] = [requestedLevel];
+
+  if (getQqTypeForLevel(requestedLevel) === "flac" && availableLevels.has("exhigh")) {
+    levels.push("exhigh");
+  }
+
+  if (getQqTypeForLevel(requestedLevel) !== "128") {
+    levels.push("standard");
+  }
+
+  const seenQqTypes = new Set<QqResolvedSong["qqType"]>();
+  return levels.filter((level) => {
+    const qqType = getQqTypeForLevel(level);
+    if (seenQqTypes.has(qqType)) {
+      return false;
+    }
+
+    seenQqTypes.add(qqType);
+    return true;
+  });
+}
+
 function getQqErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) {
     return error.message;
@@ -707,7 +753,7 @@ async function resolveQqSongUrl(song: Song, level: DownloadQualityLevel): Promis
       type: qqType
     });
   } catch (error) {
-    throw new Error(`QQ 音乐链接获取失败：${getQqErrorMessage(error)}。可在后续 QQ 登录接入后填入有效 Cookie 再试。`);
+    throw new Error(`QQ 音乐链接获取失败：${getQqErrorMessage(error)}。请检查 QQ Cookie、会员权限或尝试较低音质。`);
   }
 
   if (!url || typeof url !== "string") {
@@ -908,19 +954,22 @@ export async function resolveQqDirectDownload(song: Song, level: DownloadQuality
 }
 
 export async function probeQqSongAudio(song: Song, level: DownloadQualityLevel, mode: SongAudioProbeMode): Promise<SongAudioProbe> {
-  const resolved = await resolveQqSongUrl(song, level);
-  const meta = getQqResolvedMeta(resolved.qqType);
+  if (mode !== "download") {
+    return buildQqSongAudioProbe(song, mode, level, await resolveQqSongUrl(song, level));
+  }
 
-  return {
-    songId: song.id,
-    mode,
-    requestedLevel: level,
-    requestedLabel: getQqRequestedLabel(level),
-    actualLabel: meta.label,
-    actualLevel: resolved.qqType,
-    actualBitrate: meta.bitrate,
-    actualType: meta.extension.toUpperCase(),
-    actualDuration: song.duration,
-    trial: false
-  };
+  const fallbackLevels = getQqDownloadProbeFallbackLevels(song, level);
+  let lastError: Error | null = null;
+  for (const fallbackLevel of fallbackLevels) {
+    try {
+      return buildQqSongAudioProbe(song, mode, level, await resolveQqSongUrl(song, fallbackLevel));
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("下载音源检测失败");
+    }
+  }
+
+  const requestedLabel = getQqRequestedLabel(level);
+  const fallbackText = fallbackLevels.length > 1 ? "，降级检测也失败" : "";
+  const suffix = lastError ? `最后错误：${lastError.message}` : "请检查 QQ Cookie、绿钻权限或该版本版权状态。";
+  throw new Error(`QQ 音乐未返回 ${requestedLabel} 下载链接${fallbackText}。${suffix}`);
 }
