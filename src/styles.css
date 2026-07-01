@@ -10825,6 +10825,11 @@ body {
   pointer-events: none;
 }
 
+/* Keep the expanded player above the app navigation and dock. */
+.player-modal {
+  z-index: 260;
+}
+
 /* Interaction polish: make buttons read as controls, not inert labels. */
 .secondary-button,
 .back-button,
