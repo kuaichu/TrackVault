@@ -5080,7 +5080,24 @@ export default function App() {
     const handleError = () => {
       setIsPlaying(false);
       setBufferedSeconds(0);
-      setPlayerError("当前歌曲没有成功返回可播放音频，请检查 Cookie 或换一个音质再试。");
+      const failedStreamUrl = audio.dataset.streamUrl ?? "";
+      const fallbackMessage = "当前歌曲没有成功返回可播放音频，请检查 Cookie 或换一个音质再试。";
+      setPlayerError(fallbackMessage);
+
+      if (failedStreamUrl) {
+        void fetch(failedStreamUrl, { headers: { Range: "bytes=0-0" } })
+          .then(async (response) => {
+            if (response.ok || audio.dataset.streamUrl !== failedStreamUrl) {
+              return;
+            }
+
+            const data = (await response.json().catch(() => null)) as { message?: string } | null;
+            if (data?.message) {
+              setPlayerError(data.message);
+            }
+          })
+          .catch(() => undefined);
+      }
     };
 
     audio.addEventListener("timeupdate", handleTimeUpdate);

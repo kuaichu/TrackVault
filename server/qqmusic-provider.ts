@@ -137,10 +137,12 @@ type QqSonglistDetail = {
   songlist?: QqSearchSong[];
 };
 
+type QqAudioType = "m4a" | "128" | "320" | "flac";
+
 type QqResolvedSong = {
   url: string;
-  qqType: "128" | "320" | "flac";
-  extension: "mp3" | "flac";
+  qqType: QqAudioType;
+  extension: "m4a" | "mp3" | "flac";
   bitrate: number;
 };
 
@@ -242,7 +244,7 @@ function getQqRequestedLabel(level: DownloadQualityLevel) {
   }
 }
 
-function getQqTypeForLevel(level: DownloadQualityLevel): QqResolvedSong["qqType"] {
+function getQqTypeForLevel(level: DownloadQualityLevel): QqAudioType {
   switch (level) {
     case "exhigh":
       return "320";
@@ -254,13 +256,30 @@ function getQqTypeForLevel(level: DownloadQualityLevel): QqResolvedSong["qqType"
   }
 }
 
-function getQqResolvedMeta(qqType: QqResolvedSong["qqType"]) {
+function getQqAudioTypeLabel(qqType: QqAudioType) {
+  switch (qqType) {
+    case "flac":
+      return "FLAC";
+    case "320":
+      return "320K";
+    case "m4a":
+      return "M4A";
+    default:
+      return "128K";
+  }
+}
+
+function getQqResolvedMeta(qqType: QqAudioType) {
   if (qqType === "flac") {
     return { extension: "flac" as const, bitrate: 1000000, label: "FLAC" };
   }
 
   if (qqType === "320") {
     return { extension: "mp3" as const, bitrate: 320000, label: "MP3 320K" };
+  }
+
+  if (qqType === "m4a") {
+    return { extension: "m4a" as const, bitrate: 128000, label: "M4A 128K" };
   }
 
   return { extension: "mp3" as const, bitrate: 128000, label: "MP3 128K" };
@@ -300,7 +319,7 @@ function getQqDownloadProbeFallbackLevels(song: Song, requestedLevel: DownloadQu
     levels.push("standard");
   }
 
-  const seenQqTypes = new Set<QqResolvedSong["qqType"]>();
+  const seenQqTypes = new Set<QqAudioType>();
   return levels.filter((level) => {
     const qqType = getQqTypeForLevel(level);
     if (seenQqTypes.has(qqType)) {
@@ -308,6 +327,31 @@ function getQqDownloadProbeFallbackLevels(song: Song, requestedLevel: DownloadQu
     }
 
     seenQqTypes.add(qqType);
+    return true;
+  });
+}
+
+function getQqPlaybackFallbackTypes(level: DownloadQualityLevel) {
+  const requestedType = getQqTypeForLevel(level);
+  const fallbackTypes: QqAudioType[] = [requestedType];
+
+  if (requestedType === "flac") {
+    fallbackTypes.push("320");
+  }
+
+  if (requestedType !== "128") {
+    fallbackTypes.push("128");
+  }
+
+  fallbackTypes.push("m4a");
+
+  const seen = new Set<QqAudioType>();
+  return fallbackTypes.filter((type) => {
+    if (seen.has(type)) {
+      return false;
+    }
+
+    seen.add(type);
     return true;
   });
 }
@@ -741,9 +785,8 @@ export async function getQqMusicAccountStatus(): Promise<QqMusicAccountStatus> {
   }
 }
 
-async function resolveQqSongUrl(song: Song, level: DownloadQualityLevel): Promise<QqResolvedSong> {
+async function resolveQqSongUrlByType(song: Song, qqType: QqAudioType): Promise<QqResolvedSong> {
   await configureQqCookie();
-  const qqType = getQqTypeForLevel(level);
   let url = "";
 
   try {
@@ -767,6 +810,10 @@ async function resolveQqSongUrl(song: Song, level: DownloadQualityLevel): Promis
     extension: meta.extension,
     bitrate: meta.bitrate
   };
+}
+
+async function resolveQqSongUrl(song: Song, level: DownloadQualityLevel): Promise<QqResolvedSong> {
+  return resolveQqSongUrlByType(song, getQqTypeForLevel(level));
 }
 
 export async function searchQqMusicSongs(query: string): Promise<Song[]> {
@@ -932,10 +979,23 @@ export async function setQqSongCommentLiked(commentId: string, liked: boolean) {
 }
 
 export async function resolveQqSongStream(song: Song, level: DownloadQualityLevel) {
-  const resolved = await resolveQqSongUrl(song, level);
-  return {
-    url: resolved.url
-  };
+  const fallbackTypes = getQqPlaybackFallbackTypes(level);
+  let lastError: Error | null = null;
+
+  for (const qqType of fallbackTypes) {
+    try {
+      const resolved = await resolveQqSongUrlByType(song, qqType);
+      return {
+        url: resolved.url
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("播放音源获取失败");
+    }
+  }
+
+  const triedText = fallbackTypes.map(getQqAudioTypeLabel).join(" / ");
+  const suffix = lastError ? `最后错误：${lastError.message}` : "请检查 QQ Cookie、会员权限或该版本版权状态。";
+  throw new Error(`QQ 音乐未返回可播放链接（已尝试 ${triedText}）。${suffix}`);
 }
 
 export async function resolveQqDirectDownload(song: Song, level: DownloadQualityLevel) {
@@ -955,7 +1015,20 @@ export async function resolveQqDirectDownload(song: Song, level: DownloadQuality
 
 export async function probeQqSongAudio(song: Song, level: DownloadQualityLevel, mode: SongAudioProbeMode): Promise<SongAudioProbe> {
   if (mode !== "download") {
-    return buildQqSongAudioProbe(song, mode, level, await resolveQqSongUrl(song, level));
+    const fallbackTypes = getQqPlaybackFallbackTypes(level);
+    let lastError: Error | null = null;
+
+    for (const qqType of fallbackTypes) {
+      try {
+        return buildQqSongAudioProbe(song, mode, level, await resolveQqSongUrlByType(song, qqType));
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error("播放音源检测失败");
+      }
+    }
+
+    const triedText = fallbackTypes.map(getQqAudioTypeLabel).join(" / ");
+    const suffix = lastError ? `最后错误：${lastError.message}` : "请检查 QQ Cookie、会员权限或该版本版权状态。";
+    throw new Error(`QQ 音乐未返回可播放链接（已尝试 ${triedText}）。${suffix}`);
   }
 
   const fallbackLevels = getQqDownloadProbeFallbackLevels(song, level);
