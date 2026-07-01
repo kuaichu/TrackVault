@@ -10830,6 +10830,114 @@ body {
   z-index: 260;
 }
 
+/* Right player sidebar can collapse so the main workspace gets more room. */
+.app-layout.right-panel-collapsed {
+  grid-template-columns: 220px minmax(0, 1fr) 56px;
+}
+
+.play-sidebar-header {
+  grid-template-columns: 52px minmax(0, 1fr) 38px;
+}
+
+.play-sidebar-collapse,
+.right-panel-restore {
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 26, 39, 0.72);
+  color: var(--text-secondary);
+  box-shadow: none;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.play-sidebar-collapse {
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  align-self: center;
+}
+
+.play-sidebar-collapse .quality-chevron {
+  transform: rotate(90deg);
+}
+
+.play-sidebar-collapse:hover,
+.right-panel-restore:hover {
+  border-color: rgba(255, 180, 93, 0.28);
+  background: rgba(255, 180, 93, 0.12);
+  color: #ffd7a4;
+}
+
+.play-sidebar-collapse:hover {
+  transform: translateX(1px);
+}
+
+.right-panel-restore {
+  grid-column: 3;
+  align-self: stretch;
+  width: 56px;
+  min-width: 0;
+  padding: 14px 8px;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(18, 27, 42, 0.86), rgba(9, 14, 22, 0.88)),
+    var(--panel-bg);
+  backdrop-filter: blur(18px);
+}
+
+.right-panel-restore .player-svg {
+  width: 20px;
+  height: 20px;
+}
+
+.right-panel-restore span {
+  writing-mode: vertical-rl;
+  letter-spacing: 0.18em;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.right-panel-restore strong {
+  min-width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 180, 93, 0.14);
+  color: #ffe1b1;
+  font-size: 0.72rem;
+}
+
+@media (max-width: 1120px) {
+  .app-layout.right-panel-collapsed {
+    grid-template-columns: 1fr;
+  }
+
+  .right-panel-restore {
+    grid-column: auto;
+    width: 100%;
+    min-height: 52px;
+    grid-auto-flow: column;
+    grid-template-columns: auto auto 1fr;
+    justify-content: start;
+    gap: 10px;
+    border-radius: 16px;
+  }
+
+  .right-panel-restore span {
+    writing-mode: horizontal-tb;
+    letter-spacing: 0;
+  }
+
+  .right-panel-restore strong {
+    justify-self: end;
+  }
+}
+
 /* Interaction polish: make buttons read as controls, not inert labels. */
 .secondary-button,
 .back-button,

@@ -1133,6 +1133,7 @@ export default function App() {
   const [playQueue, setPlayQueue] = useState<Song[]>(initialPlayerState.playQueue);
   const [playHistory, setPlayHistory] = useState<Song[]>(loadPlayHistory);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("queue");
+  const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
   const [isPlayerExpanded, setIsPlayerExpanded] = useState(false);
   const [resultSource, setResultSource] = useState<ResultSource>("search");
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
@@ -6220,7 +6221,18 @@ export default function App() {
             <DownloadIcon />
             {!hasNeteaseDownloadAuth || currentTrack && isSongDownloadLocked(currentTrack) ? <span className="download-lock-badge"><LockIcon /></span> : null}
           </button>
-          <button type="button" className="dock-queue-button" onClick={() => setIsPlayerExpanded(true)} aria-label="打开全屏播放器"><PlayerIcon name="queue" /></button>
+          <button
+            type="button"
+            className="dock-queue-button"
+            onClick={() => {
+              setRightPanelTab("queue");
+              setRightPanelCollapsed(false);
+            }}
+            aria-label="展开播放队列"
+            title="展开播放队列"
+          >
+            <PlayerIcon name="queue" />
+          </button>
           {currentTrack ? (
             renderQualitySelect(currentTrack, {
               menuKey: `${mode}:${currentTrack.id}`,
@@ -6384,7 +6396,7 @@ export default function App() {
     <div className="app-shell" style={playerThemeStyle}>
       <audio ref={audioRef} preload="none" />
 
-      <main className="app-layout">
+      <main className={rightPanelCollapsed ? "app-layout right-panel-collapsed" : "app-layout"}>
         <aside className="sidebar">
             <div className="brand-block">
               <div className="brand-mark" aria-hidden="true">
@@ -8110,6 +8122,19 @@ export default function App() {
           )}
         </section>
 
+        {rightPanelCollapsed ? (
+          <button
+            type="button"
+            className="right-panel-restore"
+            onClick={() => setRightPanelCollapsed(false)}
+            aria-label="展开播放侧栏"
+            title="展开播放侧栏"
+          >
+            <PlayerIcon name="queue" />
+            <span>队列</span>
+            <strong>{playQueue.length}</strong>
+          </button>
+        ) : (
         <aside className="utility-panel play-sidebar">
           <header className="play-sidebar-header">
             <CoverArt song={currentTrack} className="play-sidebar-cover" />
@@ -8118,6 +8143,15 @@ export default function App() {
               <strong>{currentTrack?.title ?? "未选择曲目"}</strong>
               <p>{currentTrack ? currentTrack.artist : "从搜索结果里试听一首歌"}</p>
             </div>
+            <button
+              type="button"
+              className="play-sidebar-collapse"
+              onClick={() => setRightPanelCollapsed(true)}
+              aria-label="收起播放侧栏"
+              title="收起播放侧栏"
+            >
+              <ChevronIcon />
+            </button>
           </header>
 
           {playerError ? <div className="player-alert">{playerError}</div> : null}
@@ -8289,6 +8323,7 @@ export default function App() {
             ) : null}
           </section>
         </aside>
+        )}
       </main>
 
       {userProfileTarget ? (
