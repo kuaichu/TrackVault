@@ -10836,7 +10836,8 @@ body {
 }
 
 .play-sidebar-header {
-  grid-template-columns: 52px minmax(0, 1fr) 38px;
+  grid-template-columns: 68px minmax(0, 1fr) 38px;
+  align-items: center;
 }
 
 .play-sidebar-collapse,
