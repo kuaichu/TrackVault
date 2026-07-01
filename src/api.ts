@@ -106,6 +106,11 @@ type DirectDownloadInfo = {
   time?: number | null;
 };
 
+type DownloadCoverData = {
+  mimeType: string;
+  bytes: Uint8Array;
+};
+
 export class DirectDownloadBlockedError extends Error {
   constructor(message: string) {
     super(message);
@@ -166,6 +171,206 @@ function saveBlob(blob: Blob, filename: string) {
   window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000);
 }
 
+function isFlacDownload(song: Song, directDownload: DirectDownloadInfo, mediaResponse: Response, blob: Blob) {
+  const normalizedType = directDownload.type?.replace(/^\./, "").toLowerCase();
+  const contentType = mediaResponse.headers.get("content-type")?.toLowerCase() ?? blob.type.toLowerCase();
+  const filename = directDownload.filename.toLowerCase();
+  return (
+    normalizedType === "flac" ||
+    filename.endsWith(".flac") ||
+    contentType.includes("audio/flac") ||
+    contentType.includes("audio/x-flac") ||
+    song.quality.toLowerCase().includes("flac") ||
+    song.quality.toLowerCase().includes("hi-res")
+  );
+}
+
+function formatLrcTimestamp(seconds: number) {
+  const safeSeconds = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
+  const minutes = Math.floor(safeSeconds / 60);
+  const wholeSeconds = Math.floor(safeSeconds % 60);
+  const centiseconds = Math.floor((safeSeconds - Math.floor(safeSeconds)) * 100);
+  return `[${String(minutes).padStart(2, "0")}:${String(wholeSeconds).padStart(2, "0")}.${String(centiseconds).padStart(2, "0")}]`;
+}
+
+function formatLyricsAsLrc(lyrics: SongLyrics | null) {
+  if (!lyrics || lyrics.lines.length === 0) {
+    return "";
+  }
+
+  return lyrics.lines
+    .map((line) => `${formatLrcTimestamp(line.time)}${line.text}${line.translation ? ` / ${line.translation}` : ""}`)
+    .join("\n");
+}
+
+function writeUint32LittleEndian(value: number) {
+  return new Uint8Array([value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff]);
+}
+
+function writeUint32BigEndian(value: number) {
+  return new Uint8Array([(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]);
+}
+
+function concatBytes(chunks: Uint8Array[]) {
+  const totalLength = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const output = new Uint8Array(totalLength);
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  return output;
+}
+
+function buildVorbisCommentBlock(song: Song, lyricsText: string) {
+  const encoder = new TextEncoder();
+  const artistText = song.artists?.length ? song.artists.map((artist) => artist.name).join("; ") : song.artist;
+  const comments = [
+    ["TITLE", song.title],
+    ["ARTIST", artistText],
+    ["ALBUM", song.album],
+    ["ALBUMARTIST", song.artist],
+    ["TRACKVAULT_SOURCE", song.source],
+    lyricsText ? ["LYRICS", lyricsText] : null,
+    lyricsText ? ["UNSYNCEDLYRICS", lyricsText] : null
+  ]
+    .filter((item): item is [string, string] => Boolean(item?.[1]?.trim()))
+    .map(([key, value]) => encoder.encode(`${key}=${value.trim()}`));
+  const vendor = encoder.encode("TrackVault");
+  const chunks = [writeUint32LittleEndian(vendor.length), vendor, writeUint32LittleEndian(comments.length)];
+
+  for (const comment of comments) {
+    chunks.push(writeUint32LittleEndian(comment.length), comment);
+  }
+
+  return concatBytes(chunks);
+}
+
+function buildFlacPictureBlock(cover: DownloadCoverData | null) {
+  if (!cover || cover.bytes.length === 0) {
+    return null;
+  }
+
+  const encoder = new TextEncoder();
+  const mimeType = encoder.encode(cover.mimeType.split(";")[0]?.trim() || "image/jpeg");
+  const description = new Uint8Array();
+
+  return concatBytes([
+    writeUint32BigEndian(3),
+    writeUint32BigEndian(mimeType.length),
+    mimeType,
+    writeUint32BigEndian(description.length),
+    description,
+    writeUint32BigEndian(0),
+    writeUint32BigEndian(0),
+    writeUint32BigEndian(0),
+    writeUint32BigEndian(0),
+    writeUint32BigEndian(cover.bytes.length),
+    cover.bytes
+  ]);
+}
+
+function buildFlacMetadataBlock(type: number, data: Uint8Array, isLast: boolean) {
+  if (data.length > 0xffffff) {
+    throw new Error("FLAC 元数据块过大");
+  }
+
+  return concatBytes([
+    new Uint8Array([
+      (isLast ? 0x80 : 0) | (type & 0x7f),
+      (data.length >>> 16) & 0xff,
+      (data.length >>> 8) & 0xff,
+      data.length & 0xff
+    ]),
+    data
+  ]);
+}
+
+function injectFlacMetadata(input: ArrayBuffer, song: Song, lyricsText: string, cover: DownloadCoverData | null) {
+  const bytes = new Uint8Array(input);
+  if (bytes.length < 8 || bytes[0] !== 0x66 || bytes[1] !== 0x4c || bytes[2] !== 0x61 || bytes[3] !== 0x43) {
+    return bytes;
+  }
+
+  const blocks: Array<{ type: number; data: Uint8Array }> = [];
+  let offset = 4;
+
+  while (offset + 4 <= bytes.length) {
+    const header = bytes[offset];
+    const type = header & 0x7f;
+    const length = (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3];
+    offset += 4;
+
+    if (offset + length > bytes.length) {
+      return bytes;
+    }
+
+    blocks.push({ type, data: bytes.slice(offset, offset + length) });
+    offset += length;
+
+    if (header & 0x80) {
+      break;
+    }
+  }
+
+  const streamInfo = blocks.find((block) => block.type === 0);
+  if (!streamInfo) {
+    return bytes;
+  }
+
+  const pictureBlock = buildFlacPictureBlock(cover);
+  const metadataBlocks = [
+    streamInfo,
+    { type: 4, data: buildVorbisCommentBlock(song, lyricsText) },
+    ...(pictureBlock ? [{ type: 6, data: pictureBlock }] : []),
+    ...blocks.filter((block) => block !== streamInfo && block.type !== 4 && block.type !== 6)
+  ];
+  const encodedBlocks = metadataBlocks.map((block, index) => buildFlacMetadataBlock(block.type, block.data, index === metadataBlocks.length - 1));
+
+  return concatBytes([new Uint8Array([0x66, 0x4c, 0x61, 0x43]), ...encodedBlocks, bytes.slice(offset)]);
+}
+
+async function fetchDownloadCover(song: Song): Promise<DownloadCoverData | null> {
+  if (!song.coverUrl?.trim()) {
+    return null;
+  }
+
+  const response = await apiFetch(`/api/media/cover?url=${encodeURIComponent(song.coverUrl)}`);
+  if (!response.ok) {
+    return null;
+  }
+
+  const blob = await response.blob();
+  if (!blob.size) {
+    return null;
+  }
+
+  return {
+    mimeType: blob.type || response.headers.get("content-type") || "image/jpeg",
+    bytes: new Uint8Array(await blob.arrayBuffer())
+  };
+}
+
+async function addMetadataToDownloadBlob(song: Song, directDownload: DirectDownloadInfo, mediaResponse: Response, blob: Blob) {
+  if (!isFlacDownload(song, directDownload, mediaResponse, blob)) {
+    return blob;
+  }
+
+  try {
+    const [lyricsResult, cover] = await Promise.allSettled([
+      getLyrics(song),
+      fetchDownloadCover(song)
+    ]);
+    const lyricsText = lyricsResult.status === "fulfilled" ? formatLyricsAsLrc(lyricsResult.value) : "";
+    const taggedBytes = injectFlacMetadata(await blob.arrayBuffer(), song, lyricsText, cover.status === "fulfilled" ? cover.value : null);
+    return new Blob([taggedBytes], { type: "audio/flac" });
+  } catch {
+    return blob;
+  }
+}
+
 export async function startDirectSongDownload(song: Song, level: DownloadQualityLevel, onProgress?: (progress: number) => void) {
   const directResponse = await apiFetch(getDirectDownloadUrl(song, level));
   if (!directResponse.ok) {
@@ -193,7 +398,7 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
   if (!mediaResponse.body || !contentLength) {
     try {
       const blob = await mediaResponse.blob();
-      saveBlob(blob, directDownload.filename);
+      saveBlob(await addMetadataToDownloadBlob(song, directDownload, mediaResponse, blob), directDownload.filename);
     } catch {
       throw new DirectDownloadBlockedError(`${providerLabel}下载流中断，浏览器无法稳定直连保存到本机。`);
     }
@@ -221,7 +426,8 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
     throw new DirectDownloadBlockedError(`${providerLabel}下载流中断，浏览器无法稳定直连保存到本机。`);
   }
 
-  saveBlob(new Blob(chunks, { type: mediaResponse.headers.get("content-type") ?? "application/octet-stream" }), directDownload.filename);
+  const blob = new Blob(chunks, { type: mediaResponse.headers.get("content-type") ?? "application/octet-stream" });
+  saveBlob(await addMetadataToDownloadBlob(song, directDownload, mediaResponse, blob), directDownload.filename);
   onProgress?.(100);
 }
 

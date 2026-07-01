@@ -45,6 +45,7 @@ const port = 3010;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const clientDistDir = path.resolve(__dirname, "../dist");
+const COVER_PROXY_MAX_BYTES = 5 * 1024 * 1024;
 
 app.use(cors());
 app.use(express.json());
@@ -68,6 +69,63 @@ app.use(express.static(clientDistDir, {
 
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true });
+});
+
+function isAllowedCoverHost(hostname: string) {
+  const normalizedHost = hostname.toLowerCase();
+  return (
+    normalizedHost === "music.126.net" ||
+    normalizedHost.endsWith(".music.126.net") ||
+    normalizedHost === "y.gtimg.cn" ||
+    normalizedHost.endsWith(".y.gtimg.cn") ||
+    normalizedHost === "qpic.y.qq.com" ||
+    normalizedHost === "y.qq.com" ||
+    normalizedHost === "thirdqq.qlogo.cn"
+  );
+}
+
+app.get("/api/media/cover", async (request, response) => {
+  const rawUrl = typeof request.query.url === "string" ? request.query.url : "";
+
+  try {
+    const coverUrl = new URL(rawUrl);
+    if ((coverUrl.protocol !== "https:" && coverUrl.protocol !== "http:") || !isAllowedCoverHost(coverUrl.hostname)) {
+      response.status(400).json({ message: "封面地址不在允许的音乐图片域名内" });
+      return;
+    }
+
+    const upstream = await fetch(coverUrl);
+    if (!upstream.ok) {
+      response.status(upstream.status || 502).json({ message: "封面拉取失败" });
+      return;
+    }
+
+    const contentType = upstream.headers.get("content-type") ?? "image/jpeg";
+    if (!contentType.toLowerCase().startsWith("image/")) {
+      response.status(415).json({ message: "封面地址没有返回图片内容" });
+      return;
+    }
+
+    const contentLength = Number(upstream.headers.get("content-length") ?? "0");
+    if (contentLength > COVER_PROXY_MAX_BYTES) {
+      response.status(413).json({ message: "封面文件过大" });
+      return;
+    }
+
+    const bytes = Buffer.from(await upstream.arrayBuffer());
+    if (bytes.byteLength > COVER_PROXY_MAX_BYTES) {
+      response.status(413).json({ message: "封面文件过大" });
+      return;
+    }
+
+    response.setHeader("Content-Type", contentType);
+    response.setHeader("Cache-Control", "public, max-age=86400");
+    response.send(bytes);
+  } catch (error) {
+    response.status(502).json({
+      message: error instanceof Error ? error.message : "封面拉取失败"
+    });
+  }
 });
 
 app.get("/api/search", async (request, response) => {
