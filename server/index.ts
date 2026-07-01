@@ -550,10 +550,7 @@ app.get("/api/stream", async (request, response) => {
       "accept-ranges",
       "content-length",
       "content-range",
-      "content-type",
-      "cache-control",
-      "last-modified",
-      "etag"
+      "content-type"
     ] as const;
 
     for (const headerName of headersToForward) {
@@ -570,6 +567,9 @@ app.get("/api/stream", async (request, response) => {
     }
 
     response.setHeader("Access-Control-Allow-Origin", "*");
+    response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    response.setHeader("Pragma", "no-cache");
+    response.setHeader("Expires", "0");
     response.status(upstream.status);
     Readable.fromWeb(upstream.body as any).pipe(response);
   } catch (error) {

@@ -49,6 +49,7 @@ import type {
 } from "./types";
 
 const CLIENT_SESSION_STORAGE_KEY = "trackvault:client-session-id";
+const STREAM_URL_VERSION = "2";
 
 function getClientSessionId() {
   try {
@@ -80,7 +81,8 @@ export function getStreamUrl(song: Song | string, level: DownloadQualityLevel, e
   const params = new URLSearchParams({
     id: songId,
     level,
-    sid: getClientSessionId()
+    sid: getClientSessionId(),
+    v: STREAM_URL_VERSION
   });
 
   if (typeof song !== "string") {
