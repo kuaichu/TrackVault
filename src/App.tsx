@@ -8273,7 +8273,7 @@ export default function App() {
                           handleRemoveFromQueue(song.id);
                         }}
                       >
-                        ×
+                        <span className="queue-remove-mark" aria-hidden="true">×</span>
                       </button>
                     </article>
                   ))

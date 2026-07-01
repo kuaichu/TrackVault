@@ -4913,6 +4913,12 @@ button.quick-chip:active,
   cursor: pointer;
 }
 
+.queue-remove-mark {
+  display: block;
+  line-height: 1;
+  transform: translateY(-1px);
+}
+
 .queue-remove:hover {
   background: rgba(255, 103, 72, 0.14);
   color: #ffbaab;
@@ -9010,8 +9016,13 @@ body {
 }
 
 .queue-remove {
+  width: 34px;
+  height: 34px;
+  flex-basis: 34px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.055);
+  font-size: 19px;
+  font-weight: 500;
 }
 
 .player-dock {
