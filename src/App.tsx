@@ -267,6 +267,8 @@ const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
   volume: 72,
   playbackMode: "sequential"
 };
+const AUDIO_FADE_IN_MS = 180;
+const AUDIO_FADE_OUT_MS = 220;
 const playbackModeOrder: PlaybackMode[] = ["sequential", "shuffle", "repeat-one", "heartbeat"];
 const discoverFeedLabels: Record<DiscoverFeedKind, string> = {
   recommend: "系统推荐",
@@ -1009,6 +1011,9 @@ export default function App() {
   const lastModalAutoLyricIndexRef = useRef(-1);
   const restorePlaybackSecondsRef = useRef(initialPlayerState.playbackSeconds);
   const playbackSecondsRef = useRef(initialPlayerState.playbackSeconds);
+  const volumeValueRef = useRef(initialPlayerState.volume);
+  const audioFadeFrameRef = useRef<number | null>(null);
+  const audioFadeTokenRef = useRef(0);
   const searchRequestIdRef = useRef(0);
   const listRequestIdRef = useRef(0);
   const cookieHealthRef = useRef<{ cookie: string; checkedAt: number; result: NeteaseCookieCheckResult | null }>({
@@ -2528,6 +2533,91 @@ export default function App() {
     }
   }
 
+  function getTargetAudioVolume() {
+    return Math.min(1, Math.max(0, volumeValueRef.current / 100));
+  }
+
+  function cancelAudioFade() {
+    audioFadeTokenRef.current += 1;
+    if (audioFadeFrameRef.current !== null) {
+      window.cancelAnimationFrame(audioFadeFrameRef.current);
+      audioFadeFrameRef.current = null;
+    }
+  }
+
+  function animateAudioVolume(audio: HTMLAudioElement, fromVolume: number, toVolume: () => number, durationMs: number, onDone?: () => void) {
+    cancelAudioFade();
+
+    const token = audioFadeTokenRef.current;
+    const startedAt = window.performance.now();
+    audio.volume = Math.min(1, Math.max(0, fromVolume));
+
+    const step = (now: number) => {
+      if (token !== audioFadeTokenRef.current) {
+        return;
+      }
+
+      const progress = Math.min(1, (now - startedAt) / Math.max(1, durationMs));
+      const easedProgress = 1 - Math.pow(1 - progress, 3);
+      const targetVolume = Math.min(1, Math.max(0, toVolume()));
+      audio.volume = fromVolume + (targetVolume - fromVolume) * easedProgress;
+
+      if (progress < 1) {
+        audioFadeFrameRef.current = window.requestAnimationFrame(step);
+        return;
+      }
+
+      audio.volume = targetVolume;
+      audioFadeFrameRef.current = null;
+      onDone?.();
+    };
+
+    audioFadeFrameRef.current = window.requestAnimationFrame(step);
+  }
+
+  function playAudioWithFade(audio: HTMLAudioElement, errorMessage: string) {
+    cancelAudioFade();
+    const playToken = audioFadeTokenRef.current;
+    audio.volume = 0;
+
+    void audio.play()
+      .then(() => {
+        if (playToken !== audioFadeTokenRef.current) {
+          return;
+        }
+
+        animateAudioVolume(audio, 0, getTargetAudioVolume, AUDIO_FADE_IN_MS);
+      })
+      .catch(() => {
+        if (playToken !== audioFadeTokenRef.current) {
+          return;
+        }
+
+        cancelAudioFade();
+        audio.volume = getTargetAudioVolume();
+        setIsPlaying(false);
+        setPlayerError(errorMessage);
+      });
+  }
+
+  function pauseAudioWithFade(audio: HTMLAudioElement) {
+    if (audio.paused) {
+      audio.volume = getTargetAudioVolume();
+      return;
+    }
+
+    animateAudioVolume(audio, audio.volume, () => 0, AUDIO_FADE_OUT_MS, () => {
+      audio.pause();
+      audio.volume = getTargetAudioVolume();
+    });
+  }
+
+  function stopAudioImmediately(audio: HTMLAudioElement) {
+    cancelAudioFade();
+    audio.pause();
+    audio.volume = getTargetAudioVolume();
+  }
+
   function syncAudioForSong(song: Song, autoplay: boolean, options: { startAtSeconds?: number; level?: DownloadQualityLevel } = {}) {
     const audio = audioRef.current;
     if (!audio) {
@@ -2563,17 +2653,14 @@ export default function App() {
           setPlaybackSeconds(boundedTime);
 
           if (playAfterMetadata) {
-            void audio.play().catch(() => {
-              setIsPlaying(false);
-              setPlayerError("当前歌曲暂时无法预览，可能需要更完整的 Cookie 或该音源不支持在线播放。");
-            });
+            playAudioWithFade(audio, "当前歌曲暂时无法预览，可能需要更完整的 Cookie 或该音源不支持在线播放。");
           }
         };
 
         audio.addEventListener("loadedmetadata", handleRestoreSeek, { once: true });
       }
 
-      audio.pause();
+      stopAudioImmediately(audio);
       audio.src = nextUrl;
       audio.dataset.streamUrl = nextUrl;
       audio.load();
@@ -2587,10 +2674,7 @@ export default function App() {
       return;
     }
 
-    void audio.play().catch(() => {
-      setIsPlaying(false);
-      setPlayerError("当前歌曲暂时无法预览，可能需要更完整的 Cookie 或该音源不支持在线播放。");
-    });
+    playAudioWithFade(audio, "当前歌曲暂时无法预览，可能需要更完整的 Cookie 或该音源不支持在线播放。");
   }
 
   function requirePlaybackAuth(song?: Song | null) {
@@ -2599,7 +2683,9 @@ export default function App() {
     }
 
     setIsPlaying(false);
-    audioRef.current?.pause();
+    if (audioRef.current) {
+      stopAudioImmediately(audioRef.current);
+    }
     setPlayerError("播放需要先登录网易云账号。请先扫码登录或导入 MUSIC_U Cookie。");
     setMessage("播放功能已锁定：请先登录网易云账号。");
     return false;
@@ -3712,14 +3798,11 @@ export default function App() {
     }
 
     if (audio.paused) {
-      void audio.play().catch(() => {
-        setIsPlaying(false);
-        setPlayerError("播放启动失败，请重新点一次播放。");
-      });
+      playAudioWithFade(audio, "播放启动失败，请重新点一次播放。");
       return;
     }
 
-    audio.pause();
+    pauseAudioWithFade(audio);
   }
 
   function handleReplay() {
@@ -3740,10 +3823,7 @@ export default function App() {
     audio.currentTime = 0;
     playbackSecondsRef.current = 0;
     setPlaybackSeconds(0);
-    void audio.play().catch(() => {
-      setIsPlaying(false);
-      setPlayerError("重播失败，请重新尝试。");
-    });
+    playAudioWithFade(audio, "重播失败，请重新尝试。");
   }
 
   async function handleToggleCurrentTrackLike() {
@@ -4039,7 +4119,9 @@ export default function App() {
             setPlaybackDuration(parseDurationSeconds(nextSong.duration));
           }
         } else {
-          audioRef.current?.pause();
+          if (audioRef.current) {
+            pauseAudioWithFade(audioRef.current);
+          }
           setCurrentTrack(null);
           playbackSecondsRef.current = 0;
           setPlaybackSeconds(0);
@@ -4309,10 +4391,7 @@ export default function App() {
       scrollLyricIntoPanel(modalLyricPanelRef.current, activeModalLyricRef.current);
 
       if (shouldContinuePlaying) {
-        void audio.play().catch(() => {
-          setIsPlaying(false);
-          setPlayerError("跳转歌词位置后播放失败，请重新点播放。");
-        });
+        playAudioWithFade(audio, "跳转歌词位置后播放失败，请重新点播放。");
       }
     };
 
@@ -5020,6 +5099,8 @@ export default function App() {
       if (playerStateSyncTimerRef.current) {
         window.clearTimeout(playerStateSyncTimerRef.current);
       }
+
+      cancelAudioFade();
     };
   }, []);
 
@@ -5033,7 +5114,11 @@ export default function App() {
       return;
     }
 
-    audio.volume = volume / 100;
+    volumeValueRef.current = volume;
+
+    if (audioFadeFrameRef.current === null) {
+      audio.volume = getTargetAudioVolume();
+    }
   }, [volume]);
 
   useEffect(() => {
@@ -5119,10 +5204,7 @@ export default function App() {
         audio.currentTime = 0;
         playbackSecondsRef.current = 0;
         setPlaybackSeconds(0);
-        void audio.play().catch(() => {
-          setIsPlaying(false);
-          setPlayerError("单曲循环重播失败，请重新点一次播放。");
-        });
+        playAudioWithFade(audio, "单曲循环重播失败，请重新点一次播放。");
         return;
       }
 
@@ -5242,7 +5324,7 @@ export default function App() {
     }
 
     if (playbackLocked) {
-      audio.pause();
+      stopAudioImmediately(audio);
       audio.removeAttribute("src");
       delete audio.dataset.streamUrl;
       audio.load();
@@ -5256,7 +5338,7 @@ export default function App() {
       return;
     }
 
-    audio.pause();
+    stopAudioImmediately(audio);
     audio.src = nextUrl;
     audio.dataset.streamUrl = nextUrl;
     audio.load();
