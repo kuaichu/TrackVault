@@ -1261,6 +1261,23 @@ export default function App() {
     return song.availableQualities.find((quality) => quality.level === selectedLevel)?.label ?? "128K";
   }
 
+  function getPlaybackLevel(song: Song, level = getSelectedLevel(song)): DownloadQualityLevel {
+    if (level === "standard") {
+      return song.availableQualities.find((quality) => quality.level === "exhigh")?.level ?? level;
+    }
+
+    return level;
+  }
+
+  function getPlaybackLabel(song: Song) {
+    const selectedLevel = getSelectedLevel(song);
+    const playbackLevel = getPlaybackLevel(song, selectedLevel);
+    const selectedLabel = song.availableQualities.find((quality) => quality.level === selectedLevel)?.label ?? "128K";
+    const playbackLabel = song.availableQualities.find((quality) => quality.level === playbackLevel)?.label ?? selectedLabel;
+
+    return selectedLevel === playbackLevel ? selectedLabel : `${playbackLabel} 播放`;
+  }
+
   function getPreferredPlaybackQuality(song: Song) {
     return getPreferredQualityForLevel(song, settings.defaultPlaybackQuality);
   }
@@ -2639,7 +2656,8 @@ export default function App() {
       return;
     }
 
-    const nextUrl = getStreamUrl(song, options.level ?? getSelectedLevel(song), parseDurationSeconds(song.duration));
+    const requestedLevel = options.level ?? getSelectedLevel(song);
+    const nextUrl = getStreamUrl(song, getPlaybackLevel(song, requestedLevel), parseDurationSeconds(song.duration));
     const currentUrl = audio.dataset.streamUrl ?? "";
     const shouldReload = currentUrl !== nextUrl;
 
@@ -3804,7 +3822,7 @@ export default function App() {
       return;
     }
 
-    const nextUrl = getStreamUrl(currentTrack, getSelectedLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
+    const nextUrl = getStreamUrl(currentTrack, getPlaybackLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
     const hasSource = audio.dataset.streamUrl === nextUrl;
 
     if (!hasSource) {
@@ -4395,7 +4413,7 @@ export default function App() {
     }
 
     const shouldContinuePlaying = isPlaying || !audio.paused;
-    const nextUrl = getStreamUrl(currentTrack, getSelectedLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
+    const nextUrl = getStreamUrl(currentTrack, getPlaybackLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
 
     const seek = () => {
       audio.currentTime = time;
@@ -4938,7 +4956,7 @@ export default function App() {
     }
 
     let cancelled = false;
-    const playbackLevel = getSelectedLevel(songDetailSong);
+    const playbackLevel = getPlaybackLevel(songDetailSong);
     const downloadLevel = getDownloadLevel(songDetailSong);
 
     setLoadingSongDetail(true);
@@ -5357,7 +5375,7 @@ export default function App() {
       return;
     }
 
-    const nextUrl = getStreamUrl(currentTrack, getSelectedLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
+    const nextUrl = getStreamUrl(currentTrack, getPlaybackLevel(currentTrack), parseDurationSeconds(currentTrack.duration));
     if (audio.dataset.streamUrl === nextUrl) {
       return;
     }
@@ -5486,9 +5504,9 @@ export default function App() {
           : navKey === "playlists"
             ? { title: "我的歌单", subtitle: `读取 ${playlistProviderLabel} 账号歌单并载入歌曲` }
         : activeMeta;
-  const currentQualityLabel = currentTrack ? getSelectedLabel(currentTrack) : "128K";
+  const currentQualityLabel = currentTrack ? getPlaybackLabel(currentTrack) : "128K";
   const songDetailSourceMeta = songDetailSong ? getSongSourceMeta(songDetailSong) : null;
-  const songDetailPlaybackLevel: DownloadQualityLevel = songDetailSong ? getSelectedLevel(songDetailSong) : "standard";
+  const songDetailPlaybackLevel: DownloadQualityLevel = songDetailSong ? getPlaybackLevel(songDetailSong) : "standard";
   const songDetailPlaybackLabel = songDetailSong ? getDownloadLevelLabel(songDetailSong, songDetailPlaybackLevel) : "";
   const songDetailDownloadLevel: DownloadQualityLevel = songDetailSong ? getDownloadLevel(songDetailSong) : "standard";
   const songDetailDownloadLabel = songDetailSong ? getDownloadLevelLabel(songDetailSong, songDetailDownloadLevel) : "";
@@ -5846,6 +5864,12 @@ export default function App() {
     }));
     setOpenQualityMenuId(null);
     setQualityMenuStyle(null);
+
+    const playbackLevel = getPlaybackLevel(song, level);
+    if (playbackLevel !== level) {
+      const playbackLabel = song.availableQualities.find((quality) => quality.level === playbackLevel)?.label ?? "320K";
+      setMessage(`128K 试听不稳定，已用 ${playbackLabel} 播放；下载仍按 128K。`);
+    }
 
     if (accountIsLoggedIn && isCurrentTrack) {
       window.setTimeout(() => {
