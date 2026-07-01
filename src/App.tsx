@@ -8134,7 +8134,6 @@ export default function App() {
               <PlayerIcon name="queue" />
               <strong>{playQueue.length}</strong>
             </span>
-            <span className="right-panel-restore-label">队列</span>
           </button>
         ) : (
         <aside className="utility-panel play-sidebar">

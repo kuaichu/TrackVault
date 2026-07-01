@@ -10832,7 +10832,7 @@ body {
 
 /* Right player sidebar can collapse so the main workspace gets more room. */
 .app-layout.right-panel-collapsed {
-  grid-template-columns: 220px minmax(0, 1fr) 48px;
+  grid-template-columns: 220px minmax(0, 1fr) 44px;
 }
 
 .play-sidebar-header {
@@ -10882,17 +10882,16 @@ body {
 .right-panel-restore {
   grid-column: 3;
   align-self: stretch;
-  width: 48px;
+  width: 44px;
   min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: start;
-  gap: 18px;
-  padding: 14px 6px;
-  border-radius: 20px;
+  padding: 12px 4px;
+  border-radius: 18px;
   background:
-    linear-gradient(180deg, rgba(18, 27, 42, 0.86), rgba(9, 14, 22, 0.88)),
+    linear-gradient(180deg, rgba(18, 27, 42, 0.72), rgba(9, 14, 22, 0.82)),
     var(--panel-bg);
   backdrop-filter: blur(18px);
 }
@@ -10904,7 +10903,7 @@ body {
   width: 36px;
   height: 36px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.055);
+  background: rgba(255, 255, 255, 0.07);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -10913,31 +10912,19 @@ body {
   height: 20px;
 }
 
-.right-panel-restore-label {
-  display: inline-block;
-  margin-top: 2px;
-  color: rgba(222, 231, 243, 0.72);
-  transform: rotate(90deg);
-  transform-origin: center;
-  white-space: nowrap;
-  letter-spacing: 0.08em;
-  font-size: 0.78rem;
-  font-weight: 900;
-}
-
 .right-panel-restore-core strong {
   position: absolute;
-  top: -7px;
-  right: -7px;
-  min-width: 20px;
-  height: 20px;
+  top: -5px;
+  right: -5px;
+  min-width: 18px;
+  height: 18px;
   display: grid;
   place-items: center;
   border-radius: 999px;
   background: rgba(255, 180, 93, 0.22);
   color: #ffe1b1;
   border: 1px solid rgba(255, 180, 93, 0.28);
-  font-size: 0.66rem;
+  font-size: 0.62rem;
   line-height: 1;
 }
 
@@ -10952,15 +10939,9 @@ body {
     min-height: 52px;
     flex-direction: row;
     justify-content: start;
-    gap: 12px;
+    gap: 0;
     padding: 8px 12px;
     border-radius: 16px;
-  }
-
-  .right-panel-restore-label {
-    margin-top: 0;
-    transform: none;
-    letter-spacing: 0;
   }
 
   .right-panel-restore-core {
