@@ -269,6 +269,7 @@ const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
 };
 const AUDIO_FADE_IN_MS = 180;
 const AUDIO_FADE_OUT_MS = 220;
+const AUDIO_FADE_READY_TIMEOUT_MS = 2500;
 const playbackModeOrder: PlaybackMode[] = ["sequential", "shuffle", "repeat-one", "heartbeat"];
 const discoverFeedLabels: Record<DiscoverFeedKind, string> = {
   recommend: "系统推荐",
@@ -1014,6 +1015,7 @@ export default function App() {
   const volumeValueRef = useRef(initialPlayerState.volume);
   const audioFadeFrameRef = useRef<number | null>(null);
   const audioFadeTokenRef = useRef(0);
+  const pendingAudioFadeInCleanupRef = useRef<(() => void) | null>(null);
   const searchRequestIdRef = useRef(0);
   const listRequestIdRef = useRef(0);
   const cookieHealthRef = useRef<{ cookie: string; checkedAt: number; result: NeteaseCookieCheckResult | null }>({
@@ -1263,10 +1265,6 @@ export default function App() {
   }
 
   function getPlaybackLevel(song: Song, level = getSelectedLevel(song)): DownloadQualityLevel {
-    if (level === "standard") {
-      return song.availableQualities.find((quality) => quality.level === "exhigh")?.level ?? level;
-    }
-
     return level;
   }
 
@@ -2616,8 +2614,14 @@ export default function App() {
     return Math.min(1, Math.max(0, volumeValueRef.current / 100));
   }
 
+  function cancelPendingAudioFadeIn() {
+    pendingAudioFadeInCleanupRef.current?.();
+    pendingAudioFadeInCleanupRef.current = null;
+  }
+
   function cancelAudioFade() {
     audioFadeTokenRef.current += 1;
+    cancelPendingAudioFadeIn();
     if (audioFadeFrameRef.current !== null) {
       window.cancelAnimationFrame(audioFadeFrameRef.current);
       audioFadeFrameRef.current = null;
@@ -2669,6 +2673,42 @@ export default function App() {
     animateAudioVolume(audio, Math.min(audio.volume, targetVolume), getTargetAudioVolume, AUDIO_FADE_IN_MS);
   }
 
+  function startAudioFadeInWhenReady(audio: HTMLAudioElement, playToken: number) {
+    cancelPendingAudioFadeIn();
+
+    const start = () => {
+      if (playToken !== audioFadeTokenRef.current || audio.paused) {
+        return;
+      }
+
+      cleanup();
+      startAudioFadeIn(audio);
+    };
+
+    const cleanup = () => {
+      audio.removeEventListener("playing", start);
+      audio.removeEventListener("canplay", start);
+      audio.removeEventListener("loadeddata", start);
+      audio.removeEventListener("timeupdate", start);
+      window.clearTimeout(timeout);
+      if (pendingAudioFadeInCleanupRef.current === cleanup) {
+        pendingAudioFadeInCleanupRef.current = null;
+      }
+    };
+
+    const timeout = window.setTimeout(start, AUDIO_FADE_READY_TIMEOUT_MS);
+    pendingAudioFadeInCleanupRef.current = cleanup;
+
+    audio.addEventListener("playing", start);
+    audio.addEventListener("canplay", start);
+    audio.addEventListener("loadeddata", start);
+    audio.addEventListener("timeupdate", start);
+
+    if (audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      window.requestAnimationFrame(start);
+    }
+  }
+
   function playAudioWithFade(audio: HTMLAudioElement, errorMessage: string) {
     cancelAudioFade();
     const playToken = audioFadeTokenRef.current;
@@ -2680,7 +2720,7 @@ export default function App() {
           return;
         }
 
-        startAudioFadeIn(audio);
+        startAudioFadeInWhenReady(audio, playToken);
       })
       .catch(() => {
         if (playToken !== audioFadeTokenRef.current) {
@@ -5338,9 +5378,6 @@ export default function App() {
 
     const handleProgress = () => {
       updateBufferedSeconds();
-      if (!audio.paused && audio.volume <= 0.001) {
-        startAudioFadeIn(audio);
-      }
     };
 
     const handleEmptied = () => {
@@ -5350,10 +5387,14 @@ export default function App() {
     const handlePlay = () => {
       setIsPlaying(true);
       setPlayerError("");
-      if (audio.volume <= 0.001) {
+      updateBufferedSeconds();
+    };
+
+    const handlePlaybackReady = () => {
+      updateBufferedSeconds();
+      if (!audio.paused && audio.volume <= 0.001) {
         startAudioFadeIn(audio);
       }
-      updateBufferedSeconds();
     };
 
     const handlePause = () => {
@@ -5401,7 +5442,9 @@ export default function App() {
     audio.addEventListener("loadedmetadata", handleLoadedMetadata);
     audio.addEventListener("durationchange", handleDurationChange);
     audio.addEventListener("progress", handleProgress);
-    audio.addEventListener("canplay", handleProgress);
+    audio.addEventListener("loadeddata", handlePlaybackReady);
+    audio.addEventListener("canplay", handlePlaybackReady);
+    audio.addEventListener("playing", handlePlaybackReady);
     audio.addEventListener("emptied", handleEmptied);
     audio.addEventListener("play", handlePlay);
     audio.addEventListener("pause", handlePause);
@@ -5413,7 +5456,9 @@ export default function App() {
       audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
       audio.removeEventListener("durationchange", handleDurationChange);
       audio.removeEventListener("progress", handleProgress);
-      audio.removeEventListener("canplay", handleProgress);
+      audio.removeEventListener("loadeddata", handlePlaybackReady);
+      audio.removeEventListener("canplay", handlePlaybackReady);
+      audio.removeEventListener("playing", handlePlaybackReady);
       audio.removeEventListener("emptied", handleEmptied);
       audio.removeEventListener("play", handlePlay);
       audio.removeEventListener("pause", handlePause);
@@ -5985,12 +6030,6 @@ export default function App() {
     }));
     setOpenQualityMenuId(null);
     setQualityMenuStyle(null);
-
-    const playbackLevel = getPlaybackLevel(song, level);
-    if (playbackLevel !== level) {
-      const playbackLabel = song.availableQualities.find((quality) => quality.level === playbackLevel)?.label ?? "320K";
-      setMessage(`128K 试听不稳定，已用 ${playbackLabel} 播放；下载仍按 128K。`);
-    }
 
     if (accountIsLoggedIn && isCurrentTrack) {
       window.setTimeout(() => {
