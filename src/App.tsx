@@ -270,7 +270,25 @@ const CELLPHONE_LOGIN_DEFAULT_MESSAGE = "请输入手机号并发送验证码登
 const COOKIE_LOGIN_DEFAULT_MESSAGE = "粘贴网页登录后的 MUSIC_U Cookie。";
 const COOKIE_LOGIN_GUIDE = "Chrome/Edge：F12 -> Application / 应用 -> Cookies -> https://music.163.com -> MUSIC_U -> 复制 Value。Firefox：F12 -> 存储 -> Cookies -> https://music.163.com -> MUSIC_U -> 复制值。直接粘贴值，或 MUSIC_U:\"...\" 都可以。";
 const QQ_COOKIE_LOGIN_DEFAULT_MESSAGE = "粘贴 QQ 音乐网页登录后的 Cookie。";
-const QQ_COOKIE_LOGIN_GUIDE = "Chrome/Edge：F12 -> Application / 应用 -> Cookies -> https://y.qq.com -> 复制 uin、qm_keyst 或 qqmusic_key 等 Cookie。Firefox：F12 -> 存储 -> Cookies -> https://y.qq.com。";
+const QQ_COOKIE_LOGIN_GUIDE = "登录 y.qq.com 后，打开浏览器控制台粘贴“取 Cookie 指令”，运行后会自动复制 Cookie。若浏览器拦截，再用 Application / 应用 -> Cookies -> https://y.qq.com 手动复制。";
+const QQ_COOKIE_EXTRACT_SCRIPT = `(() => {
+  const cookie = document.cookie || "";
+  const hasUin = /(?:^|;\\s*)(uin|wxuin)=/.test(cookie);
+  const hasKey = /(?:^|;\\s*)(qm_keyst|qqmusic_key)=/.test(cookie);
+  const tip = hasUin && hasKey
+    ? "已复制 QQ 音乐 Cookie，回到 TrackVault 点“粘贴并检测”。"
+    : "没有读到 uin/qm_keyst。请确认 y.qq.com 已登录；如果仍不行，用 Cookies 面板手动复制。";
+  const fallback = () => window.prompt(tip, cookie);
+  if (!cookie) {
+    fallback();
+    return;
+  }
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(cookie).then(() => alert(tip)).catch(fallback);
+    return;
+  }
+  fallback();
+})();`;
 
 type SongCachePayload = {
   savedAt: number;
@@ -3375,13 +3393,8 @@ export default function App() {
     setQqLoginMessage(QQ_COOKIE_LOGIN_DEFAULT_MESSAGE);
   }
 
-  async function handleQqCookieSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (checkingQqCookie) {
-      return;
-    }
-
-    const cookie = normalizeQqCookieInput(qqCookieInput);
+  async function importQqCookie(cookieInput: string) {
+    const cookie = normalizeQqCookieInput(cookieInput);
     if (!cookie) {
       setQqLoginMessage("请输入 QQ 音乐 Cookie。");
       return;
@@ -3409,15 +3422,38 @@ export default function App() {
     }
   }
 
+  async function handleQqCookieSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (checkingQqCookie) {
+      return;
+    }
+
+    await importQqCookie(qqCookieInput);
+  }
+
   async function handleCopyQqCookieGuide() {
     try {
       setCopyingQqCookieGuide(true);
-      await navigator.clipboard.writeText(QQ_COOKIE_LOGIN_GUIDE);
-      setQqLoginMessage("已复制获取 QQ 音乐 Cookie 的操作提示。");
+      await navigator.clipboard.writeText(QQ_COOKIE_EXTRACT_SCRIPT);
+      setQqLoginMessage("已复制取 Cookie 指令。打开 QQ 音乐网页，按 F12 进入 Console/控制台后粘贴运行。");
     } catch {
-      setQqLoginMessage(QQ_COOKIE_LOGIN_GUIDE);
+      setQqLoginMessage(QQ_COOKIE_EXTRACT_SCRIPT);
     } finally {
       window.setTimeout(() => setCopyingQqCookieGuide(false), 900);
+    }
+  }
+
+  async function handlePasteAndCheckQqCookie() {
+    if (checkingQqCookie) {
+      return;
+    }
+
+    try {
+      const text = await navigator.clipboard.readText();
+      setQqCookieInput(text);
+      await importQqCookie(text);
+    } catch {
+      setQqLoginMessage("浏览器没有授权读取剪贴板，请手动粘贴 Cookie 后点击检测并导入。");
     }
   }
 
@@ -8262,16 +8298,19 @@ export default function App() {
             </header>
 
             <form className="cellphone-login-form" onSubmit={handleQqCookieSubmit}>
-              <div className="cookie-login-tools">
+              <div className="cookie-login-tools qq-cookie-tools">
                 <a className="secondary-button" href="https://y.qq.com/" target="_blank" rel="noreferrer">
-                  打开 QQ 音乐网页
+                  打开网页
                 </a>
                 <button type="button" className="secondary-button" onClick={() => void handleCopyQqCookieGuide()}>
-                  {copyingQqCookieGuide ? "已复制" : "复制面板路径"}
+                  {copyingQqCookieGuide ? "已复制" : "复制指令"}
+                </button>
+                <button type="button" className="secondary-button" disabled={checkingQqCookie} onClick={() => void handlePasteAndCheckQqCookie()}>
+                  粘贴检测
                 </button>
               </div>
               <p className="cookie-login-guide">{QQ_COOKIE_LOGIN_GUIDE}</p>
-              <p className="cookie-login-warning">QQ 音乐当前通过网页登录 Cookie 接入。填入后才会尝试绿钻/高品质音源，后续双平台策略也会用这个状态判断。</p>
+              <p className="cookie-login-warning">由于浏览器跨域限制，TrackVault 不能直接读取 y.qq.com 登录态。复制指令后在 QQ 音乐网页控制台运行，回来点“粘贴检测”即可。</p>
               <label>
                 <span>QQ 音乐 Cookie</span>
                 <textarea

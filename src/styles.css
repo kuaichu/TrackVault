@@ -1836,6 +1836,10 @@ input[type="range"] {
   gap: 10px;
 }
 
+.cookie-login-tools.qq-cookie-tools {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .cookie-login-tools .secondary-button {
   min-height: 42px;
   display: inline-flex;
@@ -1904,6 +1908,10 @@ input[type="range"] {
 
 @media (max-width: 520px) {
   .cookie-login-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .cookie-login-tools.qq-cookie-tools {
     grid-template-columns: 1fr;
   }
 }
