@@ -10901,11 +10901,12 @@ body {
 /* Song detail: compact source and real-quality transparency. */
 .song-detail-backdrop {
   z-index: 132;
+  padding-block: 18px;
 }
 
 .song-detail-card {
   width: min(780px, 100%);
-  max-height: min(760px, calc(100vh - 48px));
+  max-height: min(900px, calc(100vh - 36px));
   display: grid;
   grid-template-rows: 214px minmax(0, 1fr);
   overflow: hidden;
