@@ -2128,13 +2128,37 @@ input[type="range"] {
 }
 
 .modal-close {
+  position: relative;
+  display: grid;
+  place-items: center;
   width: 34px;
   height: 34px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
   background: var(--panel-bg-solid);
   color: var(--text-primary);
+  font-size: 0;
+  line-height: 0;
   cursor: pointer;
+}
+
+.modal-close::before,
+.modal-close::after {
+  content: "";
+  position: absolute;
+  width: 13px;
+  height: 1.7px;
+  border-radius: 999px;
+  background: currentColor;
+  transform-origin: center;
+}
+
+.modal-close::before {
+  transform: rotate(45deg);
+}
+
+.modal-close::after {
+  transform: rotate(-45deg);
 }
 
 .qr-box {
