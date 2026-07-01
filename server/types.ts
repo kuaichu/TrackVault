@@ -334,6 +334,13 @@ export type NeteaseCookieCheckResult = {
   message: string;
 };
 
+export type QqMusicCookieCheckResult = {
+  ok: boolean;
+  uin: string | null;
+  message: string;
+  refreshedCookie?: string;
+};
+
 export type DownloadRequest = {
   song: Song;
   level: DownloadQualityLevel;

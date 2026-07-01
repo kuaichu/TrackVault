@@ -1,10 +1,12 @@
 import { createRequire } from "node:module";
-import type { DownloadQualityLevel, DownloadQualityOption, Song, SongAudioProbe, SongAudioProbeMode } from "./types.js";
+import type { DownloadQualityLevel, DownloadQualityOption, QqMusicCookieCheckResult, Song, SongAudioProbe, SongAudioProbeMode } from "./types.js";
 import { getSettings } from "./settings-store.js";
 
 const require = createRequire(import.meta.url);
 
 type QqMusicApi = {
+  cookie: Record<string, string>;
+  uin?: string;
   setCookie: (cookies: string | Record<string, string>) => void;
   api: <T = unknown>(path: string, query?: Record<string, string | number>) => Promise<T>;
 };
@@ -177,10 +179,104 @@ function getQqErrorMessage(error: unknown) {
   return "QQ 音乐接口请求失败";
 }
 
+function parseQqCookie(cookie: string) {
+  const cookieObj: Record<string, string> = {};
+
+  cookie
+    .replace(/\r?\n+/g, "; ")
+    .split(/;\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .forEach((part) => {
+      const equalIndex = part.indexOf("=");
+      const colonIndex = part.indexOf(":");
+      const separatorIndex = equalIndex >= 0
+        ? equalIndex
+        : colonIndex >= 0
+          ? colonIndex
+          : -1;
+      if (separatorIndex <= 0) {
+        return;
+      }
+
+      const key = part.slice(0, separatorIndex).trim().replace(/^"+|"+$/g, "");
+      const value = part.slice(separatorIndex + 1).trim().replace(/^"+|"+$/g, "");
+      if (key && value) {
+        cookieObj[key] = value;
+      }
+    });
+
+  if (Number(cookieObj.login_type) === 2 && cookieObj.wxuin) {
+    cookieObj.uin = cookieObj.wxuin;
+  }
+
+  cookieObj.uin = (cookieObj.uin || "").replace(/\D/g, "");
+  return cookieObj;
+}
+
+function serializeQqCookie(cookieObj: Record<string, string>) {
+  return Object.entries(cookieObj)
+    .filter(([, value]) => value)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("; ");
+}
+
 async function configureQqCookie() {
   const settings = await getSettings();
   const cookie = settings.qqMusicCookie?.trim();
   qqMusic.setCookie(cookie || {});
+}
+
+export async function checkQqMusicCookie(cookie: string): Promise<QqMusicCookieCheckResult> {
+  const trimmed = cookie.trim();
+  if (!trimmed) {
+    return {
+      ok: false,
+      uin: null,
+      message: "请先粘贴 QQ 音乐网页登录后的 Cookie。"
+    };
+  }
+
+  const cookieObj = parseQqCookie(trimmed);
+  if (!cookieObj.uin) {
+    return {
+      ok: false,
+      uin: null,
+      message: "QQ 音乐 Cookie 缺少 uin 或 wxuin，请从 y.qq.com 登录后的 Cookies 里完整复制。"
+    };
+  }
+
+  if (!cookieObj.qm_keyst && !cookieObj.qqmusic_key) {
+    return {
+      ok: false,
+      uin: cookieObj.uin,
+      message: "QQ 音乐 Cookie 缺少 qm_keyst 或 qqmusic_key，无法用于获取会员音源。"
+    };
+  }
+
+  qqMusic.setCookie(cookieObj);
+
+  try {
+    const refreshed = await qqMusic.api<{ musickey?: string }>("user/refresh");
+    const refreshedKey = refreshed.musickey?.trim();
+    const nextCookie: Record<string, string> = {
+      ...cookieObj,
+      ...(refreshedKey ? { qm_keyst: refreshedKey, qqmusic_key: refreshedKey } : {})
+    };
+
+    return {
+      ok: true,
+      uin: nextCookie.uin,
+      message: `QQ 音乐 Cookie 有效：${nextCookie.uin}`,
+      refreshedCookie: serializeQqCookie(nextCookie)
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      uin: cookieObj.uin,
+      message: `QQ 音乐 Cookie 检测失败：${getQqErrorMessage(error)}`
+    };
+  }
 }
 
 async function resolveQqSongUrl(song: Song, level: DownloadQualityLevel): Promise<QqResolvedSong> {

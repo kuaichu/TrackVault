@@ -13,6 +13,7 @@ import type {
   NeteaseImportAuditJob,
   NeteaseImportAuditRequest,
   NeteaseCookieCheckResult,
+  QqMusicCookieCheckResult,
   PersonalRadioKind,
   NeteaseQrCheckResult,
   NeteaseQrStartResult,
@@ -694,6 +695,22 @@ export async function checkNeteaseCookie(cookie: string): Promise<NeteaseCookieC
   }
 
   return (await response.json()) as NeteaseCookieCheckResult;
+}
+
+export async function checkQqMusicCookie(cookie: string): Promise<QqMusicCookieCheckResult> {
+  const response = await apiFetch("/api/settings/qqmusic-cookie/check", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ cookie })
+  });
+
+  if (!response.ok) {
+    throw new Error("检测 QQ 音乐 Cookie 失败");
+  }
+
+  return (await response.json()) as QqMusicCookieCheckResult;
 }
 
 export async function getSession(): Promise<AuthSession> {

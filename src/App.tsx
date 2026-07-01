@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import {
   addSongToPlaylist,
   checkNeteaseCookie,
+  checkQqMusicCookie,
   getAdminConfig as getAdminConfigRemote,
   sendNeteaseCaptcha,
   downloadTaskFile,
@@ -268,6 +269,8 @@ const QR_LOGIN_DEFAULT_MESSAGE = "打开网易云音乐 App 扫码登录。";
 const CELLPHONE_LOGIN_DEFAULT_MESSAGE = "请输入手机号并发送验证码登录。";
 const COOKIE_LOGIN_DEFAULT_MESSAGE = "粘贴网页登录后的 MUSIC_U Cookie。";
 const COOKIE_LOGIN_GUIDE = "Chrome/Edge：F12 -> Application / 应用 -> Cookies -> https://music.163.com -> MUSIC_U -> 复制 Value。Firefox：F12 -> 存储 -> Cookies -> https://music.163.com -> MUSIC_U -> 复制值。直接粘贴值，或 MUSIC_U:\"...\" 都可以。";
+const QQ_COOKIE_LOGIN_DEFAULT_MESSAGE = "粘贴 QQ 音乐网页登录后的 Cookie。";
+const QQ_COOKIE_LOGIN_GUIDE = "Chrome/Edge：F12 -> Application / 应用 -> Cookies -> https://y.qq.com -> 复制 uin、qm_keyst 或 qqmusic_key 等 Cookie。Firefox：F12 -> 存储 -> Cookies -> https://y.qq.com。";
 
 type SongCachePayload = {
   savedAt: number;
@@ -1105,6 +1108,11 @@ export default function App() {
   const [cookieLoginInput, setCookieLoginInput] = useState("");
   const [importingCookie, setImportingCookie] = useState(false);
   const [copyingCookieGuide, setCopyingCookieGuide] = useState(false);
+  const [qqLoginOpen, setQqLoginOpen] = useState(false);
+  const [qqCookieInput, setQqCookieInput] = useState("");
+  const [checkingQqCookie, setCheckingQqCookie] = useState(false);
+  const [copyingQqCookieGuide, setCopyingQqCookieGuide] = useState(false);
+  const [qqLoginMessage, setQqLoginMessage] = useState(QQ_COOKIE_LOGIN_DEFAULT_MESSAGE);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSeconds, setPlaybackSeconds] = useState(initialPlayerState.playbackSeconds);
   const [playbackDuration, setPlaybackDuration] = useState(0);
@@ -1175,7 +1183,8 @@ export default function App() {
   const accountStatusLabel = session.loggedIn || accountProfile?.provider === "netease" ? accountBadgeLabel : "未登录";
   const accountIsLoggedIn = session.loggedIn || accountProfile?.provider === "netease";
   const neteasePlatformStatusLabel = accountIsLoggedIn ? (accountVipEnabled ? "黑胶" : "标准") : "未登录";
-  const qqMusicPlatformStatusLabel = settings.qqMusicCookie?.trim() ? "Cookie 已填" : "可搜索";
+  const hasQqMusicCookie = Boolean(settings.qqMusicCookie?.trim());
+  const qqMusicPlatformStatusLabel = hasQqMusicCookie ? "Cookie 已导入" : "可搜索";
   const activeSearchProviderMode = settings.providerMode === "demo" ? "netease" : settings.providerMode;
   const activeSearchProviderLabel = searchProviderOptions.find((option) => option.value === activeSearchProviderMode)?.label ?? "网易云";
   const hasNeteaseDownloadAuth = accountIsLoggedIn;
@@ -3342,6 +3351,89 @@ export default function App() {
       setQrLoginMessage(COOKIE_LOGIN_GUIDE);
     } finally {
       window.setTimeout(() => setCopyingCookieGuide(false), 900);
+    }
+  }
+
+  function normalizeQqCookieInput(input: string) {
+    return input
+      .trim()
+      .replace(/\r?\n+/g, "; ")
+      .replace(/;\s*;/g, ";")
+      .replace(/;\s*$/g, "");
+  }
+
+  function openQqCookieLogin() {
+    setAccountMenuOpen(false);
+    setQqCookieInput(settings.qqMusicCookie ?? "");
+    setQqLoginMessage(QQ_COOKIE_LOGIN_DEFAULT_MESSAGE);
+    setQqLoginOpen(true);
+  }
+
+  function closeQqLogin() {
+    setQqLoginOpen(false);
+    setQqCookieInput("");
+    setQqLoginMessage(QQ_COOKIE_LOGIN_DEFAULT_MESSAGE);
+  }
+
+  async function handleQqCookieSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (checkingQqCookie) {
+      return;
+    }
+
+    const cookie = normalizeQqCookieInput(qqCookieInput);
+    if (!cookie) {
+      setQqLoginMessage("请输入 QQ 音乐 Cookie。");
+      return;
+    }
+
+    try {
+      setCheckingQqCookie(true);
+      const result = await checkQqMusicCookie(cookie);
+      if (!result.ok) {
+        setQqLoginMessage(result.message);
+        return;
+      }
+
+      const saved = await saveSettings({
+        ...settings,
+        qqMusicCookie: result.refreshedCookie ?? cookie
+      });
+      setSettings(saved);
+      setMessage(`QQ 音乐 Cookie 已导入：${result.uin ?? "QQ 账号"}`);
+      closeQqLogin();
+    } catch (error) {
+      setQqLoginMessage(error instanceof Error ? error.message : "QQ 音乐 Cookie 导入失败");
+    } finally {
+      setCheckingQqCookie(false);
+    }
+  }
+
+  async function handleCopyQqCookieGuide() {
+    try {
+      setCopyingQqCookieGuide(true);
+      await navigator.clipboard.writeText(QQ_COOKIE_LOGIN_GUIDE);
+      setQqLoginMessage("已复制获取 QQ 音乐 Cookie 的操作提示。");
+    } catch {
+      setQqLoginMessage(QQ_COOKIE_LOGIN_GUIDE);
+    } finally {
+      window.setTimeout(() => setCopyingQqCookieGuide(false), 900);
+    }
+  }
+
+  async function handleClearQqCookie() {
+    try {
+      const saved = await saveSettings({
+        ...settings,
+        qqMusicCookie: ""
+      });
+      setSettings(saved);
+      setQqCookieInput("");
+      setQqLoginMessage("已清除 QQ 音乐 Cookie。");
+      setMessage("已清除 QQ 音乐 Cookie。");
+      setAccountMenuOpen(false);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "清除 QQ 音乐 Cookie 失败");
     }
   }
 
@@ -5778,14 +5870,7 @@ export default function App() {
             <button
               type="button"
               className="identity-card"
-              onClick={() => {
-                if (accountIsLoggedIn) {
-                  setAccountMenuOpen((current) => !current);
-                  return;
-                }
-
-                void handleStartQrLogin();
-              }}
+              onClick={() => setAccountMenuOpen((current) => !current)}
             >
               {accountAvatarUrl ? (
                 <img className="identity-avatar" src={accountAvatarUrl} alt={accountDisplayName} />
@@ -5800,57 +5885,69 @@ export default function App() {
                   <b>网易</b>
                   <em>{neteasePlatformStatusLabel}</em>
                 </span>
-                <span className="identity-platform-chip active">
+                <span className={hasQqMusicCookie ? "identity-platform-chip active" : "identity-platform-chip"}>
                   <b>QQ</b>
                   <em>{qqMusicPlatformStatusLabel}</em>
                 </span>
               </div>
             </button>
 
-            {accountIsLoggedIn && accountMenuOpen ? (
+            {accountMenuOpen ? (
               <div className="identity-popover account-center-popover" role="menu" aria-label="账号中心">
                 <div className="account-center-head">
                   <strong>账号中心</strong>
-                  <span>双平台音源策略预留</span>
+                  <span>网易云与 QQ 音乐账号接入</span>
                 </div>
 
-                <section className="platform-account-card active" aria-label="网易云音乐账号">
+                <section className={accountIsLoggedIn ? "platform-account-card active" : "platform-account-card"} aria-label="网易云音乐账号">
                   <div className="platform-account-main">
                     <span className="platform-account-mark netease" aria-hidden="true">网</span>
                     <div className="platform-account-copy">
                       <strong>网易云音乐</strong>
-                      <span>{accountDisplayName} · {accountProviderLabel}</span>
+                      <span>{accountIsLoggedIn ? `${accountDisplayName} · ${accountProviderLabel}` : "未登录 · 播放网易云内容需登录"}</span>
                     </div>
                     <span className={accountVipEnabled ? "platform-account-state vip" : "platform-account-state"}>
                       {accountStatusLabel}
                     </span>
                   </div>
-                  <p>当前用于搜索、播放与下载；双平台接入后按 VIP 与版权自动择源。</p>
-                  <div className="platform-account-actions">
-                    <button type="button" role="menuitem" onClick={openMyUserProfile}>
-                      个人信息
-                    </button>
+                  <p>{accountIsLoggedIn ? "当前用于网易云搜索、播放、下载、歌单与评论操作。" : "扫码、验证码或 MUSIC_U Cookie 均可接入网易云账号。"}</p>
+                  <div className={accountIsLoggedIn ? "platform-account-actions" : "platform-account-actions single"}>
+                    {accountIsLoggedIn ? (
+                      <button type="button" role="menuitem" onClick={openMyUserProfile}>
+                        个人信息
+                      </button>
+                    ) : null}
                     <button type="button" role="menuitem" onClick={() => void handleStartQrLogin()}>
-                      重新登录
+                      {accountIsLoggedIn ? "重新登录" : "登录网易云"}
                     </button>
                   </div>
                 </section>
 
-                <section className="platform-account-card active" aria-label="QQ音乐账号">
+                <section className={hasQqMusicCookie ? "platform-account-card active" : "platform-account-card pending"} aria-label="QQ音乐账号">
                   <div className="platform-account-main">
                     <span className="platform-account-mark qq" aria-hidden="true">Q</span>
                     <div className="platform-account-copy">
                       <strong>QQ 音乐</strong>
-                      <span>已接入搜索与曲库来源</span>
+                      <span>{hasQqMusicCookie ? "已导入网页登录态" : "未授权 · 当前仅可搜索"}</span>
                     </div>
-                    <span className="platform-account-state muted">{qqMusicPlatformStatusLabel}</span>
+                    <span className={hasQqMusicCookie ? "platform-account-state" : "platform-account-state muted"}>{qqMusicPlatformStatusLabel}</span>
                   </div>
-                  <p>当前支持搜索与来源区分；登录、绿钻优先与版权补位会在后续音源策略里接上。</p>
+                  <p>{hasQqMusicCookie ? "用于 QQ 搜索结果的试听、下载与后续绿钻优先策略。" : "导入 y.qq.com Cookie 后，QQ 搜索结果才能尝试会员音源和高品质链接。"}</p>
+                  <div className="platform-account-actions">
+                    <button type="button" role="menuitem" onClick={openQqCookieLogin}>
+                      {hasQqMusicCookie ? "更新 Cookie" : "导入 Cookie"}
+                    </button>
+                    <button type="button" role="menuitem" disabled={!hasQqMusicCookie} onClick={() => void handleClearQqCookie()}>
+                      清除
+                    </button>
+                  </div>
                 </section>
 
-                <button type="button" role="menuitem" className="account-center-danger" onClick={() => void handleClearCookie()}>
-                  退出网易云账号
-                </button>
+                {accountIsLoggedIn ? (
+                  <button type="button" role="menuitem" className="account-center-danger" onClick={() => void handleClearCookie()}>
+                    退出网易云账号
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -8144,6 +8241,58 @@ export default function App() {
                 </button>
               )}
               <button type="button" className="primary-button" onClick={closeQrLogin}>
+                关闭
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {qqLoginOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="QQ 音乐 Cookie 导入" onClick={closeQqLogin}>
+          <section className="qr-login-card qq-login-card" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <p className="eyebrow">QQ Music</p>
+                <h2>QQ 音乐接入</h2>
+              </div>
+              <button type="button" className="modal-close" onClick={closeQqLogin} aria-label="关闭 QQ 音乐 Cookie 导入">
+                ×
+              </button>
+            </header>
+
+            <form className="cellphone-login-form" onSubmit={handleQqCookieSubmit}>
+              <div className="cookie-login-tools">
+                <a className="secondary-button" href="https://y.qq.com/" target="_blank" rel="noreferrer">
+                  打开 QQ 音乐网页
+                </a>
+                <button type="button" className="secondary-button" onClick={() => void handleCopyQqCookieGuide()}>
+                  {copyingQqCookieGuide ? "已复制" : "复制面板路径"}
+                </button>
+              </div>
+              <p className="cookie-login-guide">{QQ_COOKIE_LOGIN_GUIDE}</p>
+              <p className="cookie-login-warning">QQ 音乐当前通过网页登录 Cookie 接入。填入后才会尝试绿钻/高品质音源，后续双平台策略也会用这个状态判断。</p>
+              <label>
+                <span>QQ 音乐 Cookie</span>
+                <textarea
+                  className="cookie-login-input"
+                  value={qqCookieInput}
+                  onChange={(event) => setQqCookieInput(event.target.value)}
+                  placeholder="uin=...; qm_keyst=... 或 qqmusic_key=..."
+                  spellCheck={false}
+                />
+              </label>
+              <button type="submit" className="primary-button wide" disabled={checkingQqCookie}>
+                {checkingQqCookie ? "检测中" : "检测并导入"}
+              </button>
+            </form>
+
+            <p className="qr-message">{qqLoginMessage}</p>
+            <div className="qr-actions">
+              <button type="button" className="secondary-button" onClick={() => setQqCookieInput("")}>
+                清空
+              </button>
+              <button type="button" className="primary-button" onClick={closeQqLogin}>
                 关闭
               </button>
             </div>

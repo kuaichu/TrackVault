@@ -335,6 +335,13 @@ export type NeteaseCookieCheckResult = {
   message: string;
 };
 
+export type QqMusicCookieCheckResult = {
+  ok: boolean;
+  uin: string | null;
+  message: string;
+  refreshedCookie?: string;
+};
+
 export type NeteaseQrStartResult = {
   key: string;
   qrImage: string;

@@ -19,7 +19,7 @@ import { searchProvider, type SearchProviderMode } from "./provider.js";
 import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getPersonalRadioSongs } from "./personal-radio-provider.js";
-import { isQqMusicSong, probeQqSongAudio, resolveQqSongStream } from "./qqmusic-provider.js";
+import { checkQqMusicCookie, isQqMusicSong, probeQqSongAudio, resolveQqSongStream } from "./qqmusic-provider.js";
 import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./settings-store.js";
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
 import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, getTaskFileForDownload, probeSongAudio, resolveDirectDownload, resolveSongStream } from "./task-store.js";
@@ -610,6 +610,11 @@ app.post("/api/admin/config", async (request, response) => {
 app.post("/api/settings/netease-cookie/check", async (request, response) => {
   const cookie = typeof request.body?.cookie === "string" ? request.body.cookie : "";
   response.json(await checkNeteaseCookie(cookie));
+});
+
+app.post("/api/settings/qqmusic-cookie/check", async (request, response) => {
+  const cookie = typeof request.body?.cookie === "string" ? request.body.cookie : "";
+  response.json(await checkQqMusicCookie(cookie));
 });
 
 app.get("/api/account", async (_request, response) => {
