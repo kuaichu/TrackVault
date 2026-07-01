@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import type { DownloadQualityLevel, DownloadQualityOption, PlaylistSongsPage, QqMusicAccountStatus, QqMusicCookieCheckResult, Song, SongAudioProbe, SongAudioProbeMode, UserPlaylist } from "./types.js";
+import type { DownloadQualityLevel, DownloadQualityOption, LyricLine, PlaylistSongsPage, QqMusicAccountStatus, QqMusicCookieCheckResult, Song, SongAudioProbe, SongAudioProbeMode, SongComment, SongCommentRepliesPage, SongCommentsPage, SongLyrics, UserPlaylist } from "./types.js";
 import { getSettings } from "./settings-store.js";
 
 const require = createRequire(import.meta.url);
@@ -48,6 +48,39 @@ type QqSearchSong = {
     size_128mp3?: number;
     size_320mp3?: number;
     size_flac?: number;
+  };
+};
+
+type QqLyricResult = {
+  lyric?: string;
+  trans?: string;
+};
+
+type QqRawComment = {
+  avatarurl?: string;
+  commentid?: string;
+  rootcommentid?: string;
+  nick?: string;
+  rootcommentnick?: string;
+  uin?: string;
+  encrypt_uin?: string;
+  rootcommentcontent?: string;
+  praisenum?: number;
+  ispraise?: number;
+  time?: number;
+  middlecommentcontent?: Array<{
+    subcommentcontent?: string;
+  }> | null;
+};
+
+type QqCommentsResult = {
+  comment?: {
+    commentlist?: QqRawComment[];
+    commenttotal?: number;
+  };
+  hotComment?: {
+    commentlist?: QqRawComment[];
+    commenttotal?: number;
   };
 };
 
@@ -181,6 +214,7 @@ function mapQqSong(song: QqSearchSong): Song | null {
 
   return {
     id: songMid,
+    providerSongId: song.id || song.songid ? String(song.id ?? song.songid) : undefined,
     title: normalizeQqText(song.songname ?? song.title ?? song.name, "未知歌曲"),
     artist: artists.map((artist) => artist.name).join(" / ") || "未知歌手",
     primaryArtistId: artists[0]?.id,
@@ -377,6 +411,96 @@ function sortSongs(songs: Song[], sortMode: string) {
   });
 
   return sortedSongs;
+}
+
+function parseQqTimestamp(raw: string) {
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?$/);
+  if (!match) {
+    return null;
+  }
+
+  const minutes = Number(match[1]);
+  const seconds = Number(match[2]);
+  const fraction = match[3] ? Number(match[3].padEnd(3, "0").slice(0, 3)) / 1000 : 0;
+  return minutes * 60 + seconds + fraction;
+}
+
+function parseQqLrc(raw: string | undefined) {
+  if (!raw?.trim()) {
+    return [];
+  }
+
+  const lines: LyricLine[] = [];
+  for (const row of raw.split(/\r?\n/)) {
+    const stamps = [...row.matchAll(/\[(\d{1,2}:\d{2}(?:[.:]\d{1,3})?)\]/g)];
+    if (stamps.length === 0) {
+      continue;
+    }
+
+    const text = row.replace(/\[(\d{1,2}:\d{2}(?:[.:]\d{1,3})?)\]/g, "").trim();
+    if (!text || /^[a-z]+:/i.test(text)) {
+      continue;
+    }
+
+    for (const stamp of stamps) {
+      const time = parseQqTimestamp(stamp[1]);
+      if (time !== null) {
+        lines.push({ time, text });
+      }
+    }
+  }
+
+  return lines.sort((left, right) => left.time - right.time);
+}
+
+function mergeQqTranslations(lines: LyricLine[], translations: LyricLine[]) {
+  if (translations.length === 0) {
+    return lines;
+  }
+
+  const translationMap = new Map(translations.map((line) => [line.time.toFixed(3), line.text]));
+  return lines.map((line) => ({
+    ...line,
+    translation: translationMap.get(line.time.toFixed(3))
+  }));
+}
+
+function formatQqCommentTime(timestamp: number | undefined) {
+  if (!timestamp) {
+    return "";
+  }
+
+  const milliseconds = timestamp > 10_000_000_000 ? timestamp : timestamp * 1000;
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(milliseconds));
+}
+
+function mapQqComment(comment: QqRawComment): SongComment | null {
+  const id = normalizeQqText(comment.rootcommentid ?? comment.commentid, "");
+  const content = normalizeQqText(comment.rootcommentcontent, "");
+  if (!id || !content) {
+    return null;
+  }
+
+  const inlineReply = comment.middlecommentcontent?.find((item) => item.subcommentcontent?.trim());
+
+  return {
+    id,
+    userId: normalizeQqText(comment.uin ?? comment.encrypt_uin, ""),
+    nickname: normalizeQqText(comment.rootcommentnick ?? comment.nick, "QQ 音乐用户").replace(/^@/, ""),
+    avatarUrl: getQqImageUrl(comment.avatarurl),
+    content,
+    timeText: formatQqCommentTime(comment.time),
+    time: typeof comment.time === "number" ? (comment.time > 10_000_000_000 ? comment.time : comment.time * 1000) : undefined,
+    liked: Number(comment.ispraise ?? 0) === 1,
+    likedCount: Math.max(0, Number(comment.praisenum ?? 0)),
+    replyCount: 0,
+    replyContent: inlineReply?.subcommentcontent?.trim()
+  };
 }
 
 function firstStringByKeys(input: unknown, keys: string[], visited = new Set<unknown>()): string | undefined {
@@ -682,6 +806,83 @@ export async function getQqPlaylistSongs(playlistId: string, page = 1, limit = 1
     sourceTotal: allSongs.length,
     keyword: keyword.trim()
   };
+}
+
+export async function getQqSongLyrics(songId: string, mediaId?: string): Promise<SongLyrics> {
+  const songMid = (mediaId || songId).trim();
+  if (!songMid) {
+    throw new Error("缺少 QQ 音乐 songmid。");
+  }
+
+  await configureQqCookie();
+  const data = await qqMusic.api<QqLyricResult>("lyric", {
+    songmid: songMid
+  });
+  const lines = mergeQqTranslations(parseQqLrc(data.lyric), parseQqLrc(data.trans));
+
+  return {
+    songId,
+    lines,
+    source: "qqmusic"
+  };
+}
+
+export async function getQqSongComments(songId: string, page = 1, limit = 20): Promise<SongCommentsPage> {
+  const safeSongId = songId.trim();
+  if (!safeSongId || !/^\d+$/.test(safeSongId)) {
+    throw new Error("QQ 音乐评论需要数字 songid，当前歌曲缺少该信息。");
+  }
+
+  await configureQqCookie();
+  const safePage = Math.max(1, Math.floor(page) || 1);
+  const safeLimit = Math.min(50, Math.max(5, Math.floor(limit) || 20));
+  const data = await qqMusic.api<QqCommentsResult>("comment", {
+    id: safeSongId,
+    pageNo: safePage,
+    pageSize: safeLimit,
+    biztype: 1,
+    type: 0
+  });
+  const comments = (data.comment?.commentlist ?? []).map(mapQqComment).filter((comment): comment is SongComment => Boolean(comment));
+  const hotComments = safePage === 1
+    ? (data.hotComment?.commentlist ?? []).map(mapQqComment).filter((comment): comment is SongComment => Boolean(comment))
+    : [];
+  const total = Number(data.comment?.commenttotal ?? comments.length);
+
+  return {
+    songId: safeSongId,
+    total: Math.max(0, total),
+    page: safePage,
+    limit: safeLimit,
+    hasMore: comments.length >= safeLimit,
+    hotComments,
+    comments
+  };
+}
+
+export async function getQqSongCommentReplies(songId: string, parentCommentId: string): Promise<SongCommentRepliesPage> {
+  return {
+    songId,
+    parentCommentId,
+    replies: [],
+    total: 0,
+    hasMore: false
+  };
+}
+
+export async function setQqSongCommentLiked(commentId: string, liked: boolean) {
+  await getRequiredQqCookie();
+  const safeCommentId = commentId.trim();
+  if (!safeCommentId) {
+    throw new Error("缺少 QQ 音乐评论 ID。");
+  }
+
+  await qqMusic.api("comment/like", {
+    id: safeCommentId,
+    type: liked ? 1 : 2
+  });
+
+  return { liked };
 }
 
 export async function resolveQqSongStream(song: Song, level: DownloadQualityLevel) {

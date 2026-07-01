@@ -2675,7 +2675,7 @@ export default function App() {
     setCommentIdBusy(setLoadingCommentReplyIds, comment.id, true);
 
     try {
-      const page = await getSongCommentReplies(commentTrack.id, comment.id, cursor, COMMENT_REPLY_PAGE_SIZE);
+      const page = await getSongCommentReplies(commentTrack, comment.id, cursor, COMMENT_REPLY_PAGE_SIZE);
       setCommentRepliesById((current) => {
         const existingReplies = append ? current[comment.id]?.replies ?? [] : [];
         const existingIds = new Set(existingReplies.map((reply) => reply.id));
@@ -2736,7 +2736,7 @@ export default function App() {
     }));
 
     try {
-      await setSongCommentLiked(commentTrack.id, comment.id, nextLiked);
+      await setSongCommentLiked(commentTrack, comment.id, nextLiked);
       setMessage(nextLiked ? "已点赞评论。" : "已取消点赞。");
     } catch (error) {
       updateCommentEverywhere(comment.id, (item) => ({
@@ -2771,7 +2771,7 @@ export default function App() {
     setPostingCommentId(comment.id);
 
     try {
-      const newReply = await replyToSongComment(commentTrack.id, comment.id, content);
+      const newReply = await replyToSongComment(commentTrack, comment.id, content);
       setCommentReplyDrafts((current) => {
         const next = { ...current };
         delete next[comment.id];
@@ -4722,7 +4722,7 @@ export default function App() {
     setLoadingLyrics(true);
     setLyricsError("");
 
-    getLyrics(currentTrack.id)
+    getLyrics(currentTrack)
       .then((data) => {
         if (!cancelled) {
           setLyrics(data.lines);
@@ -4744,7 +4744,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [currentTrack?.id]);
+  }, [currentTrack?.id, currentTrack?.mediaId, currentTrack?.providerSongId, currentTrack?.source]);
 
   useEffect(() => {
     if (!currentTrack) {
@@ -4769,7 +4769,7 @@ export default function App() {
     setLoadingComments(true);
     setCommentsError("");
 
-    getSongComments(commentTrack.id, commentPage, COMMENT_PAGE_SIZE)
+    getSongComments(commentTrack, commentPage, COMMENT_PAGE_SIZE)
       .then((data) => {
         if (!cancelled) {
           setSongComments(data);
@@ -4799,7 +4799,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [rightPanelTab, commentTrack?.id, commentPage, commentRefreshKey]);
+  }, [rightPanelTab, commentTrack?.id, commentTrack?.mediaId, commentTrack?.providerSongId, commentTrack?.source, commentPage, commentRefreshKey]);
 
   useEffect(() => {
     if (!songDetailSong) {
@@ -4819,12 +4819,12 @@ export default function App() {
 
     const loadDetail = async () => {
       const [lyricsResult, commentsResult, playbackProbeResult, downloadProbeResult] = await Promise.allSettled([
-        getLyrics(songDetailSong.id),
-        getSongComments(songDetailSong.id, 1, 6),
-        accountIsLoggedIn
+        getLyrics(songDetailSong),
+        getSongComments(songDetailSong, 1, 6),
+        accountIsLoggedIn || songDetailSong.source === "qqmusic"
           ? getSongAudioProbe(songDetailSong, playbackLevel, "playback")
           : Promise.reject(new Error("登录后检测实际播放音源")),
-        accountIsLoggedIn
+        accountIsLoggedIn || songDetailSong.source === "qqmusic"
           ? getSongAudioProbe(songDetailSong, downloadLevel, "download")
           : Promise.reject(new Error("登录后检测实际下载音源"))
       ]);
@@ -4868,7 +4868,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [songDetailSong?.id, qualitySelections, qualitySelectionTouched, settings.defaultPlaybackQuality, settings.defaultDownloadQuality, accountIsLoggedIn]);
+  }, [songDetailSong?.id, songDetailSong?.mediaId, songDetailSong?.providerSongId, songDetailSong?.source, qualitySelections, qualitySelectionTouched, settings.defaultPlaybackQuality, settings.defaultDownloadQuality, accountIsLoggedIn]);
 
   useEffect(() => {
     if (!userProfileTarget) {

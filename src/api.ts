@@ -424,8 +424,25 @@ export async function getHeartbeatSongs(songId: string, playlistId: string, star
   return data.songs;
 }
 
-export async function getLyrics(songId: string): Promise<SongLyrics> {
-  const response = await apiFetch(`/api/lyrics/${encodeURIComponent(songId)}`);
+function getSongIdentity(song: Song | string) {
+  if (typeof song === "string") {
+    return { id: song, params: new URLSearchParams() };
+  }
+
+  return {
+    id: song.id,
+    params: new URLSearchParams({
+      source: song.source,
+      ...(song.mediaId ? { mediaId: song.mediaId } : {}),
+      ...(song.providerSongId ? { providerSongId: song.providerSongId } : {})
+    })
+  };
+}
+
+export async function getLyrics(song: Song | string): Promise<SongLyrics> {
+  const identity = getSongIdentity(song);
+  const query = identity.params.toString();
+  const response = await apiFetch(`/api/lyrics/${encodeURIComponent(identity.id)}${query ? `?${query}` : ""}`);
   if (!response.ok) {
     const data = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new Error(data?.message ?? "获取歌词失败");
@@ -435,12 +452,12 @@ export async function getLyrics(songId: string): Promise<SongLyrics> {
   return data.lyrics;
 }
 
-export async function getSongComments(songId: string, page = 1, limit = 20): Promise<SongCommentsPage> {
-  const params = new URLSearchParams({
-    page: String(page),
-    limit: String(limit)
-  });
-  const response = await apiFetch(`/api/comments/songs/${encodeURIComponent(songId)}?${params.toString()}`);
+export async function getSongComments(song: Song | string, page = 1, limit = 20): Promise<SongCommentsPage> {
+  const identity = getSongIdentity(song);
+  const params = new URLSearchParams(identity.params);
+  params.set("page", String(page));
+  params.set("limit", String(limit));
+  const response = await apiFetch(`/api/comments/songs/${encodeURIComponent(identity.id)}?${params.toString()}`);
   if (!response.ok) {
     const data = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new Error(data?.message ?? "获取评论失败");
@@ -449,12 +466,12 @@ export async function getSongComments(songId: string, page = 1, limit = 20): Pro
   return (await response.json()) as SongCommentsPage;
 }
 
-export async function getSongCommentReplies(songId: string, commentId: string, time = -1, limit = 20): Promise<SongCommentRepliesPage> {
-  const params = new URLSearchParams({
-    time: String(time),
-    limit: String(limit)
-  });
-  const response = await apiFetch(`/api/comments/songs/${encodeURIComponent(songId)}/${encodeURIComponent(commentId)}/replies?${params.toString()}`);
+export async function getSongCommentReplies(song: Song | string, commentId: string, time = -1, limit = 20): Promise<SongCommentRepliesPage> {
+  const identity = getSongIdentity(song);
+  const params = new URLSearchParams(identity.params);
+  params.set("time", String(time));
+  params.set("limit", String(limit));
+  const response = await apiFetch(`/api/comments/songs/${encodeURIComponent(identity.id)}/${encodeURIComponent(commentId)}/replies?${params.toString()}`);
   if (!response.ok) {
     const data = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new Error(data?.message ?? "获取评论回复失败");
@@ -481,8 +498,10 @@ export async function getSongAudioProbe(song: Song, level: DownloadQualityLevel,
   return data.probe;
 }
 
-export async function setSongCommentLiked(songId: string, commentId: string, liked: boolean): Promise<boolean> {
-  const response = await apiFetch(`/api/comments/songs/${encodeURIComponent(songId)}/${encodeURIComponent(commentId)}/like`, {
+export async function setSongCommentLiked(song: Song | string, commentId: string, liked: boolean): Promise<boolean> {
+  const identity = getSongIdentity(song);
+  const query = identity.params.toString();
+  const response = await apiFetch(`/api/comments/songs/${encodeURIComponent(identity.id)}/${encodeURIComponent(commentId)}/like${query ? `?${query}` : ""}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -498,8 +517,10 @@ export async function setSongCommentLiked(songId: string, commentId: string, lik
   return Boolean(data.liked);
 }
 
-export async function replyToSongComment(songId: string, commentId: string, content: string): Promise<SongComment | null> {
-  const response = await apiFetch(`/api/comments/songs/${encodeURIComponent(songId)}/${encodeURIComponent(commentId)}/replies`, {
+export async function replyToSongComment(song: Song | string, commentId: string, content: string): Promise<SongComment | null> {
+  const identity = getSongIdentity(song);
+  const query = identity.params.toString();
+  const response = await apiFetch(`/api/comments/songs/${encodeURIComponent(identity.id)}/${encodeURIComponent(commentId)}/replies${query ? `?${query}` : ""}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"

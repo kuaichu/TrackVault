@@ -19,6 +19,7 @@ export type SongArtist = {
 
 export type Song = {
   id: string;
+  providerSongId?: string;
   title: string;
   artist: string;
   primaryArtistId?: string;
@@ -74,7 +75,7 @@ export type LyricLine = {
 export type SongLyrics = {
   songId: string;
   lines: LyricLine[];
-  source: "lyric_new" | "lyric";
+  source: "lyric_new" | "lyric" | "qqmusic";
 };
 
 export type SongComment = {
