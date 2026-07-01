@@ -9,6 +9,7 @@ import { getCurrentUserKey, getSession, loginSession, logoutSession } from "./ac
 import { getCloudSongs } from "./cloud-provider.js";
 import { getSongCommentReplies, getSongComments, replyToSongComment, setSongCommentLiked } from "./comment-provider.js";
 import { getDiscoverSongs } from "./discover-provider.js";
+import { addFlacMetadataToDownload, isFlacDownloadTarget } from "./download-metadata.js";
 import { getHeartbeatSongs } from "./heartbeat-provider.js";
 import { getArtistProfile, resolveArtistIdByName } from "./artist-provider.js";
 import { getPlayHistory, getSearchHistory, removeSearchHistory, savePlayHistory, saveSearchHistory } from "./history-store.js";
@@ -669,6 +670,7 @@ function getDownloadSongFromQuery(request: express.Request): Song {
     artist: typeof request.query.artist === "string" ? request.query.artist : "",
     album: typeof request.query.album === "string" ? request.query.album : "",
     mediaId: typeof request.query.mediaId === "string" ? request.query.mediaId : undefined,
+    coverUrl: typeof request.query.coverUrl === "string" ? request.query.coverUrl : undefined,
     duration: typeof request.query.duration === "string" ? request.query.duration : "",
     quality: "",
     availableQualities: [],
@@ -724,6 +726,27 @@ app.get("/api/download/proxy", async (request, response) => {
     response.setHeader("Content-Type", contentType);
     response.setHeader("Content-Disposition", buildContentDisposition(directDownload.filename));
     response.setHeader("Access-Control-Allow-Origin", "*");
+
+    const shouldTagFlac = !request.headers.range && isFlacDownloadTarget({
+      filename: directDownload.filename,
+      type: directDownload.type,
+      contentType
+    });
+
+    if (shouldTagFlac) {
+      const originalBytes = new Uint8Array(await upstream.arrayBuffer());
+      const taggedBytes = await addFlacMetadataToDownload({
+        song,
+        bytes: originalBytes,
+        filename: directDownload.filename,
+        type: directDownload.type,
+        contentType
+      });
+      response.setHeader("Content-Type", "audio/flac");
+      response.setHeader("Content-Length", String(taggedBytes.byteLength));
+      response.send(Buffer.from(taggedBytes));
+      return;
+    }
 
     if (contentLength) {
       response.setHeader("Content-Length", contentLength);

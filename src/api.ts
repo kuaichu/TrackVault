@@ -138,6 +138,10 @@ export function getDirectDownloadUrl(song: Song, level: DownloadQualityLevel) {
     params.set("mediaId", song.mediaId);
   }
 
+  if (song.coverUrl) {
+    params.set("coverUrl", song.coverUrl);
+  }
+
   return `/api/download/direct?${params.toString()}`;
 }
 
@@ -155,6 +159,10 @@ export function getServerDownloadUrl(song: Song, level: DownloadQualityLevel) {
 
   if (song.mediaId) {
     params.set("mediaId", song.mediaId);
+  }
+
+  if (song.coverUrl) {
+    params.set("coverUrl", song.coverUrl);
   }
 
   return `/api/download/proxy?${params.toString()}`;
@@ -224,6 +232,45 @@ function concatBytes(chunks: Uint8Array[]) {
   return output;
 }
 
+function getId3v2TagLength(bytes: Uint8Array) {
+  if (
+    bytes.length < 10 ||
+    bytes[0] !== 0x49 ||
+    bytes[1] !== 0x44 ||
+    bytes[2] !== 0x33 ||
+    bytes[6] > 0x7f ||
+    bytes[7] > 0x7f ||
+    bytes[8] > 0x7f ||
+    bytes[9] > 0x7f
+  ) {
+    return 0;
+  }
+
+  const tagSize = (bytes[6] << 21) | (bytes[7] << 14) | (bytes[8] << 7) | bytes[9];
+  const hasFooter = Boolean(bytes[5] & 0x10);
+  return 10 + tagSize + (hasFooter ? 10 : 0);
+}
+
+function findFlacStartOffset(bytes: Uint8Array) {
+  if (bytes.length >= 4 && bytes[0] === 0x66 && bytes[1] === 0x4c && bytes[2] === 0x61 && bytes[3] === 0x43) {
+    return 0;
+  }
+
+  const id3Length = getId3v2TagLength(bytes);
+  if (
+    id3Length > 0 &&
+    bytes.length >= id3Length + 4 &&
+    bytes[id3Length] === 0x66 &&
+    bytes[id3Length + 1] === 0x4c &&
+    bytes[id3Length + 2] === 0x61 &&
+    bytes[id3Length + 3] === 0x43
+  ) {
+    return id3Length;
+  }
+
+  return -1;
+}
+
 function buildVorbisCommentBlock(song: Song, lyricsText: string) {
   const encoder = new TextEncoder();
   const artistText = song.artists?.length ? song.artists.map((artist) => artist.name).join("; ") : song.artist;
@@ -289,11 +336,13 @@ function buildFlacMetadataBlock(type: number, data: Uint8Array, isLast: boolean)
 }
 
 function injectFlacMetadata(input: ArrayBuffer, song: Song, lyricsText: string, cover: DownloadCoverData | null) {
-  const bytes = new Uint8Array(input);
-  if (bytes.length < 8 || bytes[0] !== 0x66 || bytes[1] !== 0x4c || bytes[2] !== 0x61 || bytes[3] !== 0x43) {
-    return bytes;
+  const inputBytes = new Uint8Array(input);
+  const flacStartOffset = findFlacStartOffset(inputBytes);
+  if (flacStartOffset < 0) {
+    return inputBytes;
   }
 
+  const bytes = inputBytes.slice(flacStartOffset);
   const blocks: Array<{ type: number; data: Uint8Array }> = [];
   let offset = 4;
 
@@ -304,7 +353,7 @@ function injectFlacMetadata(input: ArrayBuffer, song: Song, lyricsText: string, 
     offset += 4;
 
     if (offset + length > bytes.length) {
-      return bytes;
+      return inputBytes;
     }
 
     blocks.push({ type, data: bytes.slice(offset, offset + length) });
@@ -317,7 +366,7 @@ function injectFlacMetadata(input: ArrayBuffer, song: Song, lyricsText: string, 
 
   const streamInfo = blocks.find((block) => block.type === 0);
   if (!streamInfo) {
-    return bytes;
+    return inputBytes;
   }
 
   const pictureBlock = buildFlacPictureBlock(cover);

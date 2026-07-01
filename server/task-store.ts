@@ -8,6 +8,7 @@ import type { SoundQualityType } from "NeteaseCloudMusicApi";
 import { getCurrentUserKey } from "./account-store.js";
 import { getDatabase, isSqliteAvailable, readJsonStore, updateJsonStore } from "./database.js";
 import { buildMediaCredentialPlan, extractClientSessionIdFromUserKey } from "./media-security.js";
+import { addFlacMetadataToDownload, isFlacDownloadTarget } from "./download-metadata.js";
 import { isQqMusicSong, probeQqSongAudio, resolveQqDirectDownload } from "./qqmusic-provider.js";
 import { getSettings } from "./settings-store.js";
 import type { DownloadQualityLevel, DownloadTask, NeteaseCookieCheckResult, Song, SongAudioProbe, SongAudioProbeMode } from "./types.js";
@@ -787,6 +788,7 @@ async function downloadSongFile(task: DownloadTask, song: Song) {
     response.headers.get("content-type"),
     resolvedSong.type
   );
+  const contentType = response.headers.get("content-type");
   const safeFileName = sanitizeFileName(`${task.title}-${task.artist}-${task.songId}`);
   const outputPath = path.join(outputDir, `${safeFileName}.${extension}`);
   const writeStream = fs.createWriteStream(outputPath);
@@ -811,11 +813,25 @@ async function downloadSongFile(task: DownloadTask, song: Song) {
 
   await pipeline(progressStream, writeStream);
 
+  let finalFileSizeBytes = contentLength > 0 ? contentLength : receivedBytes;
+  if (isFlacDownloadTarget({ filename: outputPath, type: resolvedSong.type, contentType })) {
+    const originalBytes = await fsPromises.readFile(outputPath);
+    const taggedBytes = await addFlacMetadataToDownload({
+      song,
+      bytes: originalBytes,
+      filename: outputPath,
+      type: resolvedSong.type,
+      contentType
+    });
+    await fsPromises.writeFile(outputPath, taggedBytes);
+    finalFileSizeBytes = taggedBytes.byteLength;
+  }
+
   task.progress = 100;
   task.status = "done";
   task.outputPath = outputPath;
   task.downloadedDuration = formatDuration(Number(resolvedSong.time ?? parseDurationToMs(song.duration)));
-  task.fileSizeBytes = contentLength > 0 ? contentLength : receivedBytes;
+  task.fileSizeBytes = finalFileSizeBytes;
   scheduleTaskPersist();
 }
 
