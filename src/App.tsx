@@ -5817,11 +5817,14 @@ export default function App() {
         <div className="playlist-copy">
           <strong>{playlist.name}</strong>
           <span>{playlist.owned ? "我创建" : playlist.creatorName}</span>
-          <p>{playlist.trackCount} 首 · 播放 {playlist.playCount.toLocaleString()}</p>
+          <p>
+            <span>{playlist.trackCount} 首</span>
+            <span>播放 {formatCompactCount(playlist.playCount)}</span>
+          </p>
         </div>
-        <span className="playlist-card-action">
+        <span className={isLoadingThisPlaylist ? "playlist-card-action loading" : isActivePlaylist ? "playlist-card-action current" : "playlist-card-action"}>
           {isLoadingThisPlaylist || isActivePlaylist ? null : <OperationIcon name="enter" />}
-          <span>{isLoadingThisPlaylist ? "载入中" : isActivePlaylist ? "当前" : "进入"}</span>
+          <span>{isLoadingThisPlaylist ? "载入中" : isActivePlaylist ? "当前" : "打开"}</span>
         </span>
       </button>
     );
