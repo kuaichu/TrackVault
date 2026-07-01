@@ -532,7 +532,8 @@ app.get("/api/stream", async (request, response) => {
     response.status(upstream.status);
     Readable.fromWeb(upstream.body as any).pipe(response);
   } catch (error) {
-    response.status(error instanceof MediaAccessError ? error.status : 502).json({
+    const status = error instanceof MediaAccessError ? error.status : source === "qqmusic" ? 409 : 502;
+    response.status(status).json({
       message: error instanceof Error ? error.message : "音频流获取失败"
     });
   }
