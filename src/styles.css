@@ -3033,25 +3033,48 @@ input[type="range"] {
   margin-top: 4px;
 }
 
-.song-availability-badges {
+.result-quality-line {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin-top: 4px;
+}
+
+.result-copy .result-quality-text {
+  display: block;
+  min-width: 0;
+  margin-top: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.song-availability-badges {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
   gap: 5px;
-  margin-top: 7px;
+  margin-top: 0;
+}
+
+.result-quality-line .song-availability-badges {
+  display: inline-flex;
+  margin-top: 0;
 }
 
 .song-availability-badge {
   display: inline-flex;
   align-items: center;
   min-width: 0;
-  height: 20px;
-  padding: 0 7px;
+  height: 18px;
+  padding: 0 6px;
   border-radius: 999px;
-  font-size: 0.68rem;
+  font-size: 0.64rem;
   font-style: normal;
   font-weight: 900;
   line-height: 1;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 

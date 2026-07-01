@@ -1403,6 +1403,15 @@ export default function App() {
     );
   }
 
+  function renderSongQualityMeta(song: Song) {
+    return (
+      <div className="result-quality-line">
+        <span className="result-quality-text">{getSongQualityLine(song)}</span>
+        {renderSongAvailabilityBadges(song)}
+      </div>
+    );
+  }
+
   function getProbeStatusText(probe: SongAudioProbe | null, fallbackLabel: string) {
     if (!probe) {
       return `待检测 · 将请求 ${fallbackLabel}`;
@@ -7457,8 +7466,7 @@ export default function App() {
                       <CoverArt song={song} className="result-cover" />
                       <div className="result-copy">
                         <strong>{song.title}</strong>
-                        <span>{getSongQualityLine(song)}</span>
-                        {renderSongAvailabilityBadges(song)}
+                        {renderSongQualityMeta(song)}
                       </div>
                     </div>
 
@@ -7761,8 +7769,7 @@ export default function App() {
                         <CoverArt song={song} className="result-cover" />
                         <div className="result-copy">
                           <strong>{song.title}</strong>
-                          <span>{getSongQualityLine(song)}</span>
-                          {renderSongAvailabilityBadges(song)}
+                          {renderSongQualityMeta(song)}
                         </div>
                       </div>
 
