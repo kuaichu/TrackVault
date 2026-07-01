@@ -8130,9 +8130,11 @@ export default function App() {
             aria-label="展开播放侧栏"
             title="展开播放侧栏"
           >
-            <PlayerIcon name="queue" />
-            <span>队列</span>
-            <strong>{playQueue.length}</strong>
+            <span className="right-panel-restore-core">
+              <PlayerIcon name="queue" />
+              <strong>{playQueue.length}</strong>
+            </span>
+            <span className="right-panel-restore-label">队列</span>
           </button>
         ) : (
         <aside className="utility-panel play-sidebar">

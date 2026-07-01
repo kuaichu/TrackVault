@@ -10832,7 +10832,7 @@ body {
 
 /* Right player sidebar can collapse so the main workspace gets more room. */
 .app-layout.right-panel-collapsed {
-  grid-template-columns: 220px minmax(0, 1fr) 56px;
+  grid-template-columns: 220px minmax(0, 1fr) 48px;
 }
 
 .play-sidebar-header {
@@ -10856,10 +10856,12 @@ body {
 }
 
 .play-sidebar-collapse {
-  width: 38px;
-  height: 38px;
+  width: 40px;
+  height: 40px;
   border-radius: 14px;
   align-self: center;
+  background: rgba(18, 26, 39, 0.88);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .play-sidebar-collapse .quality-chevron {
@@ -10880,14 +10882,30 @@ body {
 .right-panel-restore {
   grid-column: 3;
   align-self: stretch;
-  width: 56px;
+  width: 48px;
   min-width: 0;
-  padding: 14px 8px;
-  border-radius: 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: start;
+  gap: 18px;
+  padding: 14px 6px;
+  border-radius: 20px;
   background:
     linear-gradient(180deg, rgba(18, 27, 42, 0.86), rgba(9, 14, 22, 0.88)),
     var(--panel-bg);
   backdrop-filter: blur(18px);
+}
+
+.right-panel-restore-core {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .right-panel-restore .player-svg {
@@ -10895,22 +10913,32 @@ body {
   height: 20px;
 }
 
-.right-panel-restore span {
-  writing-mode: vertical-rl;
-  letter-spacing: 0.18em;
+.right-panel-restore-label {
+  display: inline-block;
+  margin-top: 2px;
+  color: rgba(222, 231, 243, 0.72);
+  transform: rotate(90deg);
+  transform-origin: center;
+  white-space: nowrap;
+  letter-spacing: 0.08em;
   font-size: 0.78rem;
   font-weight: 900;
 }
 
-.right-panel-restore strong {
-  min-width: 24px;
-  height: 24px;
+.right-panel-restore-core strong {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 20px;
+  height: 20px;
   display: grid;
   place-items: center;
   border-radius: 999px;
-  background: rgba(255, 180, 93, 0.14);
+  background: rgba(255, 180, 93, 0.22);
   color: #ffe1b1;
-  font-size: 0.72rem;
+  border: 1px solid rgba(255, 180, 93, 0.28);
+  font-size: 0.66rem;
+  line-height: 1;
 }
 
 @media (max-width: 1120px) {
@@ -10922,20 +10950,22 @@ body {
     grid-column: auto;
     width: 100%;
     min-height: 52px;
-    grid-auto-flow: column;
-    grid-template-columns: auto auto 1fr;
+    flex-direction: row;
     justify-content: start;
-    gap: 10px;
+    gap: 12px;
+    padding: 8px 12px;
     border-radius: 16px;
   }
 
-  .right-panel-restore span {
-    writing-mode: horizontal-tb;
+  .right-panel-restore-label {
+    margin-top: 0;
+    transform: none;
     letter-spacing: 0;
   }
 
-  .right-panel-restore strong {
-    justify-self: end;
+  .right-panel-restore-core {
+    width: 36px;
+    height: 36px;
   }
 }
 
