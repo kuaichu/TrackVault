@@ -1203,6 +1203,7 @@ export default function App() {
   const [playlistPickerSong, setPlaylistPickerSong] = useState<Song | null>(null);
   const [playlistPickerSongs, setPlaylistPickerSongs] = useState<Song[]>([]);
   const [playlistPickerSourcePlaylistId, setPlaylistPickerSourcePlaylistId] = useState<string | null>(null);
+  const [playlistPickerTargetPlaylistId, setPlaylistPickerTargetPlaylistId] = useState<string | null>(null);
   const [songContextMenu, setSongContextMenu] = useState<SongContextMenuState | null>(null);
   const [playlistPickerLoading, setPlaylistPickerLoading] = useState(false);
   const [playlistPickerError, setPlaylistPickerError] = useState("");
@@ -3794,6 +3795,7 @@ export default function App() {
     setPlaylistPickerSong(safeSongs[0]);
     setPlaylistPickerSongs(safeSongs);
     setPlaylistPickerSourcePlaylistId(resultSource === "playlist" ? activePlaylist?.id ?? null : null);
+    setPlaylistPickerTargetPlaylistId(null);
     setPlaylistPickerError("");
 
     if (playlists.length > 0) {
@@ -3817,6 +3819,24 @@ export default function App() {
 
   async function handleOpenPlaylistPicker(song: Song) {
     await handleOpenPlaylistPickerForSongs([song]);
+  }
+
+  function closePlaylistPicker() {
+    setPlaylistPickerSong(null);
+    setPlaylistPickerSongs([]);
+    setPlaylistPickerSourcePlaylistId(null);
+    setPlaylistPickerTargetPlaylistId(null);
+    setPlaylistPickerError("");
+  }
+
+  function handleConfirmPlaylistPicker() {
+    const playlist = availablePlaylistPickerPlaylists.find((item) => item.id === playlistPickerTargetPlaylistId);
+    if (!playlist) {
+      setPlaylistPickerError("请选择一个要收藏到的歌单。");
+      return;
+    }
+
+    void handleAddSongToPlaylist(playlist);
   }
 
   async function handleAddSongToPlaylist(playlist: UserPlaylist) {
@@ -3873,6 +3893,7 @@ export default function App() {
       setPlaylistPickerSong(null);
       setPlaylistPickerSongs([]);
       setPlaylistPickerSourcePlaylistId(null);
+      setPlaylistPickerTargetPlaylistId(null);
     } catch (error) {
       setPlaylistPickerError(error instanceof Error ? error.message : "添加到歌单失败");
     } finally {
@@ -4966,6 +4987,21 @@ export default function App() {
   }, [isPlayerExpanded, activeLyricIndex, playbackSeconds, lyrics]);
 
   useEffect(() => {
+    if (!playlistPickerSong || playlistPickerLoading) {
+      return;
+    }
+
+    if (availablePlaylistPickerPlaylists.length === 0) {
+      setPlaylistPickerTargetPlaylistId(null);
+      return;
+    }
+
+    if (!availablePlaylistPickerPlaylists.some((playlist) => playlist.id === playlistPickerTargetPlaylistId)) {
+      setPlaylistPickerTargetPlaylistId(availablePlaylistPickerPlaylists[0].id);
+    }
+  }, [availablePlaylistPickerPlaylists, playlistPickerLoading, playlistPickerSong, playlistPickerTargetPlaylistId]);
+
+  useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setIsPlayerExpanded(false);
@@ -5288,6 +5324,10 @@ export default function App() {
   const availablePlaylistPickerPlaylists = useMemo(
     () => createdPlaylists.filter((playlist) => playlist.id !== playlistPickerSourcePlaylistId),
     [createdPlaylists, playlistPickerSourcePlaylistId]
+  );
+  const selectedPlaylistPickerPlaylist = useMemo(
+    () => availablePlaylistPickerPlaylists.find((playlist) => playlist.id === playlistPickerTargetPlaylistId) ?? null,
+    [availablePlaylistPickerPlaylists, playlistPickerTargetPlaylistId]
   );
   const collectedPlaylists = useMemo(() => playlists.filter((playlist) => !playlist.owned), [playlists]);
   const playlistTotalPages = useMemo(
@@ -8605,14 +8645,15 @@ export default function App() {
       ) : null}
 
       {playlistPickerSong ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="收藏到歌单" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSongs([]); setPlaylistPickerSourcePlaylistId(null); }}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="收藏到歌单" onClick={closePlaylistPicker}>
           <section className="playlist-picker-card" onClick={(event) => event.stopPropagation()}>
             <header>
               <div>
                 <p className="eyebrow">Add To Playlist</p>
                 <h2>收藏到我的歌单</h2>
+                <span>选择一个自建歌单，已自动排除歌曲所在歌单。</span>
               </div>
-              <button type="button" className="modal-close" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSongs([]); setPlaylistPickerSourcePlaylistId(null); }} aria-label="关闭收藏到歌单">
+              <button type="button" className="modal-close" onClick={closePlaylistPicker} aria-label="关闭收藏到歌单">
                 ×
               </button>
             </header>
@@ -8631,35 +8672,40 @@ export default function App() {
               <div className="empty-box">正在读取我的歌单...</div>
             ) : availablePlaylistPickerPlaylists.length > 0 ? (
               <div className="playlist-picker-list">
-                {availablePlaylistPickerPlaylists.map((playlist) => (
-                  <button
-                    key={playlist.id}
-                    type="button"
-                    className="playlist-picker-option"
-                    disabled={addingToPlaylistId !== null}
-                    onClick={() => void handleAddSongToPlaylist(playlist)}
-                  >
-                    <CoverArt
-                      song={{
-                        id: playlist.id,
-                        title: playlist.name,
-                        artist: playlist.creatorName,
-                        album: "歌单",
-                        coverUrl: playlist.coverUrl,
-                        duration: "00:00",
-                        quality: "歌单",
-                        availableQualities: [{ level: "standard", label: "128K" }],
-                        source: "netease"
-                      }}
-                      className="playlist-picker-cover"
-                    />
-                    <span>
-                      <strong>{playlist.name}</strong>
-                      <small>{playlist.trackCount} 首 · {playlist.creatorName}</small>
-                    </span>
-                    <em>{addingToPlaylistId === playlist.id ? "添加中" : playlistPickerSongs.length > 1 ? `添加 ${playlistPickerSongs.length} 首` : "添加"}</em>
-                  </button>
-                ))}
+                {availablePlaylistPickerPlaylists.map((playlist) => {
+                  const selected = playlist.id === playlistPickerTargetPlaylistId;
+
+                  return (
+                    <button
+                      key={playlist.id}
+                      type="button"
+                      className={selected ? "playlist-picker-option selected" : "playlist-picker-option"}
+                      disabled={addingToPlaylistId !== null}
+                      onClick={() => setPlaylistPickerTargetPlaylistId(playlist.id)}
+                      onDoubleClick={() => void handleAddSongToPlaylist(playlist)}
+                    >
+                      <CoverArt
+                        song={{
+                          id: playlist.id,
+                          title: playlist.name,
+                          artist: playlist.creatorName,
+                          album: "歌单",
+                          coverUrl: playlist.coverUrl,
+                          duration: "00:00",
+                          quality: "歌单",
+                          availableQualities: [{ level: "standard", label: "128K" }],
+                          source: "netease"
+                        }}
+                        className="playlist-picker-cover"
+                      />
+                      <span>
+                        <strong>{playlist.name}</strong>
+                        <small>{playlist.trackCount} 首 · {playlist.creatorName}</small>
+                      </span>
+                      <em>{addingToPlaylistId === playlist.id ? "收藏中" : selected ? "✓" : "选择"}</em>
+                    </button>
+                  );
+                })}
               </div>
             ) : (
               <div className="empty-box">
@@ -8669,12 +8715,15 @@ export default function App() {
               </div>
             )}
 
-            <div className="qr-actions">
-              <button type="button" className="secondary-button" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSongs([]); setPlaylistPickerSourcePlaylistId(null); }}>
+            <div className="playlist-picker-actions">
+              <button type="button" className="secondary-button" onClick={closePlaylistPicker}>
                 取消
               </button>
-              <button type="button" className="primary-button" onClick={() => { setPlaylistPickerSong(null); setPlaylistPickerSongs([]); setPlaylistPickerSourcePlaylistId(null); navigateTopLevel("playlists"); }}>
+              <button type="button" className="secondary-button playlist-picker-view" onClick={() => { closePlaylistPicker(); navigateTopLevel("playlists"); }}>
                 查看歌单
+              </button>
+              <button type="button" className="primary-button playlist-picker-submit" disabled={!selectedPlaylistPickerPlaylist || Boolean(addingToPlaylistId)} onClick={handleConfirmPlaylistPicker}>
+                {addingToPlaylistId ? "收藏中" : `收藏 ${playlistPickerSongs.length || 1} 首`}
               </button>
             </div>
           </section>
