@@ -1089,6 +1089,7 @@ export default function App() {
   const [adminConfigTokenInput, setAdminConfigTokenInput] = useState("");
   const [session, setSession] = useState<AuthSession>({ loggedIn: false, profile: null });
   const [searching, setSearching] = useState(false);
+  const [activeSearchChip, setActiveSearchChip] = useState("");
   const [loadingPlaylists, setLoadingPlaylists] = useState(false);
   const [loadingPlaylistSongs, setLoadingPlaylistSongs] = useState(false);
   const [loadingArtist, setLoadingArtist] = useState(false);
@@ -1622,6 +1623,12 @@ export default function App() {
     });
   }
 
+  function handleQuickSearch(keyword: string) {
+    setActiveSearchChip(keyword);
+    setQuery(keyword);
+    void runSearch(keyword);
+  }
+
   function getSongArtists(song: Song): SongArtist[] {
     if (Array.isArray(song.artists) && song.artists.length > 0) {
       return song.artists
@@ -1684,6 +1691,7 @@ export default function App() {
     } finally {
       if (requestId === searchRequestIdRef.current) {
         setSearching(false);
+        setActiveSearchChip("");
       }
     }
   }
@@ -7897,7 +7905,13 @@ export default function App() {
                     <h2>从常听歌手开始</h2>
                     <div className="quick-row">
                       {quickKeywords.map((keyword) => (
-                        <button key={keyword} type="button" className="quick-chip" onClick={() => { setQuery(keyword); void runSearch(keyword); }}>
+                        <button
+                          key={keyword}
+                          type="button"
+                          className={activeSearchChip === keyword && searching ? "quick-chip searching" : "quick-chip"}
+                          aria-busy={activeSearchChip === keyword && searching}
+                          onClick={() => handleQuickSearch(keyword)}
+                        >
                           {keyword}
                         </button>
                       ))}
@@ -7912,8 +7926,13 @@ export default function App() {
                     ) : (
                       <div className="quick-row">
                         {searchHistory.map((keyword) => (
-                          <div key={keyword} className="quick-chip history-chip">
-                            <button type="button" className="history-chip-label" onClick={() => { setQuery(keyword); void runSearch(keyword); }}>
+                          <div key={keyword} className={activeSearchChip === keyword && searching ? "quick-chip history-chip searching" : "quick-chip history-chip"}>
+                            <button
+                              type="button"
+                              className="history-chip-label"
+                              aria-busy={activeSearchChip === keyword && searching}
+                              onClick={() => handleQuickSearch(keyword)}
+                            >
                               {keyword}
                             </button>
                             <button

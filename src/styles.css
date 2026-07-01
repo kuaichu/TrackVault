@@ -2636,8 +2636,77 @@ input[type="range"] {
 }
 
 .quick-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   border-radius: 999px;
   padding: 8px 12px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition:
+    transform 120ms ease,
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease;
+}
+
+button.quick-chip {
+  cursor: pointer;
+}
+
+.quick-chip:hover,
+.quick-chip:focus-within {
+  border-color: rgba(255, 180, 93, 0.24);
+  background: rgba(255, 180, 93, 0.1);
+  color: #ffe0b4;
+}
+
+button.quick-chip:focus-visible,
+.history-chip-label:focus-visible,
+.history-chip-remove:focus-visible {
+  outline: 2px solid rgba(255, 180, 93, 0.42);
+  outline-offset: 2px;
+}
+
+button.quick-chip:active,
+.history-chip:has(.history-chip-label:active) {
+  transform: translateY(1px) scale(0.985);
+  border-color: rgba(255, 180, 93, 0.38);
+  background: rgba(255, 180, 93, 0.16);
+  box-shadow: inset 0 1px 6px rgba(255, 155, 87, 0.1);
+}
+
+.quick-chip.searching {
+  border-color: rgba(255, 180, 93, 0.42);
+  background:
+    linear-gradient(135deg, rgba(255, 180, 93, 0.18), rgba(255, 180, 93, 0.07)),
+    #171e2a;
+  color: #ffe4bd;
+}
+
+.quick-chip.searching::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 999px;
+  background: #ffbd68;
+  box-shadow: 0 0 0 4px rgba(255, 180, 93, 0.12);
+  animation: quick-chip-pulse 760ms ease-in-out infinite;
+}
+
+@keyframes quick-chip-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(0.88);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .history-chip {
@@ -2656,6 +2725,8 @@ input[type="range"] {
 }
 
 .history-chip-label {
+  min-width: 0;
+  padding: 0;
   cursor: pointer;
 }
 
@@ -2671,7 +2742,12 @@ input[type="range"] {
 }
 
 .history-chip-remove:hover {
+  background: rgba(255, 255, 255, 0.08);
   color: var(--text-primary);
+}
+
+.history-chip-remove:active {
+  transform: scale(0.92);
 }
 
 .results-panel {
