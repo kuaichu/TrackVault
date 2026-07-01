@@ -4987,21 +4987,6 @@ export default function App() {
   }, [isPlayerExpanded, activeLyricIndex, playbackSeconds, lyrics]);
 
   useEffect(() => {
-    if (!playlistPickerSong || playlistPickerLoading) {
-      return;
-    }
-
-    if (availablePlaylistPickerPlaylists.length === 0) {
-      setPlaylistPickerTargetPlaylistId(null);
-      return;
-    }
-
-    if (!availablePlaylistPickerPlaylists.some((playlist) => playlist.id === playlistPickerTargetPlaylistId)) {
-      setPlaylistPickerTargetPlaylistId(availablePlaylistPickerPlaylists[0].id);
-    }
-  }, [availablePlaylistPickerPlaylists, playlistPickerLoading, playlistPickerSong, playlistPickerTargetPlaylistId]);
-
-  useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setIsPlayerExpanded(false);
@@ -5329,6 +5314,20 @@ export default function App() {
     () => availablePlaylistPickerPlaylists.find((playlist) => playlist.id === playlistPickerTargetPlaylistId) ?? null,
     [availablePlaylistPickerPlaylists, playlistPickerTargetPlaylistId]
   );
+  useEffect(() => {
+    if (!playlistPickerSong || playlistPickerLoading) {
+      return;
+    }
+
+    if (availablePlaylistPickerPlaylists.length === 0) {
+      setPlaylistPickerTargetPlaylistId(null);
+      return;
+    }
+
+    if (!availablePlaylistPickerPlaylists.some((playlist) => playlist.id === playlistPickerTargetPlaylistId)) {
+      setPlaylistPickerTargetPlaylistId(availablePlaylistPickerPlaylists[0].id);
+    }
+  }, [availablePlaylistPickerPlaylists, playlistPickerLoading, playlistPickerSong, playlistPickerTargetPlaylistId]);
   const collectedPlaylists = useMemo(() => playlists.filter((playlist) => !playlist.owned), [playlists]);
   const playlistTotalPages = useMemo(
     () => {
