@@ -19,7 +19,7 @@ import { searchProvider, type SearchProviderMode } from "./provider.js";
 import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getPersonalRadioSongs } from "./personal-radio-provider.js";
-import { checkQqMusicCookie, getQqMusicAccountStatus, isQqMusicSong, probeQqSongAudio, resolveQqSongStream } from "./qqmusic-provider.js";
+import { checkQqMusicCookie, getQqDiscoverSongs, getQqMusicAccountStatus, getQqPlaylistSongs, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream } from "./qqmusic-provider.js";
 import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./settings-store.js";
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
 import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, getTaskFileForDownload, probeSongAudio, resolveDirectDownload, resolveSongStream } from "./task-store.js";
@@ -75,7 +75,8 @@ app.get("/api/search", async (request, response) => {
 
 app.get("/api/discover/songs", async (_request, response) => {
   try {
-    response.json({ songs: await getDiscoverSongs() });
+    const settings = await getSettings();
+    response.json({ songs: settings.providerMode === "qq" ? await getQqDiscoverSongs() : await getDiscoverSongs() });
   } catch (error) {
     response.status(502).json({
       message: error instanceof Error ? error.message : "获取发现音乐失败"
@@ -129,7 +130,8 @@ app.put("/api/history/play", async (request, response) => {
 
 app.get("/api/playlists", async (_request, response) => {
   try {
-    response.json({ playlists: await getUserPlaylists() });
+    const settings = await getSettings();
+    response.json({ playlists: settings.providerMode === "qq" ? await getQqUserPlaylists() : await getUserPlaylists() });
   } catch (error) {
     response.status(401).json({
       message: error instanceof Error ? error.message : "获取歌单失败"
@@ -143,7 +145,12 @@ app.get("/api/playlists/:id/songs", async (request, response) => {
     const limit = Number(request.query.limit);
     const keyword = typeof request.query.keyword === "string" ? request.query.keyword : "";
     const sort = typeof request.query.sort === "string" ? request.query.sort : "default";
-    response.json(await getPlaylistSongs(request.params.id, page, limit, keyword, sort));
+    const settings = await getSettings();
+    response.json(
+      settings.providerMode === "qq"
+        ? await getQqPlaylistSongs(request.params.id, page, limit, keyword, sort)
+        : await getPlaylistSongs(request.params.id, page, limit, keyword, sort)
+    );
   } catch (error) {
     response.status(502).json({
       message: error instanceof Error ? error.message : "获取歌单歌曲失败"
@@ -155,6 +162,12 @@ app.post("/api/playlists/:id/tracks", async (request, response) => {
   const songId = typeof request.body?.songId === "string" ? request.body.songId : "";
 
   try {
+    const settings = await getSettings();
+    if (settings.providerMode === "qq") {
+      response.status(501).json({ message: "QQ 音乐收藏到歌单暂未接入。" });
+      return;
+    }
+
     response.status(201).json(await addSongToUserPlaylist(request.params.id, songId));
   } catch (error) {
     response.status(400).json({
@@ -167,6 +180,12 @@ app.delete("/api/playlists/:id/tracks", async (request, response) => {
   const songIds = Array.isArray(request.body?.songIds) ? request.body.songIds.filter((songId: unknown) => typeof songId === "string") : [];
 
   try {
+    const settings = await getSettings();
+    if (settings.providerMode === "qq") {
+      response.status(501).json({ message: "QQ 音乐歌单删除暂未接入。" });
+      return;
+    }
+
     response.json(await removeSongsFromUserPlaylist(request.params.id, songIds));
   } catch (error) {
     response.status(400).json({

@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import type { DownloadQualityLevel, DownloadQualityOption, QqMusicAccountStatus, QqMusicCookieCheckResult, Song, SongAudioProbe, SongAudioProbeMode } from "./types.js";
+import type { DownloadQualityLevel, DownloadQualityOption, PlaylistSongsPage, QqMusicAccountStatus, QqMusicCookieCheckResult, Song, SongAudioProbe, SongAudioProbeMode, UserPlaylist } from "./types.js";
 import { getSettings } from "./settings-store.js";
 
 const require = createRequire(import.meta.url);
@@ -24,21 +24,84 @@ type QqSearchSong = {
   songid?: number | string;
   mid?: string;
   songmid?: string;
+  song_mid?: string;
   strMediaMid?: string;
   media_mid?: string;
+  title?: string;
   songname?: string;
   name?: string;
   singer?: QqSinger[];
   albumname?: string;
+  album?: {
+    id?: number | string;
+    mid?: string;
+    name?: string;
+    title?: string;
+  };
   albummid?: string;
   interval?: number;
   size128?: number;
   size320?: number;
   sizeflac?: number;
+  file?: {
+    media_mid?: string;
+    size_128mp3?: number;
+    size_320mp3?: number;
+    size_flac?: number;
+  };
 };
 
 type QqSearchResult = {
   list?: QqSearchSong[];
+};
+
+type QqNewSongsResult = {
+  list?: QqSearchSong[];
+};
+
+type QqUserSonglistItem = {
+  dissid?: number | string;
+  tid?: number | string;
+  id?: number | string;
+  dirid?: number | string;
+  diss_name?: string;
+  title?: string;
+  diss_cover?: string;
+  logo?: string;
+  song_cnt?: number;
+  songnum?: number;
+  total_song_num?: number;
+  listen_num?: number;
+  visitnum?: number;
+  creator?: {
+    name?: string;
+    nick?: string;
+  };
+};
+
+type QqUserSonglistsResult = {
+  list?: QqUserSonglistItem[];
+  creator?: {
+    hostname?: string;
+  };
+};
+
+type QqCollectedSonglistsResult = {
+  list?: QqUserSonglistItem[];
+  total?: number;
+};
+
+type QqSonglistDetail = {
+  dissid?: number | string;
+  disstid?: number | string;
+  dirid?: number | string;
+  dissname?: string;
+  title?: string;
+  logo?: string;
+  songnum?: number;
+  total_song_num?: number;
+  visitnum?: number;
+  songlist?: QqSearchSong[];
 };
 
 type QqResolvedSong = {
@@ -70,21 +133,21 @@ function normalizeQqText(value: unknown, fallback: string) {
 }
 
 function getQqSongMid(song: QqSearchSong) {
-  return normalizeQqText(song.songmid ?? song.mid, "");
+  return normalizeQqText(song.songmid ?? song.song_mid ?? song.mid, "");
 }
 
 function getQqMediaMid(song: QqSearchSong, songMid: string) {
-  return normalizeQqText(song.strMediaMid ?? song.media_mid, songMid);
+  return normalizeQqText(song.strMediaMid ?? song.media_mid ?? song.file?.media_mid, songMid);
 }
 
 function getQqAvailableQualities(song: QqSearchSong) {
   const qualities: DownloadQualityOption[] = [{ level: "standard", label: "128K" }];
 
-  if (Number(song.size320 ?? 0) > 0) {
+  if (Number(song.size320 ?? song.file?.size_320mp3 ?? 0) > 0) {
     qualities.push({ level: "exhigh", label: "320K" });
   }
 
-  if (Number(song.sizeflac ?? 0) > 0) {
+  if (Number(song.sizeflac ?? song.file?.size_flac ?? 0) > 0) {
     qualities.push({ level: "lossless", label: "FLAC" });
   }
 
@@ -118,14 +181,14 @@ function mapQqSong(song: QqSearchSong): Song | null {
 
   return {
     id: songMid,
-    title: normalizeQqText(song.songname ?? song.name, "未知歌曲"),
+    title: normalizeQqText(song.songname ?? song.title ?? song.name, "未知歌曲"),
     artist: artists.map((artist) => artist.name).join(" / ") || "未知歌手",
     primaryArtistId: artists[0]?.id,
     artists: artists.length > 0 ? artists : undefined,
-    album: normalizeQqText(song.albumname, "未知专辑"),
-    albumId: song.albummid?.trim() || undefined,
+    album: normalizeQqText(song.albumname ?? song.album?.title ?? song.album?.name, "未知专辑"),
+    albumId: song.albummid?.trim() || song.album?.mid?.trim() || (song.album?.id ? String(song.album.id) : undefined),
     mediaId: getQqMediaMid(song, songMid),
-    coverUrl: getQqCoverUrl(song.albummid),
+    coverUrl: getQqCoverUrl(song.albummid ?? song.album?.mid),
     duration: formatDuration(Number(song.interval ?? 0)),
     quality: getHighestQualityLabel(qualities),
     availableQualities: qualities,
@@ -221,6 +284,99 @@ function serializeQqCookie(cookieObj: Record<string, string>) {
     .filter(([, value]) => value)
     .map(([key, value]) => `${key}=${value}`)
     .join("; ");
+}
+
+function getQqCookieIdentity(cookie: string) {
+  const cookieObj = parseQqCookie(cookie);
+  if (!cookieObj.uin) {
+    throw new Error("QQ 音乐 Cookie 缺少 uin 或 wxuin，请重新导入 Cookie。");
+  }
+
+  return cookieObj;
+}
+
+async function getRequiredQqCookie() {
+  const settings = await getSettings();
+  const cookie = settings.qqMusicCookie?.trim() ?? "";
+  if (!cookie) {
+    throw new Error("请先导入 QQ 音乐 Cookie。");
+  }
+
+  const cookieObj = getQqCookieIdentity(cookie);
+  qqMusic.setCookie(cookieObj);
+  return cookieObj;
+}
+
+function getQqPlaylistId(playlist: QqUserSonglistItem | QqSonglistDetail) {
+  const record = playlist as Record<string, unknown>;
+  return normalizeQqText(record.dissid ?? record.disstid ?? record.tid ?? record.id ?? record.dirid, "");
+}
+
+function getQqImageUrl(url: unknown) {
+  if (typeof url !== "string" || !url.trim()) {
+    return undefined;
+  }
+
+  const trimmed = url.trim();
+  return trimmed.startsWith("//") ? `https:${trimmed}` : trimmed;
+}
+
+function mapQqPlaylist(playlist: QqUserSonglistItem, creatorName: string, owned: boolean): UserPlaylist | null {
+  const id = getQqPlaylistId(playlist);
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id: `qq:${id}`,
+    name: normalizeQqText(playlist.diss_name ?? playlist.title, "未命名歌单"),
+    coverUrl: getQqImageUrl(playlist.diss_cover ?? playlist.logo),
+    trackCount: Number(playlist.song_cnt ?? playlist.songnum ?? playlist.total_song_num ?? 0),
+    creatorName: normalizeQqText(playlist.creator?.name ?? playlist.creator?.nick, creatorName),
+    playCount: Number(playlist.listen_num ?? playlist.visitnum ?? 0),
+    owned
+  };
+}
+
+function getRawQqPlaylistId(playlistId: string) {
+  return playlistId.replace(/^qq:/, "").trim();
+}
+
+function filterSongs(songs: Song[], keyword: string) {
+  const normalizedKeyword = keyword.trim().toLocaleLowerCase();
+  if (!normalizedKeyword) {
+    return songs;
+  }
+
+  return songs.filter((song) =>
+    [song.title, song.artist, song.album].some((field) => field.toLocaleLowerCase().includes(normalizedKeyword))
+  );
+}
+
+function sortSongs(songs: Song[], sortMode: string) {
+  if (sortMode === "default") {
+    return songs;
+  }
+
+  const compareText = (left: string, right: string) => left.localeCompare(right, "zh-Hans-CN", { numeric: true, sensitivity: "base" });
+  const sortedSongs = [...songs];
+
+  sortedSongs.sort((left, right) => {
+    switch (sortMode) {
+      case "title-asc":
+        return compareText(left.title, right.title);
+      case "title-desc":
+        return compareText(right.title, left.title);
+      case "artist-asc":
+        return compareText(left.artist, right.artist) || compareText(left.title, right.title);
+      case "artist-desc":
+        return compareText(right.artist, left.artist) || compareText(right.title, left.title);
+      default:
+        return 0;
+    }
+  });
+
+  return sortedSongs;
 }
 
 function firstStringByKeys(input: unknown, keys: string[], visited = new Set<unknown>()): string | undefined {
@@ -458,6 +614,74 @@ export async function searchQqMusicSongs(query: string): Promise<Song[]> {
   });
 
   return (data.list ?? []).map(mapQqSong).filter((song): song is Song => Boolean(song));
+}
+
+export async function getQqDiscoverSongs(): Promise<Song[]> {
+  await configureQqCookie();
+  const data = await qqMusic.api<QqNewSongsResult>("new/songs", {
+    type: 0
+  });
+
+  return (data.list ?? []).map(mapQqSong).filter((song): song is Song => Boolean(song)).slice(0, 30);
+}
+
+export async function getQqUserPlaylists(): Promise<UserPlaylist[]> {
+  const cookieObj = await getRequiredQqCookie();
+  const [createdResult, collectedResult] = await Promise.allSettled([
+    qqMusic.api<QqUserSonglistsResult>("user/songlist", { id: cookieObj.uin }),
+    qqMusic.api<QqCollectedSonglistsResult>("user/collect/songlist", { id: cookieObj.uin, pageNo: 1, pageSize: 50 })
+  ]);
+
+  const creatorName =
+    createdResult.status === "fulfilled"
+      ? normalizeQqText(createdResult.value.creator?.hostname, `QQ ${cookieObj.uin}`)
+      : `QQ ${cookieObj.uin}`;
+  const createdPlaylists =
+    createdResult.status === "fulfilled"
+      ? (createdResult.value.list ?? []).map((playlist) => mapQqPlaylist(playlist, creatorName, true)).filter((playlist): playlist is UserPlaylist => Boolean(playlist))
+      : [];
+  const collectedPlaylists =
+    collectedResult.status === "fulfilled"
+      ? (collectedResult.value.list ?? []).map((playlist) => mapQqPlaylist(playlist, creatorName, false)).filter((playlist): playlist is UserPlaylist => Boolean(playlist))
+      : [];
+  const seen = new Set<string>();
+
+  return [...createdPlaylists, ...collectedPlaylists].filter((playlist) => {
+    if (seen.has(playlist.id)) {
+      return false;
+    }
+
+    seen.add(playlist.id);
+    return true;
+  });
+}
+
+export async function getQqPlaylistSongs(playlistId: string, page = 1, limit = 100, keyword = "", sortMode = "default"): Promise<PlaylistSongsPage> {
+  await configureQqCookie();
+  const safePage = Math.max(1, Math.floor(page) || 1);
+  const safeLimit = Math.min(200, Math.max(1, Math.floor(limit) || 100));
+  const rawPlaylistId = getRawQqPlaylistId(playlistId);
+  if (!rawPlaylistId) {
+    throw new Error("缺少 QQ 音乐歌单 ID。");
+  }
+
+  const data = await qqMusic.api<QqSonglistDetail>("songlist", {
+    id: rawPlaylistId
+  });
+  const allSongs = (data.songlist ?? []).map(mapQqSong).filter((song): song is Song => Boolean(song));
+  const filteredSongs = sortSongs(filterSongs(allSongs, keyword), sortMode);
+  const offset = (safePage - 1) * safeLimit;
+  const songs = filteredSongs.slice(offset, offset + safeLimit);
+
+  return {
+    songs,
+    page: safePage,
+    limit: safeLimit,
+    hasMore: offset + songs.length < filteredSongs.length,
+    total: filteredSongs.length,
+    sourceTotal: allSongs.length,
+    keyword: keyword.trim()
+  };
 }
 
 export async function resolveQqSongStream(song: Song, level: DownloadQualityLevel) {

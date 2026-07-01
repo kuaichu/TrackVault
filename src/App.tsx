@@ -243,7 +243,7 @@ const navText: Record<NavKey, { title: string; subtitle: string }> = {
   discover: { title: "发现音乐", subtitle: "推荐新歌与近期值得听的音乐" },
   search: { title: "搜索", subtitle: "按歌曲、歌手或专辑检索并试听下载" },
   daily: { title: "每日推荐", subtitle: "读取网易云今日为你推荐的歌曲" },
-  playlists: { title: "我的歌单", subtitle: "读取网易云账号歌单并载入歌曲" },
+  playlists: { title: "我的歌单", subtitle: "读取当前平台账号歌单并载入歌曲" },
   transfer: { title: "歌单互转", subtitle: "跨平台匹配、缺失识别与文字歌单导出" },
   cloud: { title: "云盘音乐", subtitle: "读取网易云音乐云盘并载入歌曲" },
   downloads: { title: "下载管理", subtitle: "查看服务器下载任务、进度和输出文件" },
@@ -482,9 +482,13 @@ function loadSearchHistory() {
   }
 }
 
-function loadCachedDiscoverSongs() {
+function getDiscoverCacheKey(providerMode: ActiveProviderMode) {
+  return `${DISCOVER_CACHE_STORAGE_KEY}:${providerMode}`;
+}
+
+function loadCachedDiscoverSongs(providerMode: ActiveProviderMode) {
   try {
-    const rawCache = window.localStorage.getItem(DISCOVER_CACHE_STORAGE_KEY);
+    const rawCache = window.localStorage.getItem(getDiscoverCacheKey(providerMode)) ?? window.localStorage.getItem(DISCOVER_CACHE_STORAGE_KEY);
     if (!rawCache) {
       return [];
     }
@@ -504,10 +508,10 @@ function loadCachedDiscoverSongs() {
   }
 }
 
-function saveCachedDiscoverSongs(songs: Song[]) {
+function saveCachedDiscoverSongs(songs: Song[], providerMode: ActiveProviderMode) {
   try {
     window.localStorage.setItem(
-      DISCOVER_CACHE_STORAGE_KEY,
+      getDiscoverCacheKey(providerMode),
       JSON.stringify({
         savedAt: Date.now(),
         songs
@@ -1224,8 +1228,11 @@ export default function App() {
     : "未登录 · 当前仅可搜索";
   const activeSearchProviderMode = settings.providerMode === "demo" ? "netease" : settings.providerMode;
   const activeSearchProviderLabel = searchProviderOptions.find((option) => option.value === activeSearchProviderMode)?.label ?? "网易云";
-  const hasNeteaseDownloadAuth = accountIsLoggedIn;
-  const playbackLocked = !accountIsLoggedIn;
+  const isQqDataMode = activeSearchProviderMode === "qq";
+  const playlistProviderLabel = isQqDataMode ? "QQ 音乐" : "网易云";
+  const hasPlaylistCredential = isQqDataMode ? hasQqMusicCookie : Boolean(settings.neteaseCookie.trim());
+  const hasNeteaseDownloadAuth = accountIsLoggedIn || isQqDataMode;
+  const playbackLocked = !accountIsLoggedIn && !isQqDataMode;
   const hasPlaybackQueue = playQueue.length > 0 || results.length > 0;
 
   function getSelectedLevel(song: Song) {
@@ -1490,7 +1497,7 @@ export default function App() {
     setSelectedSongIds([]);
     navigateTopLevel("playlists");
 
-    if (playlists.length === 0 && !loadingPlaylists && settings.neteaseCookie.trim()) {
+    if (playlists.length === 0 && !loadingPlaylists && hasPlaylistCredential) {
       void loadUserPlaylists();
     }
   }
@@ -1578,7 +1585,9 @@ export default function App() {
     }
   }
 
-  async function loadDiscoverSongs(options: { keepExisting?: boolean } = {}) {
+  async function loadDiscoverSongs(options: { keepExisting?: boolean; providerMode?: ActiveProviderMode } = {}) {
+    const targetProviderMode = options.providerMode ?? activeSearchProviderMode;
+    const targetProviderLabel = searchProviderOptions.find((option) => option.value === targetProviderMode)?.label ?? activeSearchProviderLabel;
     const requestId = listRequestIdRef.current + 1;
     listRequestIdRef.current = requestId;
     const shouldKeepCurrentResults =
@@ -1593,7 +1602,7 @@ export default function App() {
     }
     setLoadingDiscoverSongs(true);
     setDiscoverFeedKind("recommend");
-    setMessage("正在加载发现音乐");
+    setMessage(`正在加载${targetProviderLabel}发现音乐`);
 
     try {
       const songs = await getDiscoverSongs();
@@ -1605,8 +1614,8 @@ export default function App() {
       setPlayQueue(songs);
       setResultSource("discover");
       applyQualityDefaults(songs);
-      saveCachedDiscoverSongs(songs);
-      setMessage(`发现音乐 · 共 ${songs.length} 首推荐新歌`);
+      saveCachedDiscoverSongs(songs, targetProviderMode);
+      setMessage(`${targetProviderLabel}发现音乐 · 共 ${songs.length} 首推荐新歌`);
     } catch (error) {
       if (requestId !== listRequestIdRef.current) {
         return;
@@ -1743,9 +1752,10 @@ export default function App() {
       setSelectedSongIds([]);
       navigateTopLevel("playlists");
 
-      const startupCookie = nextSettings.neteaseCookie.trim();
+      const startupProviderMode: ActiveProviderMode = nextSettings.providerMode === "qq" ? "qq" : nextSettings.providerMode === "aggregate" ? "aggregate" : "netease";
+      const startupCookie = startupProviderMode === "qq" ? nextSettings.qqMusicCookie?.trim() : nextSettings.neteaseCookie.trim();
       if (startupCookie) {
-        void loadUserPlaylists({ cookieOverride: startupCookie, silentCookieCheck: true });
+        void loadUserPlaylists({ cookieOverride: startupCookie, silentCookieCheck: true, providerMode: startupProviderMode });
       }
       return;
     }
@@ -1769,7 +1779,8 @@ export default function App() {
       return;
     }
 
-    const cachedDiscoverSongs = loadCachedDiscoverSongs();
+    const startupProviderMode: ActiveProviderMode = nextSettings.providerMode === "qq" ? "qq" : nextSettings.providerMode === "aggregate" ? "aggregate" : "netease";
+    const cachedDiscoverSongs = loadCachedDiscoverSongs(startupProviderMode);
 
     if (cachedDiscoverSongs.length > 0) {
       setResults(cachedDiscoverSongs);
@@ -1780,7 +1791,7 @@ export default function App() {
       setMessage(`已先加载缓存推荐 · ${cachedDiscoverSongs.length} 首，正在后台刷新`);
     }
 
-    void loadDiscoverSongs({ keepExisting: cachedDiscoverSongs.length > 0 });
+    void loadDiscoverSongs({ keepExisting: cachedDiscoverSongs.length > 0, providerMode: startupProviderMode });
   }
 
   async function refreshTasks() {
@@ -1791,20 +1802,39 @@ export default function App() {
     }
   }
 
-  async function loadUserPlaylists(options: { cookieOverride?: string; silentCookieCheck?: boolean } = {}) {
-    const cookieOk = await ensureNeteaseCookieHealthy({ cookieOverride: options.cookieOverride, silent: options.silentCookieCheck });
-    if (!cookieOk) {
+  async function loadUserPlaylists(options: { cookieOverride?: string; silentCookieCheck?: boolean; providerMode?: ActiveProviderMode } = {}) {
+    const targetProviderMode = options.providerMode ?? activeSearchProviderMode;
+    const targetProviderLabel = targetProviderMode === "qq" ? "QQ 音乐" : "网易云";
+
+    if (targetProviderMode === "qq") {
+      const cookie = settings.qqMusicCookie?.trim();
+      if (!cookie) {
+        if (!options.silentCookieCheck) {
+          setMessage("请先在账号中心导入 QQ 音乐 Cookie。");
+        }
+        setPlaylists([]);
+        return;
+      }
+    } else {
+      const cookieOk = await ensureNeteaseCookieHealthy({ cookieOverride: options.cookieOverride, silent: options.silentCookieCheck });
+      if (!cookieOk) {
+        setPlaylists([]);
+        return;
+      }
+    }
+
+    if (targetProviderMode !== activeSearchProviderMode && options.providerMode !== targetProviderMode) {
       setPlaylists([]);
       return;
     }
 
     setLoadingPlaylists(true);
-    setMessage("正在读取网易云歌单");
+    setMessage(`正在读取 ${targetProviderLabel} 歌单`);
 
     try {
       const data = await getPlaylists();
       setPlaylists(data);
-      setMessage(`共读取 ${data.length} 个歌单`);
+      setMessage(`${targetProviderLabel} 共读取 ${data.length} 个歌单`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "获取歌单失败");
     } finally {
@@ -1813,9 +1843,16 @@ export default function App() {
   }
 
   async function loadPlaylistSongs(playlist: UserPlaylist, page = 1, keywordOverride = playlistSearchKeyword, sortOverride = playlistSortMode) {
-    const cookieOk = await ensureNeteaseCookieHealthy();
-    if (!cookieOk) {
-      return;
+    if (isQqDataMode) {
+      if (!settings.qqMusicCookie?.trim()) {
+        setMessage("请先在账号中心导入 QQ 音乐 Cookie。");
+        return;
+      }
+    } else {
+      const cookieOk = await ensureNeteaseCookieHealthy();
+      if (!cookieOk) {
+        return;
+      }
     }
 
     const normalizedKeyword = keywordOverride.trim();
@@ -1858,7 +1895,7 @@ export default function App() {
 
   function openTransferPage() {
     navigateTopLevel("transfer");
-    if (playlists.length === 0 && !loadingPlaylists && settings.neteaseCookie.trim()) {
+    if (!isQqDataMode && playlists.length === 0 && !loadingPlaylists && settings.neteaseCookie.trim()) {
       void loadUserPlaylists();
     }
   }
@@ -2541,8 +2578,8 @@ export default function App() {
     });
   }
 
-  function requirePlaybackAuth() {
-    if (accountIsLoggedIn) {
+  function requirePlaybackAuth(song?: Song | null) {
+    if (accountIsLoggedIn || isQqDataMode || song?.source === "qqmusic" || currentTrack?.source === "qqmusic") {
       return true;
     }
 
@@ -2554,7 +2591,7 @@ export default function App() {
   }
 
   function handlePreview(song: Song) {
-    if (!requirePlaybackAuth()) {
+    if (!requirePlaybackAuth(song)) {
       return;
     }
 
@@ -2992,7 +3029,11 @@ export default function App() {
   }
 
   function handleSelectSong(song: Song) {
-    setMessage(accountIsLoggedIn ? `已选中：${song.title}。双击歌曲或点击试听开始播放。` : `已选中：${song.title}。登录网易云账号后可播放。`);
+    setMessage(
+      accountIsLoggedIn || isQqDataMode || song.source === "qqmusic"
+        ? `已选中：${song.title}。双击歌曲或点击试听开始播放。`
+        : `已选中：${song.title}。登录网易云账号后可播放。`
+    );
   }
 
   function handleOpenSongContextMenu(event: MouseEvent<HTMLElement>, song: Song) {
@@ -3250,7 +3291,29 @@ export default function App() {
         providerMode
       });
       setSettings(saved);
+      setPlaylists([]);
+      setActivePlaylist(null);
+      setPlaylistSearchInput("");
+      setPlaylistSearchKeyword("");
+      setPlaylistSongsPage(1);
+      setPlaylistSongsHasMore(false);
+      setPlaylistSongsTotal(0);
       setMessage(`已切换到${accountProviderHints[providerMode]}`);
+
+      if (mainTab === "search" && navKey === "discover") {
+        void loadDiscoverSongs({ keepExisting: false, providerMode });
+      } else if (mainTab === "search" && navKey === "playlists") {
+        setResults([]);
+        setPlayQueue([]);
+        setResultSource("search");
+        void loadUserPlaylists({ silentCookieCheck: true, providerMode });
+      } else if (providerMode === "qq" && mainTab === "search" && navKey === "cloud") {
+        setResults([]);
+        setPlayQueue([]);
+        setResultSource("discover");
+        navigateTopLevel("discover");
+        void loadDiscoverSongs({ keepExisting: false, providerMode });
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "切换数据来源失败");
     } finally {
@@ -3699,6 +3762,11 @@ export default function App() {
       return;
     }
 
+    if (isQqDataMode) {
+      setMessage("QQ 音乐收藏到歌单还没接入，当前先支持读取、播放和下载。");
+      return;
+    }
+
     if (!accountIsLoggedIn) {
       setMessage("收藏到歌单需要先登录网易云账号，已为你打开登录窗口。");
       await handleStartQrLogin();
@@ -3879,7 +3947,7 @@ export default function App() {
       return;
     }
 
-    if (options.fromEnded && !accountIsLoggedIn) {
+    if (options.fromEnded && playbackLocked) {
       return;
     }
 
@@ -3889,7 +3957,7 @@ export default function App() {
     }
 
     const nextSong = await resolveNextPlaybackSong(queue);
-    if (nextSong && accountIsLoggedIn) {
+    if (nextSong && !playbackLocked) {
       syncAudioForSong(nextSong, true);
     }
   }
@@ -3925,7 +3993,7 @@ export default function App() {
           mode: playbackMode
         });
         if (nextSong) {
-          if (accountIsLoggedIn) {
+          if (!playbackLocked) {
             window.setTimeout(() => syncAudioForSong(nextSong, true), 0);
           } else {
             setCurrentTrack(nextSong);
@@ -4108,6 +4176,11 @@ export default function App() {
 
   async function handleRemovePlaylistSongs(songIds: string[]) {
     if (!activePlaylist || !activePlaylist.owned || removingPlaylistSongs || songIds.length === 0) {
+      return;
+    }
+
+    if (isQqDataMode) {
+      setMessage("QQ 音乐歌单删除还没接入，当前先支持读取、播放和下载。");
       return;
     }
 
@@ -5217,6 +5290,8 @@ export default function App() {
           ? { title: "专辑", subtitle: activeAlbum.name }
           : navKey === "playlists" && resultSource === "playlist" && activePlaylist
             ? { title: activePlaylist.owned ? "我的歌单" : "歌单", subtitle: activePlaylist.name }
+          : navKey === "playlists"
+            ? { title: "我的歌单", subtitle: `读取 ${playlistProviderLabel} 账号歌单并载入歌曲` }
         : activeMeta;
   const currentQualityLabel = currentTrack ? getSelectedLabel(currentTrack) : "128K";
   const songDetailSourceMeta = songDetailSong ? getSongSourceMeta(songDetailSong) : null;
@@ -5248,7 +5323,9 @@ export default function App() {
   const activeDiscoverFeedLabel = discoverFeedLabels[activeDiscoverFeedKind];
   const discoverListBusy = loadingDiscoverSongs || loadingDailySongs || Boolean(loadingPersonalRadioKind);
   const discoverFeedNote =
-    activeDiscoverFeedKind === "daily"
+    isQqDataMode
+      ? "来自 QQ 音乐新歌推荐"
+      : activeDiscoverFeedKind === "daily"
       ? "来自网易云每日推荐"
       : activeDiscoverFeedKind === "recommend"
         ? "来自网易云推荐新歌"
@@ -5279,7 +5356,9 @@ export default function App() {
             : loadingArtist;
   const resultLoadingMessage =
     navKey === "discover"
-      ? loadingDailySongs || discoverFeedKind === "daily"
+      ? isQqDataMode
+        ? "正在加载 QQ 音乐发现音乐..."
+        : loadingDailySongs || discoverFeedKind === "daily"
         ? "正在读取每日推荐..."
         : loadingPersonalRadioKind === "roaming"
         ? "正在加载私人漫游..."
@@ -5295,7 +5374,9 @@ export default function App() {
             : "正在读取歌手热门歌曲...";
   const resultEmptyMessage =
     navKey === "discover"
-      ? discoverFeedKind === "daily"
+      ? isQqDataMode
+        ? "QQ 音乐暂时没有返回推荐歌曲，请稍后刷新。"
+        : discoverFeedKind === "daily"
         ? "暂时没有读取到每日推荐，请确认 Cookie 登录态有效。"
         : "暂时没有推荐歌曲，请稍后刷新。"
       : navKey === "cloud"
@@ -6092,9 +6173,11 @@ export default function App() {
                 <button type="button" className={mainTab === "search" && navKey === "playlists" ? "nav-button active" : "nav-button"} onClick={openPlaylistsPage}>
                   我的歌单
                 </button>
-                <button type="button" className={mainTab === "search" && navKey === "cloud" ? "nav-button active" : "nav-button"} onClick={() => void loadCloudSongs()}>
-                  云盘音乐
-                </button>
+                {!isQqDataMode ? (
+                  <button type="button" className={mainTab === "search" && navKey === "cloud" ? "nav-button active" : "nav-button"} onClick={() => void loadCloudSongs()}>
+                    云盘音乐
+                  </button>
+                ) : null}
               </nav>
             </div>
 
@@ -6679,7 +6762,7 @@ export default function App() {
               <header className="playlist-manager-head">
                 <div>
                   <p className="eyebrow">我的歌单</p>
-                  <h2>网易云账号歌单</h2>
+                  <h2>{playlistProviderLabel}账号歌单</h2>
                 </div>
                 <button
                   type="button"
@@ -6696,14 +6779,18 @@ export default function App() {
 
               <div className="playlist-sections">
                 {playlists.length === 0 ? (
-                  <div className="empty-box">{loadingPlaylists ? "正在读取歌单..." : "还没有读取到歌单，请先在设置页配置有效 Cookie。"}</div>
+                  <div className="empty-box">
+                    {loadingPlaylists
+                      ? `正在读取 ${playlistProviderLabel} 歌单...`
+                      : `还没有读取到 ${playlistProviderLabel} 歌单，请先在账号中心导入有效 Cookie。`}
+                  </div>
                 ) : (
                   <>
                     <section className="playlist-section">
                       <header className="playlist-section-head">
                         <div>
                           <h3>我创建的歌单</h3>
-                          <p>当前账号作为创建者的歌单</p>
+                          <p>当前{playlistProviderLabel}账号作为创建者的歌单</p>
                         </div>
                         <span>{createdPlaylists.length} 个</span>
                       </header>
@@ -6716,7 +6803,7 @@ export default function App() {
                       <header className="playlist-section-head">
                         <div>
                           <h3>我收藏的歌单</h3>
-                          <p>其他用户创建、当前账号收藏的歌单</p>
+                          <p>其他用户创建、当前{playlistProviderLabel}账号收藏的歌单</p>
                         </div>
                         <span>{collectedPlaylists.length} 个</span>
                       </header>
@@ -6871,62 +6958,66 @@ export default function App() {
                     </span>
                     <span className="discover-mix-copy">
                       <strong>系统推荐</strong>
-                      <small>{loadingDiscoverSongs ? "读取中" : "默认推荐新歌"}</small>
+                      <small>{loadingDiscoverSongs ? "读取中" : isQqDataMode ? "QQ 新歌推荐" : "默认推荐新歌"}</small>
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    className={getDiscoverMixCardClass("daily", "daily")}
-                    disabled={discoverListBusy}
-                    aria-pressed={activeDiscoverFeedKind === "daily"}
-                    onClick={() => void loadDailySongs()}
-                    title="每日推荐"
-                  >
-                    <span className="discover-mix-mark calendar-mark" aria-hidden="true">
-                      <b>30</b>
-                    </span>
-                    <span className="discover-mix-copy">
-                      <strong>每日推荐</strong>
-                      <small>{loadingDailySongs ? "读取中" : "今日推荐歌曲"}</small>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className={getDiscoverMixCardClass("radar", "radar")}
-                    disabled={discoverListBusy}
-                    aria-pressed={activeDiscoverFeedKind === "radar"}
-                    onClick={() => void loadPersonalRadio("radar")}
-                    title="私人雷达"
-                  >
-                    <span className="discover-mix-mark" aria-hidden="true">
-                      <PlayerIcon name="heartbeat" />
-                    </span>
-                    <span className="discover-mix-copy">
-                      <strong>私人雷达</strong>
-                      <small>{loadingPersonalRadioKind === "radar" ? "读取中" : "近期口味续播"}</small>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className={getDiscoverMixCardClass("roaming", "roaming")}
-                    disabled={discoverListBusy}
-                    aria-pressed={activeDiscoverFeedKind === "roaming"}
-                    onClick={() => void loadPersonalRadio("roaming")}
-                    title="私人漫游"
-                  >
-                    <span className="discover-mix-mark" aria-hidden="true">
-                      <PlayerIcon name="shuffle" />
-                    </span>
-                    <span className="discover-mix-copy">
-                      <strong>私人漫游</strong>
-                      <small>{loadingPersonalRadioKind === "roaming" ? "读取中" : "探索相邻风格"}</small>
-                    </span>
-                  </button>
+                  {!isQqDataMode ? (
+                    <>
+                      <button
+                        type="button"
+                        className={getDiscoverMixCardClass("daily", "daily")}
+                        disabled={discoverListBusy}
+                        aria-pressed={activeDiscoverFeedKind === "daily"}
+                        onClick={() => void loadDailySongs()}
+                        title="每日推荐"
+                      >
+                        <span className="discover-mix-mark calendar-mark" aria-hidden="true">
+                          <b>30</b>
+                        </span>
+                        <span className="discover-mix-copy">
+                          <strong>每日推荐</strong>
+                          <small>{loadingDailySongs ? "读取中" : "今日推荐歌曲"}</small>
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className={getDiscoverMixCardClass("radar", "radar")}
+                        disabled={discoverListBusy}
+                        aria-pressed={activeDiscoverFeedKind === "radar"}
+                        onClick={() => void loadPersonalRadio("radar")}
+                        title="私人雷达"
+                      >
+                        <span className="discover-mix-mark" aria-hidden="true">
+                          <PlayerIcon name="heartbeat" />
+                        </span>
+                        <span className="discover-mix-copy">
+                          <strong>私人雷达</strong>
+                          <small>{loadingPersonalRadioKind === "radar" ? "读取中" : "近期口味续播"}</small>
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className={getDiscoverMixCardClass("roaming", "roaming")}
+                        disabled={discoverListBusy}
+                        aria-pressed={activeDiscoverFeedKind === "roaming"}
+                        onClick={() => void loadPersonalRadio("roaming")}
+                        title="私人漫游"
+                      >
+                        <span className="discover-mix-mark" aria-hidden="true">
+                          <PlayerIcon name="shuffle" />
+                        </span>
+                        <span className="discover-mix-copy">
+                          <strong>私人漫游</strong>
+                          <small>{loadingPersonalRadioKind === "roaming" ? "读取中" : "探索相邻风格"}</small>
+                        </span>
+                      </button>
+                    </>
+                  ) : null}
                 </div>
               ) : null}
               {visibleSongs.length > 0 ? (
                 <div className="form-actions results-selection-bar">
-                  <span>{batchSelectionMode ? `已选 ${selectedVisibleSongs.length} 首` : "批量选择歌曲后可下载、收藏或移除"}</span>
+                  <span>{batchSelectionMode ? `已选 ${selectedVisibleSongs.length} 首` : isQqDataMode ? "批量选择歌曲后可下载" : "批量选择歌曲后可下载、收藏或移除"}</span>
                   <div className="results-selection-actions">
                     {batchSelectionMode ? (
                       <>
@@ -6940,17 +7031,19 @@ export default function App() {
                           {!hasNeteaseDownloadAuth ? <LockIcon /> : <OperationIcon name="download" />}
                           <span>{batchDownloading ? "启动" : "下载"}</span>
                         </button>
-                        <button
-                          type="button"
-                          className={!accountIsLoggedIn ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
-                          disabled={Boolean(addingToPlaylistId) || selectedVisibleSongs.length === 0}
-                          onClick={() => void handleOpenPlaylistPickerForSongs(selectedVisibleSongs)}
-                          title="收藏已选歌曲"
-                        >
-                          {!accountIsLoggedIn ? <LockIcon /> : <OperationIcon name="playlist" />}
-                          <span>收藏</span>
-                        </button>
-                        {resultSource === "playlist" && activePlaylist?.owned ? (
+                        {!isQqDataMode ? (
+                          <button
+                            type="button"
+                            className={!accountIsLoggedIn ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
+                            disabled={Boolean(addingToPlaylistId) || selectedVisibleSongs.length === 0}
+                            onClick={() => void handleOpenPlaylistPickerForSongs(selectedVisibleSongs)}
+                            title="收藏已选歌曲"
+                          >
+                            {!accountIsLoggedIn ? <LockIcon /> : <OperationIcon name="playlist" />}
+                            <span>收藏</span>
+                          </button>
+                        ) : null}
+                        {resultSource === "playlist" && activePlaylist?.owned && !isQqDataMode ? (
                           <button
                             type="button"
                             className="secondary-button compact operation-button danger-button"
@@ -7055,17 +7148,19 @@ export default function App() {
                         <PreviewIcon />
                         {playbackLocked ? <span className="download-lock-badge"><LockIcon /></span> : null}
                       </button>
-                      <button
-                        type="button"
-                        className={!accountIsLoggedIn ? "row-icon-button playlist-add-button locked-download-button" : "row-icon-button playlist-add-button"}
-                        aria-label={!accountIsLoggedIn ? `登录后收藏 ${song.title} 到歌单` : `收藏 ${song.title} 到歌单`}
-                        title={!accountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
-                        disabled={Boolean(addingToPlaylistId)}
-                        onClick={(event) => { event.stopPropagation(); void handleOpenPlaylistPicker(song); }}
-                      >
-                        <PlaylistAddIcon />
-                        {!accountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
-                      </button>
+                      {!isQqDataMode ? (
+                        <button
+                          type="button"
+                          className={!accountIsLoggedIn ? "row-icon-button playlist-add-button locked-download-button" : "row-icon-button playlist-add-button"}
+                          aria-label={!accountIsLoggedIn ? `登录后收藏 ${song.title} 到歌单` : `收藏 ${song.title} 到歌单`}
+                          title={!accountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
+                          disabled={Boolean(addingToPlaylistId)}
+                          onClick={(event) => { event.stopPropagation(); void handleOpenPlaylistPicker(song); }}
+                        >
+                          <PlaylistAddIcon />
+                          {!accountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className={!hasNeteaseDownloadAuth ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
@@ -7243,7 +7338,7 @@ export default function App() {
               <section className={batchSelectionMode ? "results-panel batch-mode" : "results-panel"}>
                 {visibleSongs.length > 0 ? (
                   <div className="form-actions results-selection-bar">
-                    <span>{batchSelectionMode ? `已选 ${selectedVisibleSongs.length} 首` : "批量选择歌曲后可下载或收藏"}</span>
+                    <span>{batchSelectionMode ? `已选 ${selectedVisibleSongs.length} 首` : isQqDataMode ? "批量选择歌曲后可下载" : "批量选择歌曲后可下载或收藏"}</span>
                     <div className="results-selection-actions">
                       {batchSelectionMode ? (
                         <>
@@ -7257,16 +7352,18 @@ export default function App() {
                             {!hasNeteaseDownloadAuth ? <LockIcon /> : <OperationIcon name="download" />}
                             <span>{batchDownloading ? "启动" : "下载"}</span>
                           </button>
-                          <button
-                            type="button"
-                            className={!accountIsLoggedIn ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
-                            disabled={Boolean(addingToPlaylistId) || selectedVisibleSongs.length === 0}
-                            onClick={() => void handleOpenPlaylistPickerForSongs(selectedVisibleSongs)}
-                            title="收藏已选歌曲"
-                          >
-                            {!accountIsLoggedIn ? <LockIcon /> : <OperationIcon name="playlist" />}
-                            <span>收藏</span>
-                          </button>
+                          {!isQqDataMode ? (
+                            <button
+                              type="button"
+                              className={!accountIsLoggedIn ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
+                              disabled={Boolean(addingToPlaylistId) || selectedVisibleSongs.length === 0}
+                              onClick={() => void handleOpenPlaylistPickerForSongs(selectedVisibleSongs)}
+                              title="收藏已选歌曲"
+                            >
+                              {!accountIsLoggedIn ? <LockIcon /> : <OperationIcon name="playlist" />}
+                              <span>收藏</span>
+                            </button>
+                          ) : null}
                           <button type="button" className="secondary-button compact operation-button" onClick={exitBatchSelectionMode} title="退出批量操作">
                             <OperationIcon name="close" />
                             <span>退出</span>
@@ -7356,17 +7453,19 @@ export default function App() {
                           <PreviewIcon />
                           {playbackLocked ? <span className="download-lock-badge"><LockIcon /></span> : null}
                         </button>
-                        <button
-                          type="button"
-                          className={!accountIsLoggedIn ? "row-icon-button playlist-add-button locked-download-button" : "row-icon-button playlist-add-button"}
-                          aria-label={!accountIsLoggedIn ? `登录后收藏 ${song.title} 到歌单` : `收藏 ${song.title} 到歌单`}
-                          title={!accountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
-                          disabled={Boolean(addingToPlaylistId)}
-                          onClick={() => void handleOpenPlaylistPicker(song)}
-                        >
-                          <PlaylistAddIcon />
-                          {!accountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
-                        </button>
+                        {!isQqDataMode ? (
+                          <button
+                            type="button"
+                            className={!accountIsLoggedIn ? "row-icon-button playlist-add-button locked-download-button" : "row-icon-button playlist-add-button"}
+                            aria-label={!accountIsLoggedIn ? `登录后收藏 ${song.title} 到歌单` : `收藏 ${song.title} 到歌单`}
+                            title={!accountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
+                            disabled={Boolean(addingToPlaylistId)}
+                            onClick={() => void handleOpenPlaylistPicker(song)}
+                          >
+                            <PlaylistAddIcon />
+                            {!accountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           className={!hasNeteaseDownloadAuth ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
@@ -8588,7 +8687,7 @@ export default function App() {
             <span className="song-context-icon">↗</span>
             复制链接
           </button>
-          {resultSource === "playlist" && activePlaylist?.owned ? (
+          {resultSource === "playlist" && activePlaylist?.owned && !isQqDataMode ? (
             <>
               <div className="song-context-divider" />
               <button type="button" role="menuitem" className="danger" disabled={removingPlaylistSongs} onClick={() => runSongContextAction(() => handleRemovePlaylistSongs([songContextMenu.song.id]))}>
