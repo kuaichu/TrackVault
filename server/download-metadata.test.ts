@@ -5,7 +5,7 @@ import { getHighResolutionCoverUrl } from "./download-metadata.js";
 test("getHighResolutionCoverUrl upgrades NetEase resized covers for embedded artwork", () => {
   assert.equal(
     getHighResolutionCoverUrl("https://p1.music.126.net/example.jpg?param=160y160"),
-    "https://p1.music.126.net/example.jpg?param=1000y1000"
+    "https://p1.music.126.net/example.jpg?param=1400y1400"
   );
 });
 

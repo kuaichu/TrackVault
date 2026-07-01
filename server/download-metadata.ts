@@ -88,7 +88,7 @@ export function getHighResolutionCoverUrl(rawUrl: string) {
     const host = url.hostname.toLowerCase();
 
     if (host === "music.126.net" || host.endsWith(".music.126.net")) {
-      url.searchParams.set("param", "1000y1000");
+      url.searchParams.set("param", "1400y1400");
       return url.toString();
     }
 
