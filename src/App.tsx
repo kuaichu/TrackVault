@@ -152,11 +152,18 @@ const startupViewOptions: Array<{ value: AppSettings["startupView"]; label: stri
   { value: "playlists", label: "歌单" },
   { value: "downloads", label: "下载" }
 ];
-const searchProviderOptions: Array<{ value: Exclude<AppSettings["providerMode"], "demo">; label: string; detail: string }> = [
+type ActiveProviderMode = Exclude<AppSettings["providerMode"], "demo">;
+
+const searchProviderOptions: Array<{ value: ActiveProviderMode; label: string; detail: string }> = [
   { value: "netease", label: "网易云", detail: "当前主源" },
   { value: "qq", label: "QQ 音乐", detail: "QQ 曲库" },
   { value: "aggregate", label: "聚合", detail: "双平台" }
 ];
+const accountProviderHints: Record<ActiveProviderMode, string> = {
+  netease: "只看网易云数据",
+  qq: "只看 QQ 音乐数据",
+  aggregate: "双平台聚合数据"
+};
 const playlistSortOptions: Array<{ value: PlaylistSortMode; label: string }> = [
   { value: "default", label: "默认顺序" },
   { value: "title-asc", label: "标题 A-Z" },
@@ -1018,6 +1025,7 @@ export default function App() {
   const [playlists, setPlaylists] = useState<UserPlaylist[]>([]);
   const [tasks, setTasks] = useState<DownloadTask[]>([]);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [switchingProviderMode, setSwitchingProviderMode] = useState(false);
   const [adminConfig, setAdminConfig] = useState<AdminConfigView>(defaultAdminConfig);
   const [transferSourceProvider, setTransferSourceProvider] = useState<TransferSourceProvider>("netease");
   const [transferTargetProvider, setTransferTargetProvider] = useState<TransferTargetProvider>("qq");
@@ -3227,6 +3235,26 @@ export default function App() {
       setMessage(error instanceof Error ? error.message : "保存设置失败");
     } finally {
       setSavingSettings(false);
+    }
+  }
+
+  async function handleSwitchProviderMode(providerMode: ActiveProviderMode) {
+    if (switchingProviderMode || activeSearchProviderMode === providerMode) {
+      return;
+    }
+
+    try {
+      setSwitchingProviderMode(true);
+      const saved = await saveSettings({
+        ...settings,
+        providerMode
+      });
+      setSettings(saved);
+      setMessage(`已切换到${accountProviderHints[providerMode]}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "切换数据来源失败");
+    } finally {
+      setSwitchingProviderMode(false);
     }
   }
 
@@ -5966,19 +5994,45 @@ export default function App() {
               <div className="identity-popover account-center-popover" role="menu" aria-label="账号中心">
                 <div className="account-center-head">
                   <strong>账号中心</strong>
-                  <span>网易云与 QQ 音乐账号接入</span>
+                  <span>账号接入与当前数据来源</span>
                 </div>
 
-                <section className={accountIsLoggedIn ? "platform-account-card active" : "platform-account-card"} aria-label="网易云音乐账号">
+                <section className="account-provider-panel" aria-label="当前数据来源">
+                  <div className="account-provider-panel-head">
+                    <span>当前数据</span>
+                    <strong>{activeSearchProviderLabel}</strong>
+                  </div>
+                  <div className="account-provider-switch" role="tablist" aria-label="切换数据来源">
+                    {searchProviderOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        role="tab"
+                        aria-selected={activeSearchProviderMode === option.value}
+                        className={activeSearchProviderMode === option.value ? "account-provider-button active" : "account-provider-button"}
+                        disabled={switchingProviderMode}
+                        onClick={() => void handleSwitchProviderMode(option.value)}
+                      >
+                        <strong>{option.label}</strong>
+                        <span>{accountProviderHints[option.value]}</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section className={`${accountIsLoggedIn ? "platform-account-card active" : "platform-account-card"} ${activeSearchProviderMode === "netease" ? "current-source" : ""}`} aria-label="网易云音乐账号">
                   <div className="platform-account-main">
                     <span className="platform-account-mark netease" aria-hidden="true">网</span>
                     <div className="platform-account-copy">
                       <strong>网易云音乐</strong>
                       <span>{accountIsLoggedIn ? `${accountDisplayName} · ${accountProviderLabel}` : "未登录 · 播放网易云内容需登录"}</span>
                     </div>
-                    <span className={accountVipEnabled ? "platform-account-state vip" : "platform-account-state"}>
-                      {accountStatusLabel}
-                    </span>
+                    <div className="platform-account-badges">
+                      {activeSearchProviderMode === "netease" ? <span className="platform-account-current">当前数据</span> : null}
+                      <span className={accountVipEnabled ? "platform-account-state vip" : "platform-account-state"}>
+                        {accountStatusLabel}
+                      </span>
+                    </div>
                   </div>
                   <p>{accountIsLoggedIn ? "当前用于网易云搜索、播放、下载、歌单与评论操作。" : "扫码、验证码或 MUSIC_U Cookie 均可接入网易云账号。"}</p>
                   <div className={accountIsLoggedIn ? "platform-account-actions" : "platform-account-actions single"}>
@@ -5993,14 +6047,17 @@ export default function App() {
                   </div>
                 </section>
 
-                <section className={hasQqMusicCookie ? "platform-account-card active" : "platform-account-card pending"} aria-label="QQ音乐账号">
+                <section className={`${hasQqMusicCookie ? "platform-account-card active" : "platform-account-card pending"} ${activeSearchProviderMode === "qq" ? "current-source" : ""}`} aria-label="QQ音乐账号">
                   <div className="platform-account-main">
                     <span className="platform-account-mark qq" aria-hidden="true">Q</span>
                     <div className="platform-account-copy">
                       <strong>QQ 音乐</strong>
                       <span>{qqMusicAccountDetailLabel}</span>
                     </div>
-                    <span className={hasQqMusicCookie ? (qqAccountVipEnabled ? "platform-account-state vip" : "platform-account-state") : "platform-account-state muted"}>{qqMusicPlatformStatusLabel}</span>
+                    <div className="platform-account-badges">
+                      {activeSearchProviderMode === "qq" ? <span className="platform-account-current">当前数据</span> : null}
+                      <span className={hasQqMusicCookie ? (qqAccountVipEnabled ? "platform-account-state vip" : "platform-account-state") : "platform-account-state muted"}>{qqMusicPlatformStatusLabel}</span>
+                    </div>
                   </div>
                   <p>{hasQqMusicCookie ? (qqAccountStatus?.message || "用于 QQ 搜索结果的试听、下载与后续绿钻优先策略。") : "导入 y.qq.com Cookie 后，QQ 搜索结果才能尝试会员音源和高品质链接。"}</p>
                   <div className="platform-account-actions">
@@ -7172,7 +7229,8 @@ export default function App() {
                       role="tab"
                       aria-selected={activeSearchProviderMode === option.value}
                       className={activeSearchProviderMode === option.value ? "search-provider-button active" : "search-provider-button"}
-                      onClick={() => setSettings((current) => ({ ...current, providerMode: option.value }))}
+                      disabled={switchingProviderMode}
+                      onClick={() => void handleSwitchProviderMode(option.value)}
                     >
                       <strong>{option.label}</strong>
                       <span>{option.detail}</span>
