@@ -35,6 +35,7 @@ import type {
   SongComment,
   SongCommentRepliesPage,
   SongCommentsPage,
+  SongInsight,
   SongLyrics,
   TransferExportFormat,
   TransferExportResult,
@@ -496,6 +497,19 @@ export async function getSongAudioProbe(song: Song, level: DownloadQualityLevel,
 
   const data = (await response.json()) as { probe: SongAudioProbe };
   return data.probe;
+}
+
+export async function getSongInsight(song: Song | string): Promise<SongInsight> {
+  const identity = getSongIdentity(song);
+  const query = identity.params.toString();
+  const response = await apiFetch(`/api/songs/${encodeURIComponent(identity.id)}/insight${query ? `?${query}` : ""}`);
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取歌曲洞察失败");
+  }
+
+  const data = (await response.json()) as { insight: SongInsight };
+  return data.insight;
 }
 
 export async function setSongCommentLiked(song: Song | string, commentId: string, liked: boolean): Promise<boolean> {

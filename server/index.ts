@@ -21,6 +21,7 @@ import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getPersonalRadioSongs } from "./personal-radio-provider.js";
 import { checkQqMusicCookie, getQqDiscoverSongs, getQqMusicAccountStatus, getQqPlaylistSongs, getQqSongCommentReplies, getQqSongComments, getQqSongLyrics, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream, setQqSongCommentLiked } from "./qqmusic-provider.js";
 import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./settings-store.js";
+import { getNeteaseSongInsight } from "./song-insight-provider.js";
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
 import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, getTaskFileForDownload, probeSongAudio, resolveDirectDownload, resolveSongStream } from "./task-store.js";
 import { checkNeteaseQrLogin, loginWithNeteaseCellphone, sendNeteaseCaptcha, startNeteaseQrLogin } from "./netease-auth.js";
@@ -362,6 +363,29 @@ app.post("/api/songs/audio-probe", async (request, response) => {
   } catch (error) {
     response.status(error instanceof MediaAccessError ? error.status : 502).json({
       message: error instanceof Error ? error.message : "检测实际音源失败"
+    });
+  }
+});
+
+app.get("/api/songs/:id/insight", async (request, response) => {
+  const source = typeof request.query.source === "string" ? request.query.source : "";
+
+  try {
+    if (source === "qqmusic") {
+      response.json({
+        insight: {
+          songId: request.params.id,
+          listening: { note: "QQ 音乐歌曲洞察暂未接入" },
+          encyclopedia: { tags: [] }
+        }
+      });
+      return;
+    }
+
+    response.json({ insight: await getNeteaseSongInsight(request.params.id) });
+  } catch (error) {
+    response.status(502).json({
+      message: error instanceof Error ? error.message : "获取歌曲洞察失败"
     });
   }
 });

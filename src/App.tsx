@@ -33,6 +33,7 @@ import {
   getSongCommentReplies,
   getSongComments,
   getSongAudioProbe,
+  getSongInsight,
   getUserEvents,
   getUserProfile,
   getUserSocialList,
@@ -66,7 +67,7 @@ import {
   replyToSongComment,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, QqMusicAccountStatus, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, QqMusicAccountStatus, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, SongInsight, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
@@ -1181,6 +1182,8 @@ export default function App() {
   const [songDetailComments, setSongDetailComments] = useState<SongCommentsPage | null>(null);
   const [songDetailPlaybackProbe, setSongDetailPlaybackProbe] = useState<SongAudioProbe | null>(null);
   const [songDetailDownloadProbe, setSongDetailDownloadProbe] = useState<SongAudioProbe | null>(null);
+  const [songDetailInsight, setSongDetailInsight] = useState<SongInsight | null>(null);
+  const [songDetailInsightError, setSongDetailInsightError] = useState("");
   const [loadingSongDetail, setLoadingSongDetail] = useState(false);
   const [songDetailError, setSongDetailError] = useState("");
   const [userProfileTarget, setUserProfileTarget] = useState<UserProfileTarget | null>(null);
@@ -4850,11 +4853,14 @@ export default function App() {
     setSongDetailComments(null);
     setSongDetailPlaybackProbe(null);
     setSongDetailDownloadProbe(null);
+    setSongDetailInsight(null);
+    setSongDetailInsightError("");
 
     const loadDetail = async () => {
-      const [lyricsResult, commentsResult, playbackProbeResult, downloadProbeResult] = await Promise.allSettled([
+      const [lyricsResult, commentsResult, insightResult, playbackProbeResult, downloadProbeResult] = await Promise.allSettled([
         getLyrics(songDetailSong),
         getSongComments(songDetailSong, 1, 6),
+        getSongInsight(songDetailSong),
         accountIsLoggedIn || songDetailSong.source === "qqmusic"
           ? getSongAudioProbe(songDetailSong, playbackLevel, "playback")
           : Promise.reject(new Error("登录后检测实际播放音源")),
@@ -4879,6 +4885,12 @@ export default function App() {
         setSongDetailComments(commentsResult.value);
       } else {
         detailErrors.push(commentsResult.reason instanceof Error ? commentsResult.reason.message : "评论读取失败");
+      }
+
+      if (insightResult.status === "fulfilled") {
+        setSongDetailInsight(insightResult.value);
+      } else {
+        setSongDetailInsightError(insightResult.reason instanceof Error ? insightResult.reason.message : "歌曲洞察读取失败");
       }
 
       if (playbackProbeResult.status === "fulfilled") {
@@ -5381,6 +5393,16 @@ export default function App() {
         .filter((comment, index, list) => list.findIndex((item) => item.id === comment.id) === index)
         .slice(0, 3)
     : [];
+  const songDetailListeningCards = [
+    { label: "听过次数", value: songDetailInsight?.listening.playCountText ?? "暂无", detail: "来自听歌排行" },
+    { label: "第一次听", value: songDetailInsight?.listening.firstListenText ?? "暂无", detail: "回忆坐标" },
+    { label: "最近播放", value: songDetailInsight?.listening.recentListenText ?? "暂无", detail: "最近播放记录" }
+  ];
+  const songDetailFactLines = [
+    songDetailInsight?.encyclopedia.sourceText,
+    songDetailInsight?.encyclopedia.releaseText,
+    songDetailInsight?.encyclopedia.originText
+  ].filter((item): item is string => Boolean(item));
   const isDiscoverListView = mainTab === "search" && navKey === "discover" && resultSource === "discover";
   const isPlaylistSongsView = mainTab === "search" && navKey === "playlists" && resultSource === "playlist" && Boolean(activePlaylist);
   const isDetailResultView = mainTab === "search" && (navKey === "artist" || navKey === "album");
@@ -8366,6 +8388,45 @@ export default function App() {
                     <strong>{songDetailDownloadProbe?.actualLabel ?? (loadingSongDetail ? "检测中" : "未检测")}</strong>
                     <small>{loadingSongDetail && !songDetailDownloadProbe ? "正在解析下载地址" : getProbeStatusText(songDetailDownloadProbe, songDetailDownloadLabel)}</small>
                   </article>
+                </section>
+
+                <section className="song-detail-insight" aria-label="歌曲洞察">
+                  <div className="song-detail-section-head">
+                    <strong>听歌洞察</strong>
+                    <span>{songDetailInsight ? "网易云百科" : loadingSongDetail ? "读取中" : songDetailInsightError ? "读取失败" : "暂无"}</span>
+                  </div>
+                  <div className="song-detail-memory-grid">
+                    {songDetailListeningCards.map((item) => (
+                      <article key={item.label} className="song-detail-memory-card">
+                        <span>{item.label}</span>
+                        <strong>{loadingSongDetail && !songDetailInsight ? "读取中" : item.value}</strong>
+                        <small>{item.detail}</small>
+                      </article>
+                    ))}
+                  </div>
+                  {songDetailInsight?.listening.note ? <p className="song-detail-insight-note">{songDetailInsight.listening.note}</p> : null}
+                  {songDetailInsightError ? <p className="song-detail-insight-note">{songDetailInsightError}</p> : null}
+                  {songDetailInsight && (songDetailInsight.encyclopedia.tags.length > 0 || songDetailFactLines.length > 0) ? (
+                    <div className="song-detail-tag-groups">
+                      {songDetailInsight.encyclopedia.tags.map((group) => (
+                        <div key={group.label} className="song-detail-tag-group">
+                          <span>{group.label}</span>
+                          <div>
+                            {group.values.map((value) => (
+                              <em key={`${group.label}-${value}`}>{value}</em>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                      {songDetailFactLines.length > 0 ? (
+                        <div className="song-detail-facts">
+                          {songDetailFactLines.map((line) => (
+                            <span key={line}>{line}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </section>
 
                 {songDetailError ? <p className="song-detail-error">{songDetailError}</p> : null}

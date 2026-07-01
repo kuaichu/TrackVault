@@ -126,6 +126,28 @@ export type SongAudioProbe = {
   trial: boolean;
 };
 
+export type SongInsightTag = {
+  label: string;
+  values: string[];
+};
+
+export type SongInsight = {
+  songId: string;
+  listening: {
+    playCount?: number;
+    playCountText?: string;
+    firstListenText?: string;
+    recentListenText?: string;
+    note?: string;
+  };
+  encyclopedia: {
+    tags: SongInsightTag[];
+    sourceText?: string;
+    releaseText?: string;
+    originText?: string;
+  };
+};
+
 export type UserProfilePlaylist = {
   id: string;
   name: string;
