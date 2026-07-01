@@ -838,7 +838,7 @@ input[type="range"] {
     linear-gradient(90deg, rgba(3, 7, 13, 0.54), transparent 62%);
 }
 
-.user-profile-close {
+.user-profile-card .user-profile-close {
   position: absolute;
   top: 14px;
   right: 14px;
