@@ -1468,6 +1468,12 @@ export default function App() {
     setSelectedSongIds([]);
   }
 
+  function scrollResultListToTop() {
+    window.requestAnimationFrame(() => {
+      resultBodyRef.current?.scrollTo({ top: 0, behavior: "auto" });
+    });
+  }
+
   function addToPlayHistory(song: Song) {
     setPlayHistory((current) => {
       const nextHistory = [song, ...current.filter((item) => item.id !== song.id)].slice(0, 30);
@@ -1977,6 +1983,7 @@ export default function App() {
       setPlaylistSearchKeyword(pageData.keyword ?? normalizedKeyword);
       setPlaylistSearchInput(pageData.keyword ?? normalizedKeyword);
       navigateTo("playlists");
+      scrollResultListToTop();
       const totalPages = Math.max(1, Math.ceil((pageData.total || playlist.trackCount) / pageData.limit));
       setMessage(
         pageData.keyword
