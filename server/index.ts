@@ -563,6 +563,12 @@ app.get("/api/stream", async (request, response) => {
       }
     }
 
+    const resolvedType = "type" in resolved && typeof resolved.type === "string" ? resolved.type : undefined;
+    const resolvedContentType = getAudioContentType(resolvedType);
+    if (resolvedContentType) {
+      response.setHeader("content-type", resolvedContentType);
+    }
+
     response.setHeader("Access-Control-Allow-Origin", "*");
     response.status(upstream.status);
     Readable.fromWeb(upstream.body as any).pipe(response);
@@ -573,6 +579,25 @@ app.get("/api/stream", async (request, response) => {
     });
   }
 });
+
+function getAudioContentType(type: string | null | undefined) {
+  const normalizedType = type?.replace(/^\./, "").toLowerCase();
+
+  switch (normalizedType) {
+    case "flac":
+      return "audio/flac";
+    case "wav":
+      return "audio/wav";
+    case "aac":
+      return "audio/aac";
+    case "m4a":
+      return "audio/mp4";
+    case "mp3":
+      return "audio/mpeg";
+    default:
+      return "";
+  }
+}
 
 function buildContentDisposition(filename: string) {
   const fallback = filename.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "_");
