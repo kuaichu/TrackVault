@@ -312,8 +312,8 @@ input[type="range"] {
 .identity-platform-chip {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
+  justify-content: flex-start;
+  gap: 5px;
   min-width: 0;
   max-width: 100%;
   min-height: 28px;
@@ -327,7 +327,6 @@ input[type="range"] {
 
 .identity-platform-chip b,
 .identity-platform-chip em {
-  flex: 0 0 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -336,11 +335,13 @@ input[type="range"] {
 }
 
 .identity-platform-chip b {
+  flex: 0 0 auto;
   color: var(--text-primary);
   font-size: 11px;
 }
 
 .identity-platform-chip em {
+  flex: 1 1 auto;
   color: var(--text-secondary);
   font-size: 11px;
 }

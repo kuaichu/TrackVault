@@ -1203,6 +1203,7 @@ export default function App() {
   const neteasePlatformStatusLabel = accountIsLoggedIn ? (accountVipEnabled ? "黑胶" : "标准") : "未登录";
   const hasQqMusicCookie = Boolean(settings.qqMusicCookie?.trim());
   const qqMusicPlatformStatusLabel = hasQqMusicCookie ? "Cookie 已导入" : "可搜索";
+  const qqMusicSidebarStatusLabel = hasQqMusicCookie ? "已导入" : "可搜索";
   const activeSearchProviderMode = settings.providerMode === "demo" ? "netease" : settings.providerMode;
   const activeSearchProviderLabel = searchProviderOptions.find((option) => option.value === activeSearchProviderMode)?.label ?? "网易云";
   const hasNeteaseDownloadAuth = accountIsLoggedIn;
@@ -5923,7 +5924,7 @@ export default function App() {
                 </span>
                 <span className={hasQqMusicCookie ? "identity-platform-chip active" : "identity-platform-chip"}>
                   <b>QQ</b>
-                  <em>{qqMusicPlatformStatusLabel}</em>
+                  <em>{qqMusicSidebarStatusLabel}</em>
                 </span>
               </div>
             </button>
