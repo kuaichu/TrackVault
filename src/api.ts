@@ -13,6 +13,7 @@ import type {
   NeteaseImportAuditJob,
   NeteaseImportAuditRequest,
   NeteaseCookieCheckResult,
+  QqMusicAccountStatus,
   QqMusicCookieCheckResult,
   PersonalRadioKind,
   NeteaseQrCheckResult,
@@ -719,6 +720,14 @@ export async function getSession(): Promise<AuthSession> {
     throw new Error("获取账号信息失败");
   }
   return (await response.json()) as AuthSession;
+}
+
+export async function getQqMusicAccountStatus(): Promise<QqMusicAccountStatus> {
+  const response = await apiFetch("/api/account/qqmusic");
+  if (!response.ok) {
+    throw new Error("获取 QQ 音乐账号信息失败");
+  }
+  return (await response.json()) as QqMusicAccountStatus;
 }
 
 export async function loginAccount(payload: { accountName: string; vipEnabled: boolean; note: string }): Promise<AuthSession> {

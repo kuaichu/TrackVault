@@ -22,6 +22,7 @@ import {
   getSession,
   getPlayHistory,
   getPlayerState as getPlayerStateRemote,
+  getQqMusicAccountStatus,
   getCloudSongs,
   getDailyRecommendSongs,
   getDiscoverSongs,
@@ -65,7 +66,7 @@ import {
   replyToSongComment,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, QqMusicAccountStatus, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
@@ -1131,6 +1132,8 @@ export default function App() {
   const [checkingQqCookie, setCheckingQqCookie] = useState(false);
   const [copyingQqCookieGuide, setCopyingQqCookieGuide] = useState(false);
   const [qqLoginMessage, setQqLoginMessage] = useState(QQ_COOKIE_LOGIN_DEFAULT_MESSAGE);
+  const [qqAccountStatus, setQqAccountStatus] = useState<QqMusicAccountStatus | null>(null);
+  const [loadingQqAccountStatus, setLoadingQqAccountStatus] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSeconds, setPlaybackSeconds] = useState(initialPlayerState.playbackSeconds);
   const [playbackDuration, setPlaybackDuration] = useState(0);
@@ -1202,8 +1205,15 @@ export default function App() {
   const accountIsLoggedIn = session.loggedIn || accountProfile?.provider === "netease";
   const neteasePlatformStatusLabel = accountIsLoggedIn ? (accountVipEnabled ? "黑胶" : "标准") : "未登录";
   const hasQqMusicCookie = Boolean(settings.qqMusicCookie?.trim());
-  const qqMusicPlatformStatusLabel = hasQqMusicCookie ? "Cookie 已导入" : "可搜索";
-  const qqMusicSidebarStatusLabel = hasQqMusicCookie ? "已导入" : "可搜索";
+  const qqAccountVipEnabled = Boolean(qqAccountStatus?.vipEnabled);
+  const qqMusicAccountName = qqAccountStatus?.displayName?.trim() || (qqAccountStatus?.uin ? `QQ ${qqAccountStatus.uin}` : "");
+  const qqMusicPlatformStatusLabel = hasQqMusicCookie ? (qqAccountVipEnabled ? "VIP" : "普通") : "未登录";
+  const qqMusicSidebarStatusLabel = qqMusicPlatformStatusLabel;
+  const qqMusicAccountDetailLabel = hasQqMusicCookie
+    ? loadingQqAccountStatus
+      ? "正在同步账号信息"
+      : qqMusicAccountName || "已导入登录态"
+    : "未登录 · 当前仅可搜索";
   const activeSearchProviderMode = settings.providerMode === "demo" ? "netease" : settings.providerMode;
   const activeSearchProviderLabel = searchProviderOptions.find((option) => option.value === activeSearchProviderMode)?.label ?? "网易云";
   const hasNeteaseDownloadAuth = accountIsLoggedIn;
@@ -2395,6 +2405,24 @@ export default function App() {
     }
   }
 
+  async function refreshQqMusicAccountStatus(cookieOverride?: string) {
+    if (!(cookieOverride ?? settings.qqMusicCookie).trim()) {
+      setQqAccountStatus(null);
+      return null;
+    }
+
+    try {
+      setLoadingQqAccountStatus(true);
+      const nextStatus = await getQqMusicAccountStatus();
+      setQqAccountStatus(nextStatus);
+      return nextStatus;
+    } catch {
+      return null;
+    } finally {
+      setLoadingQqAccountStatus(false);
+    }
+  }
+
   async function ensureNeteaseCookieHealthy(options: { force?: boolean; silent?: boolean; cookieOverride?: string } = {}) {
     const cookie = (options.cookieOverride ?? settings.neteaseCookie).trim();
 
@@ -3414,6 +3442,7 @@ export default function App() {
         qqMusicCookie: result.refreshedCookie ?? cookie
       });
       setSettings(saved);
+      void refreshQqMusicAccountStatus(saved.qqMusicCookie);
       setMessage(result.message || `QQ 音乐 Cookie 已导入：${result.uin ?? "QQ 账号"}`);
       closeQqLogin();
     } catch (error) {
@@ -3465,6 +3494,7 @@ export default function App() {
         qqMusicCookie: ""
       });
       setSettings(saved);
+      setQqAccountStatus(null);
       setQqCookieInput("");
       setQqLoginMessage("已清除 QQ 音乐 Cookie。");
       setMessage("已清除 QQ 音乐 Cookie。");
@@ -4284,6 +4314,9 @@ export default function App() {
       const cookie = nextSettings?.neteaseCookie.trim();
       if (cookie) {
         void ensureNeteaseCookieHealthy({ silent: true, force: true, cookieOverride: cookie });
+      }
+      if (nextSettings?.qqMusicCookie.trim()) {
+        void refreshQqMusicAccountStatus(nextSettings.qqMusicCookie);
       }
     });
     void refreshAdminConfig();
@@ -5965,11 +5998,11 @@ export default function App() {
                     <span className="platform-account-mark qq" aria-hidden="true">Q</span>
                     <div className="platform-account-copy">
                       <strong>QQ 音乐</strong>
-                      <span>{hasQqMusicCookie ? "已导入网页登录态" : "未授权 · 当前仅可搜索"}</span>
+                      <span>{qqMusicAccountDetailLabel}</span>
                     </div>
-                    <span className={hasQqMusicCookie ? "platform-account-state" : "platform-account-state muted"}>{qqMusicPlatformStatusLabel}</span>
+                    <span className={hasQqMusicCookie ? (qqAccountVipEnabled ? "platform-account-state vip" : "platform-account-state") : "platform-account-state muted"}>{qqMusicPlatformStatusLabel}</span>
                   </div>
-                  <p>{hasQqMusicCookie ? "用于 QQ 搜索结果的试听、下载与后续绿钻优先策略。" : "导入 y.qq.com Cookie 后，QQ 搜索结果才能尝试会员音源和高品质链接。"}</p>
+                  <p>{hasQqMusicCookie ? (qqAccountStatus?.message || "用于 QQ 搜索结果的试听、下载与后续绿钻优先策略。") : "导入 y.qq.com Cookie 后，QQ 搜索结果才能尝试会员音源和高品质链接。"}</p>
                   <div className="platform-account-actions">
                     <button type="button" role="menuitem" onClick={openQqCookieLogin}>
                       {hasQqMusicCookie ? "更新 Cookie" : "导入 Cookie"}

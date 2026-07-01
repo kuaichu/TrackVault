@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import type { DownloadQualityLevel, DownloadQualityOption, QqMusicCookieCheckResult, Song, SongAudioProbe, SongAudioProbeMode } from "./types.js";
+import type { DownloadQualityLevel, DownloadQualityOption, QqMusicAccountStatus, QqMusicCookieCheckResult, Song, SongAudioProbe, SongAudioProbeMode } from "./types.js";
 import { getSettings } from "./settings-store.js";
 
 const require = createRequire(import.meta.url);
@@ -47,6 +47,8 @@ type QqResolvedSong = {
   extension: "mp3" | "flac";
   bitrate: number;
 };
+
+type QqProfileDetail = Record<string, unknown>;
 
 export function isQqMusicSong(song: Pick<Song, "source">) {
   return song.source === "qqmusic";
@@ -221,6 +223,105 @@ function serializeQqCookie(cookieObj: Record<string, string>) {
     .join("; ");
 }
 
+function firstStringByKeys(input: unknown, keys: string[], visited = new Set<unknown>()): string | undefined {
+  if (!input || typeof input !== "object" || visited.has(input)) {
+    return undefined;
+  }
+
+  visited.add(input);
+  const record = input as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  for (const value of Object.values(record)) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = firstStringByKeys(item, keys, visited);
+        if (found) {
+          return found;
+        }
+      }
+      continue;
+    }
+
+    const found = firstStringByKeys(value, keys, visited);
+    if (found) {
+      return found;
+    }
+  }
+
+  return undefined;
+}
+
+function firstTruthyVip(input: unknown, visited = new Set<unknown>()): number | string | undefined {
+  if (!input || typeof input !== "object" || visited.has(input)) {
+    return undefined;
+  }
+
+  visited.add(input);
+  const record = input as Record<string, unknown>;
+  for (const [key, value] of Object.entries(record)) {
+    const normalizedKey = key.toLocaleLowerCase();
+    const mayBeVipKey = normalizedKey.includes("vip") || normalizedKey.includes("green") || normalizedKey.includes("lv");
+    if (!mayBeVipKey) {
+      continue;
+    }
+
+    if (typeof value === "number" && value > 0) {
+      return value;
+    }
+
+    if (typeof value === "string" && value.trim() && value !== "0" && value.toLocaleLowerCase() !== "false") {
+      return value.trim();
+    }
+
+    if (typeof value === "boolean" && value) {
+      return 1;
+    }
+  }
+
+  for (const value of Object.values(record)) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = firstTruthyVip(item, visited);
+        if (found) {
+          return found;
+        }
+      }
+      continue;
+    }
+
+    const found = firstTruthyVip(value, visited);
+    if (found) {
+      return found;
+    }
+  }
+
+  return undefined;
+}
+
+function toQqAccountStatus(cookieObj: Record<string, string>, detail: QqProfileDetail | null, message: string): QqMusicAccountStatus {
+  const displayName =
+    firstStringByKeys(detail, ["nick", "nickname", "hostname", "creatorName", "name"]) ??
+    (cookieObj.uin ? `QQ ${cookieObj.uin}` : null);
+  const avatarUrl = firstStringByKeys(detail, ["headurl", "headUrl", "avatar", "avatarUrl", "pic", "logo"]);
+  const vipType = firstTruthyVip(detail);
+
+  return {
+    ok: Boolean(cookieObj.uin),
+    uin: cookieObj.uin || null,
+    displayName,
+    avatarUrl,
+    vipEnabled: Boolean(vipType),
+    vipType,
+    message
+  };
+}
+
 async function configureQqCookie() {
   const settings = await getSettings();
   const cookie = settings.qqMusicCookie?.trim();
@@ -277,6 +378,40 @@ export async function checkQqMusicCookie(cookie: string): Promise<QqMusicCookieC
       message: `QQ 音乐 Cookie 已保存，但刷新 key 失败：${getQqErrorMessage(error)}。如果试听/下载仍失败，请重新登录 QQ 音乐后再提取。`,
       refreshedCookie: serializeQqCookie(cookieObj)
     };
+  }
+}
+
+export async function getQqMusicAccountStatus(): Promise<QqMusicAccountStatus> {
+  const settings = await getSettings();
+  const cookie = settings.qqMusicCookie?.trim() ?? "";
+  if (!cookie) {
+    return {
+      ok: false,
+      uin: null,
+      displayName: null,
+      vipEnabled: false,
+      message: "未导入 QQ 音乐 Cookie。"
+    };
+  }
+
+  const cookieObj = parseQqCookie(cookie);
+  if (!cookieObj.uin) {
+    return {
+      ok: false,
+      uin: null,
+      displayName: null,
+      vipEnabled: false,
+      message: "QQ 音乐 Cookie 缺少 uin 或 wxuin。"
+    };
+  }
+
+  qqMusic.setCookie(cookieObj);
+
+  try {
+    const detail = await qqMusic.api<QqProfileDetail>("user/detail", { id: cookieObj.uin });
+    return toQqAccountStatus(cookieObj, detail, "QQ 音乐账号信息已同步。");
+  } catch (error) {
+    return toQqAccountStatus(cookieObj, null, `QQ 音乐账号信息读取失败：${getQqErrorMessage(error)}`);
   }
 }
 

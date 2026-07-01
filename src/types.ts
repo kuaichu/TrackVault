@@ -342,6 +342,16 @@ export type QqMusicCookieCheckResult = {
   refreshedCookie?: string;
 };
 
+export type QqMusicAccountStatus = {
+  ok: boolean;
+  uin: string | null;
+  displayName: string | null;
+  avatarUrl?: string;
+  vipEnabled: boolean;
+  vipType?: number | string;
+  message: string;
+};
+
 export type NeteaseQrStartResult = {
   key: string;
   qrImage: string;
