@@ -8648,7 +8648,7 @@ export default function App() {
           <section className="playlist-picker-card" onClick={(event) => event.stopPropagation()}>
             <header>
               <div>
-                <p className="eyebrow">Add To Playlist</p>
+                <p className="eyebrow">歌单收藏</p>
                 <h2>收藏到我的歌单</h2>
                 <span>选择一个自建歌单，已自动排除歌曲所在歌单。</span>
               </div>
@@ -8701,7 +8701,9 @@ export default function App() {
                         <strong>{playlist.name}</strong>
                         <small>{playlist.trackCount} 首 · {playlist.creatorName}</small>
                       </span>
-                      <em>{addingToPlaylistId === playlist.id ? "收藏中" : selected ? "✓" : "选择"}</em>
+                      <em className="playlist-picker-state" aria-hidden="true">
+                        {addingToPlaylistId === playlist.id ? "..." : selected ? "✓" : ""}
+                      </em>
                     </button>
                   );
                 })}
