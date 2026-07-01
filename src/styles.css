@@ -9204,16 +9204,47 @@ body {
 
 .playlist-filter-form {
   display: grid;
-  grid-template-columns: minmax(220px, 350px) auto;
-  gap: 10px;
+  grid-template-columns: minmax(260px, 440px) auto auto;
+  gap: 8px;
   align-items: center;
   margin-left: 0;
 }
 
 .playlist-filter-form input {
   height: 42px;
+  min-width: 0;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
-  background: rgba(13, 20, 31, 0.88);
+  outline: none;
+  background:
+    linear-gradient(180deg, rgba(18, 27, 41, 0.92), rgba(12, 18, 29, 0.92)),
+    rgba(13, 20, 31, 0.88);
+  color: var(--text-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.playlist-filter-form input::placeholder {
+  color: rgba(186, 198, 214, 0.56);
+}
+
+.playlist-filter-form input:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  background:
+    linear-gradient(180deg, rgba(22, 31, 46, 0.96), rgba(14, 21, 33, 0.96)),
+    rgba(13, 20, 31, 0.92);
+}
+
+.playlist-filter-form input:focus,
+.playlist-filter-form input:focus-visible {
+  border-color: rgba(255, 180, 93, 0.42);
+  outline: none;
+  background:
+    linear-gradient(180deg, rgba(25, 32, 45, 0.98), rgba(16, 22, 33, 0.98)),
+    rgba(13, 20, 31, 0.96);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    0 0 0 3px rgba(255, 180, 93, 0.1);
 }
 
 .results-head {
@@ -9306,7 +9337,7 @@ body {
   }
 
   .playlist-filter-form {
-    grid-template-columns: minmax(180px, 1fr) auto;
+    grid-template-columns: minmax(180px, 1fr) auto auto;
   }
 }
 
