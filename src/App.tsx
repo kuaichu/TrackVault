@@ -8198,21 +8198,22 @@ export default function App() {
           )}
         </section>
 
-        {rightPanelCollapsed ? (
-          <button
-            type="button"
-            className="right-panel-restore"
-            onClick={() => setRightPanelCollapsed(false)}
-            aria-label="展开播放侧栏"
-            title="展开播放侧栏"
-          >
-            <span className="right-panel-restore-core">
-              <PlayerIcon name="queue" />
-              <strong>{playQueue.length}</strong>
-            </span>
-          </button>
-        ) : (
-        <aside className="utility-panel play-sidebar">
+        <button
+          type="button"
+          className="right-panel-restore"
+          onClick={() => setRightPanelCollapsed(false)}
+          aria-label="展开播放侧栏"
+          title="展开播放侧栏"
+          aria-hidden={!rightPanelCollapsed}
+          tabIndex={rightPanelCollapsed ? 0 : -1}
+        >
+          <span className="right-panel-restore-core">
+            <PlayerIcon name="queue" />
+            <strong>{playQueue.length}</strong>
+          </span>
+        </button>
+
+        <aside className={rightPanelCollapsed ? "utility-panel play-sidebar is-collapsed" : "utility-panel play-sidebar"}>
           <header className="play-sidebar-header">
             <CoverArt song={currentTrack} className="play-sidebar-cover" />
             <div className="play-sidebar-title">
@@ -8400,7 +8401,6 @@ export default function App() {
             ) : null}
           </section>
         </aside>
-        )}
       </main>
 
       {userProfileTarget ? (
