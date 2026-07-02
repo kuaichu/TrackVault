@@ -9263,7 +9263,6 @@ export default function App() {
                 <div className="player-meta-row">
                   <span>专辑：{currentTrack?.album ?? "未知专辑"}</span>
                   <span>歌手：{currentTrack?.artist ?? "未知歌手"}</span>
-                  <span>音质：{currentTrack ? getSelectedLabel(currentTrack) : "--"}</span>
                 </div>
               </div>
 
