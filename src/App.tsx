@@ -269,8 +269,6 @@ const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
 };
 const AUDIO_FADE_IN_MS = 180;
 const AUDIO_FADE_OUT_MS = 220;
-const AUDIO_FADE_READY_FALLBACK_MS = 180;
-const AUDIO_FADE_READY_TIMEOUT_MS = 2500;
 const AUDIO_FADE_WATCHDOG_DELAYS_MS = [260, 700, 1400];
 const PAUSED_PLAYER_STATE_SYNC_DELAY_MS = 650;
 const playbackModeOrder: PlaybackMode[] = ["sequential", "shuffle", "repeat-one", "heartbeat"];
@@ -1018,7 +1016,6 @@ export default function App() {
   const volumeValueRef = useRef(initialPlayerState.volume);
   const audioFadeFrameRef = useRef<number | null>(null);
   const audioFadeTokenRef = useRef(0);
-  const pendingAudioFadeInCleanupRef = useRef<(() => void) | null>(null);
   const searchRequestIdRef = useRef(0);
   const listRequestIdRef = useRef(0);
   const cookieHealthRef = useRef<{ cookie: string; checkedAt: number; result: NeteaseCookieCheckResult | null }>({
@@ -2634,14 +2631,8 @@ export default function App() {
     return Math.min(1, Math.max(0, volumeValueRef.current / 100));
   }
 
-  function cancelPendingAudioFadeIn() {
-    pendingAudioFadeInCleanupRef.current?.();
-    pendingAudioFadeInCleanupRef.current = null;
-  }
-
   function cancelAudioFade() {
     audioFadeTokenRef.current += 1;
-    cancelPendingAudioFadeIn();
     if (audioFadeFrameRef.current !== null) {
       window.cancelAnimationFrame(audioFadeFrameRef.current);
       audioFadeFrameRef.current = null;
@@ -2693,44 +2684,6 @@ export default function App() {
     animateAudioVolume(audio, Math.min(audio.volume, targetVolume), getTargetAudioVolume, AUDIO_FADE_IN_MS);
   }
 
-  function startAudioFadeInWhenReady(audio: HTMLAudioElement, playToken: number) {
-    cancelPendingAudioFadeIn();
-
-    const start = () => {
-      if (playToken !== audioFadeTokenRef.current || audio.paused) {
-        return;
-      }
-
-      cleanup();
-      startAudioFadeIn(audio);
-    };
-
-    const cleanup = () => {
-      audio.removeEventListener("playing", start);
-      audio.removeEventListener("canplay", start);
-      audio.removeEventListener("loadeddata", start);
-      audio.removeEventListener("timeupdate", start);
-      window.clearTimeout(fallbackTimeout);
-      window.clearTimeout(timeout);
-      if (pendingAudioFadeInCleanupRef.current === cleanup) {
-        pendingAudioFadeInCleanupRef.current = null;
-      }
-    };
-
-    const fallbackTimeout = window.setTimeout(start, AUDIO_FADE_READY_FALLBACK_MS);
-    const timeout = window.setTimeout(start, AUDIO_FADE_READY_TIMEOUT_MS);
-    pendingAudioFadeInCleanupRef.current = cleanup;
-
-    audio.addEventListener("playing", start);
-    audio.addEventListener("canplay", start);
-    audio.addEventListener("loadeddata", start);
-    audio.addEventListener("timeupdate", start);
-
-    if (audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-      window.requestAnimationFrame(start);
-    }
-  }
-
   function scheduleAudioFadeInWatchdog(audio: HTMLAudioElement, playToken: number) {
     AUDIO_FADE_WATCHDOG_DELAYS_MS.forEach((delayMs) => {
       window.setTimeout(() => {
@@ -2756,7 +2709,7 @@ export default function App() {
           return;
         }
 
-        startAudioFadeInWhenReady(audio, playToken);
+        startAudioFadeIn(audio);
       })
       .catch(() => {
         if (playToken !== audioFadeTokenRef.current) {
