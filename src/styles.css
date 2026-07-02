@@ -11901,6 +11901,90 @@ body {
   max-width: 280px;
 }
 
+@keyframes responsive-row-settle {
+  from {
+    opacity: 0.92;
+    transform: translateY(4px) scale(0.992);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .app-layout,
+  .content-panel,
+  .results-panel,
+  .results-body,
+  .playlist-toolbar,
+  .playlist-toolbar-pagination,
+  .playlist-toolbar-controls,
+  .playlist-filter-form,
+  .discover-mix-card,
+  .discover-mix-copy,
+  .result-row,
+  .result-track,
+  .result-meta,
+  .result-time,
+  .quality-select,
+  .quality-trigger,
+  .row-actions,
+  .row-actions .row-icon-button {
+    transition-duration: 220ms;
+    transition-timing-function: cubic-bezier(0.22, 0.82, 0.22, 1);
+  }
+
+  .app-layout,
+  .playlist-toolbar,
+  .playlist-toolbar-pagination,
+  .playlist-toolbar-controls,
+  .playlist-filter-form,
+  .discover-mix-card,
+  .result-row {
+    transition-property:
+      grid-template-columns,
+      grid-template-rows,
+      gap,
+      min-height,
+      padding,
+      margin,
+      border-radius,
+      max-width,
+      width,
+      background,
+      border-color,
+      box-shadow,
+      transform;
+  }
+
+  .content-panel,
+  .results-panel,
+  .results-body,
+  .discover-mix-copy,
+  .result-track,
+  .result-meta,
+  .result-time,
+  .quality-select,
+  .quality-trigger,
+  .row-actions,
+  .row-actions .row-icon-button {
+    transition-property:
+      width,
+      max-width,
+      min-height,
+      height,
+      padding,
+      gap,
+      opacity,
+      transform,
+      background,
+      border-color,
+      color;
+  }
+}
+
 @media (min-width: 1321px) {
   .results-head,
   .result-row {
@@ -11962,6 +12046,12 @@ body {
 
   .discover-mix-copy {
     max-width: none;
+  }
+}
+
+@media (max-width: 1240px) and (prefers-reduced-motion: no-preference) {
+  .result-row {
+    animation: responsive-row-settle 180ms cubic-bezier(0.22, 0.82, 0.22, 1);
   }
 }
 
