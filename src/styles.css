@@ -11935,7 +11935,8 @@ body {
 }
 
 .app-layout.right-panel-collapsed .content-panel {
-  max-width: 1580px;
+  max-width: none;
+  justify-self: stretch;
 }
 
 .discover-mix-card {
