@@ -269,6 +269,7 @@ const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
 };
 const AUDIO_FADE_IN_MS = 180;
 const AUDIO_FADE_OUT_MS = 220;
+const AUDIO_FADE_READY_FALLBACK_MS = 180;
 const AUDIO_FADE_READY_TIMEOUT_MS = 2500;
 const PAUSED_PLAYER_STATE_SYNC_DELAY_MS = 650;
 const playbackModeOrder: PlaybackMode[] = ["sequential", "shuffle", "repeat-one", "heartbeat"];
@@ -2708,12 +2709,14 @@ export default function App() {
       audio.removeEventListener("canplay", start);
       audio.removeEventListener("loadeddata", start);
       audio.removeEventListener("timeupdate", start);
+      window.clearTimeout(fallbackTimeout);
       window.clearTimeout(timeout);
       if (pendingAudioFadeInCleanupRef.current === cleanup) {
         pendingAudioFadeInCleanupRef.current = null;
       }
     };
 
+    const fallbackTimeout = window.setTimeout(start, AUDIO_FADE_READY_FALLBACK_MS);
     const timeout = window.setTimeout(start, AUDIO_FADE_READY_TIMEOUT_MS);
     pendingAudioFadeInCleanupRef.current = cleanup;
 
