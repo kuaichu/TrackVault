@@ -2678,7 +2678,8 @@ export default function App() {
     }
 
     if (audioFadeFrameRef.current !== null) {
-      return;
+      window.cancelAnimationFrame(audioFadeFrameRef.current);
+      audioFadeFrameRef.current = null;
     }
 
     animateAudioVolume(audio, Math.min(audio.volume, targetVolume), getTargetAudioVolume, AUDIO_FADE_IN_MS);
@@ -2699,6 +2700,7 @@ export default function App() {
   function playAudioWithFade(audio: HTMLAudioElement, errorMessage: string) {
     cancelAudioFade();
     const playToken = audioFadeTokenRef.current;
+    audio.dataset.playIntent = "playing";
     audio.volume = 0;
     setIsPlaying(true);
     scheduleAudioFadeInWatchdog(audio, playToken);
@@ -2717,6 +2719,7 @@ export default function App() {
         }
 
         cancelAudioFade();
+        audio.dataset.playIntent = "paused";
         audio.volume = getTargetAudioVolume();
         setIsPlaying(false);
         setPlayerError(errorMessage);
@@ -2724,6 +2727,7 @@ export default function App() {
   }
 
   function pauseAudioWithFade(audio: HTMLAudioElement) {
+    audio.dataset.playIntent = "paused";
     setIsPlaying(false);
 
     if (audio.paused) {
@@ -2739,6 +2743,7 @@ export default function App() {
 
   function stopAudioImmediately(audio: HTMLAudioElement) {
     cancelAudioFade();
+    audio.dataset.playIntent = "paused";
     audio.pause();
     audio.volume = getTargetAudioVolume();
   }
@@ -5362,7 +5367,7 @@ export default function App() {
       playbackSecondsRef.current = nextSeconds;
       setPlaybackSeconds(nextSeconds);
       updateBufferedSeconds();
-      if (!audio.paused && audio.volume <= 0.001) {
+      if (audio.dataset.playIntent === "playing" && !audio.paused && audio.volume <= 0.001) {
         startAudioFadeIn(audio);
       }
     };
@@ -5393,16 +5398,20 @@ export default function App() {
 
     const handlePlaybackReady = () => {
       updateBufferedSeconds();
-      if (!audio.paused && audio.volume <= 0.001) {
+      if (audio.dataset.playIntent === "playing" && !audio.paused && audio.volume <= 0.001) {
         startAudioFadeIn(audio);
       }
     };
 
     const handlePause = () => {
-      setIsPlaying(false);
+      if (audio.paused) {
+        audio.dataset.playIntent = "paused";
+        setIsPlaying(false);
+      }
     };
 
     const handleEnded = () => {
+      audio.dataset.playIntent = "paused";
       setIsPlaying(false);
 
       if (playbackMode === "repeat-one" && currentTrack && accountIsLoggedIn) {
@@ -5417,6 +5426,7 @@ export default function App() {
     };
 
     const handleError = () => {
+      audio.dataset.playIntent = "paused";
       setIsPlaying(false);
       setBufferedSeconds(0);
       const failedStreamUrl = audio.dataset.streamUrl ?? "";
