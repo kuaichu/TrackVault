@@ -3260,7 +3260,7 @@ button.quick-chip:active,
   position: fixed;
   top: 0;
   left: 0;
-  z-index: 240;
+  z-index: 320;
   width: 248px;
   max-height: 288px;
 }
