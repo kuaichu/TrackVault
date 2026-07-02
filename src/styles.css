@@ -12022,31 +12022,30 @@ body {
 
   .result-row,
   .results-panel.batch-mode .result-row {
-    min-height: 122px;
-    padding: 14px;
+    min-height: 96px;
+    padding: 12px 14px;
     border-radius: 12px;
-    gap: 10px 14px;
+    gap: 8px 12px;
     align-items: center;
+    grid-template-rows: auto auto;
   }
 
   .result-row {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(250px, 1.08fr) minmax(150px, 0.72fr) 44px 108px;
     grid-template-areas:
-      "track time"
-      "meta quality"
-      "actions actions";
+      "track meta time quality"
+      "track meta actions actions";
   }
 
   .results-panel.batch-mode .result-row {
-    grid-template-columns: 24px minmax(0, 1fr) auto;
+    grid-template-columns: 24px minmax(220px, 1fr) minmax(140px, 0.66fr) 44px 108px;
     grid-template-areas:
-      "check track time"
-      "check meta quality"
-      "actions actions actions";
+      "check track meta time quality"
+      "check track meta actions actions";
   }
 
   .result-row.active {
-    min-height: 122px;
+    min-height: 96px;
     margin: 6px 0;
     border-radius: 12px;
   }
@@ -12063,10 +12062,12 @@ body {
 
   .result-track {
     grid-area: track;
+    align-self: center;
   }
 
   .result-meta {
     grid-area: meta;
+    align-self: center;
   }
 
   .result-track,
@@ -12077,12 +12078,15 @@ body {
   .result-time {
     grid-area: time;
     justify-self: end;
+    align-self: center;
+    font-size: 0.82rem;
   }
 
   .quality-select {
     grid-area: quality;
-    width: 104px;
+    width: 108px;
     justify-self: end;
+    align-self: center;
   }
 
   .row-actions {
@@ -12093,12 +12097,13 @@ body {
     justify-content: flex-end;
     gap: 8px;
     align-self: center;
+    justify-self: end;
   }
 
   .row-actions .row-icon-button {
-    width: 38px;
-    height: 38px;
-    flex: 0 0 38px;
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
   }
 }
 
@@ -12126,6 +12131,22 @@ body {
   .result-row,
   .results-panel.batch-mode .result-row {
     grid-template-columns: 1fr;
+    min-height: auto;
+    gap: 10px;
+    grid-template-rows: auto auto auto auto auto;
+  }
+
+  .result-row {
+    grid-template-areas:
+      "track"
+      "meta"
+      "time"
+      "quality"
+      "actions";
+  }
+
+  .results-panel.batch-mode .result-row {
+    grid-template-rows: auto auto auto auto auto auto;
     grid-template-areas:
       "check"
       "track"
@@ -12135,9 +12156,18 @@ body {
       "actions";
   }
 
+  .result-time,
+  .quality-select,
+  .row-actions {
+    justify-self: stretch;
+  }
+
+  .result-time {
+    align-self: center;
+  }
+
   .quality-select {
     width: 100%;
-    justify-self: stretch;
   }
 
   .row-actions {
