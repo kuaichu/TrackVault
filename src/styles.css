@@ -8578,8 +8578,8 @@ button.quick-chip:active,
 }
 
 .album-link-button {
-  display: block;
-  width: 100%;
+  display: inline-block;
+  width: auto;
   max-width: 100%;
   border: 0;
   padding: 0;
