@@ -271,6 +271,7 @@ const AUDIO_FADE_IN_MS = 180;
 const AUDIO_FADE_OUT_MS = 220;
 const AUDIO_FADE_READY_FALLBACK_MS = 180;
 const AUDIO_FADE_READY_TIMEOUT_MS = 2500;
+const AUDIO_FADE_WATCHDOG_DELAYS_MS = [260, 700, 1400];
 const PAUSED_PLAYER_STATE_SYNC_DELAY_MS = 650;
 const playbackModeOrder: PlaybackMode[] = ["sequential", "shuffle", "repeat-one", "heartbeat"];
 const discoverFeedLabels: Record<DiscoverFeedKind, string> = {
@@ -2730,11 +2731,24 @@ export default function App() {
     }
   }
 
+  function scheduleAudioFadeInWatchdog(audio: HTMLAudioElement, playToken: number) {
+    AUDIO_FADE_WATCHDOG_DELAYS_MS.forEach((delayMs) => {
+      window.setTimeout(() => {
+        if (playToken !== audioFadeTokenRef.current || audio.paused || getTargetAudioVolume() <= 0 || audio.volume > 0.001) {
+          return;
+        }
+
+        audio.volume = getTargetAudioVolume();
+      }, delayMs);
+    });
+  }
+
   function playAudioWithFade(audio: HTMLAudioElement, errorMessage: string) {
     cancelAudioFade();
     const playToken = audioFadeTokenRef.current;
     audio.volume = 0;
     setIsPlaying(true);
+    scheduleAudioFadeInWatchdog(audio, playToken);
 
     void audio.play()
       .then(() => {
