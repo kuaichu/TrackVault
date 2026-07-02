@@ -1027,6 +1027,7 @@ export default function App() {
   const playerStateSyncTimerRef = useRef<number | null>(null);
   const pausedPlayerStateSyncTimerRef = useRef<number | null>(null);
   const playerStateHydratedRef = useRef(false);
+  const playerInteractionStartedRef = useRef(false);
   const playlistSortTriggerRef = useRef<HTMLButtonElement | null>(null);
   const qualityMenuAnchorRef = useRef<HTMLButtonElement | null>(null);
   const qualityMenuOptionCountRef = useRef(0);
@@ -2730,6 +2731,7 @@ export default function App() {
     cancelAudioFade();
     const playToken = audioFadeTokenRef.current;
     audio.volume = 0;
+    setIsPlaying(true);
 
     void audio.play()
       .then(() => {
@@ -2775,6 +2777,10 @@ export default function App() {
     const audio = audioRef.current;
     if (!audio) {
       return;
+    }
+
+    if (autoplay) {
+      playerInteractionStartedRef.current = true;
     }
 
     const requestedLevel = options.level ?? getSelectedLevel(song);
@@ -3974,6 +3980,8 @@ export default function App() {
   }
 
   function handleTogglePlayback() {
+    playerInteractionStartedRef.current = true;
+
     if (!requirePlaybackAuth()) {
       return;
     }
@@ -4898,6 +4906,10 @@ export default function App() {
       try {
         const remotePlayerState = await getPlayerStateRemote();
         if (cancelled) {
+          return;
+        }
+
+        if (playerInteractionStartedRef.current) {
           return;
         }
 
