@@ -11966,7 +11966,7 @@ body {
 }
 
 /* Mid-size playlist stability: switch from table columns to compact rows before the table starts clipping. */
-@media (max-width: 980px) {
+@media (max-width: 1240px) {
   .content-panel,
   .results-panel,
   .results-body {
@@ -12022,7 +12022,7 @@ body {
 
   .result-row,
   .results-panel.batch-mode .result-row {
-    min-height: 0;
+    min-height: 122px;
     padding: 14px;
     border-radius: 12px;
     gap: 10px 14px;
@@ -12046,7 +12046,7 @@ body {
   }
 
   .result-row.active {
-    min-height: 0;
+    min-height: 122px;
     margin: 6px 0;
     border-radius: 12px;
   }
@@ -12092,6 +12092,7 @@ body {
     flex-wrap: nowrap;
     justify-content: flex-end;
     gap: 8px;
+    align-self: center;
   }
 
   .row-actions .row-icon-button {
