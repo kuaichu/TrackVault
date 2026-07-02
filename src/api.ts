@@ -480,15 +480,48 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
   onProgress?.(100);
 }
 
-export async function startServerSongDownload(song: Song, level: DownloadQualityLevel) {
+export async function startServerSongDownload(
+  song: Song,
+  level: DownloadQualityLevel,
+  callbacks: { onStatus?: (status: string) => void; onProgress?: (progress: number) => void } = {}
+) {
   const response = await apiFetch(getServerDownloadUrl(song, level));
   if (!response.ok) {
     const data = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new Error(data?.message ?? "备用下载失败");
   }
 
-  const blob = await response.blob();
   const filename = getFilenameFromContentDisposition(response.headers.get("content-disposition")) || `${song.title}-${song.artist}.${level === "standard" ? "mp3" : "flac"}`;
+  const contentLength = Number(response.headers.get("content-length") ?? "0");
+
+  callbacks.onStatus?.("服务器已返回文件，正在保存到本机。");
+
+  if (!response.body || !contentLength) {
+    const blob = await response.blob();
+    callbacks.onProgress?.(100);
+    saveBlob(blob, filename);
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let receivedBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    if (value) {
+      chunks.push(value);
+      receivedBytes += value.length;
+      callbacks.onProgress?.(Math.max(1, Math.min(99, Math.round((receivedBytes / contentLength) * 100))));
+    }
+  }
+
+  const blob = new Blob(chunks, { type: response.headers.get("content-type") ?? "application/octet-stream" });
+  callbacks.onProgress?.(100);
   saveBlob(blob, filename);
 }
 

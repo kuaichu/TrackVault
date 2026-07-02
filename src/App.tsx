@@ -208,6 +208,14 @@ type DownloadIssueDialog = {
   attemptedLevel: DownloadQualityLevel;
   attemptedLabel: string;
 };
+type DownloadProgressDialog = {
+  song: Song;
+  title: string;
+  detail: string;
+  progress: number;
+  indeterminate: boolean;
+  status: "preparing" | "downloading" | "done" | "failed";
+};
 type ResultSource = "search" | "playlist" | "cloud" | "daily" | "discover" | "artist" | "album";
 type UserProfileView = "profile" | UserSocialListKind | "events";
 type PlaylistSortMode = "default" | "title-asc" | "title-desc" | "artist-asc" | "artist-desc";
@@ -1229,6 +1237,7 @@ export default function App() {
   });
   const [message, setMessage] = useState("正在加载发现音乐。");
   const [downloadIssue, setDownloadIssue] = useState<DownloadIssueDialog | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgressDialog | null>(null);
   const [playerStateReady, setPlayerStateReady] = useState(false);
   const accountProfile = session.profile;
   const accountDisplayName = accountProfile?.displayName ?? settings.accountName;
@@ -3371,10 +3380,51 @@ export default function App() {
         if (useServerFallback) {
           try {
             setMessage(`正在通过服务器备用下载：${song.title} · ${selectedLabel}`);
-            await startServerSongDownload(song, level);
+            setDownloadProgress({
+              song,
+              title: `备用下载：${song.title}`,
+              detail: "服务器正在拉取音源，并写入封面、歌手、专辑和歌词信息。",
+              progress: 0,
+              indeterminate: true,
+              status: "preparing"
+            });
+            await startServerSongDownload(song, level, {
+              onStatus: (status) => {
+                setDownloadProgress((current) => current ? { ...current, detail: status, status: "downloading" } : current);
+              },
+              onProgress: (progress) => {
+                setDownloadProgress((current) => current ? {
+                  ...current,
+                  progress,
+                  indeterminate: false,
+                  status: progress >= 100 ? "done" : "downloading",
+                  detail: progress >= 100 ? "文件已准备完成，浏览器正在保存到本机。" : "正在传输备用下载文件。"
+                } : current);
+              }
+            });
+            setDownloadProgress((current) => current ? {
+              ...current,
+              progress: 100,
+              indeterminate: false,
+              status: "done",
+              detail: "已开始保存到本机，可以在浏览器下载列表中查看。"
+            } : current);
             setMessage(`已开始保存备用下载：${song.title}`);
           } catch (fallbackError) {
             const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : "备用下载失败";
+            setDownloadProgress((current) => current ? {
+              ...current,
+              indeterminate: false,
+              status: "failed",
+              detail: fallbackMessage
+            } : {
+              song,
+              title: `备用下载：${song.title}`,
+              detail: fallbackMessage,
+              progress: 0,
+              indeterminate: false,
+              status: "failed"
+            });
             setDownloadIssue({
               song,
               message: fallbackMessage,
@@ -9093,6 +9143,55 @@ export default function App() {
                   下载 128K
                 </button>
               ) : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {downloadProgress ? (
+        <div className="modal-backdrop download-progress-backdrop" role="dialog" aria-modal="true" aria-label="下载状态" onClick={() => downloadProgress.status === "done" || downloadProgress.status === "failed" ? setDownloadProgress(null) : undefined}>
+          <section className="download-progress-card" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <p className="eyebrow">Server Download</p>
+              <h2>{downloadProgress.title}</h2>
+              <button
+                type="button"
+                className="modal-close-button"
+                aria-label="关闭下载状态"
+                disabled={downloadProgress.status === "preparing" || downloadProgress.status === "downloading"}
+                onClick={() => setDownloadProgress(null)}
+              >
+                ×
+              </button>
+            </header>
+
+            <div className="download-issue-song">
+              <CoverArt song={downloadProgress.song} className="result-cover" />
+              <div>
+                <strong>{downloadProgress.song.title}</strong>
+                <span>{downloadProgress.song.artist} · {downloadProgress.song.album}</span>
+              </div>
+            </div>
+
+            <div className={`server-download-progress ${downloadProgress.indeterminate ? "indeterminate" : ""} ${downloadProgress.status}`}>
+              <div className="download-task-progress-head">
+                <span>{downloadProgress.detail}</span>
+                <strong>{downloadProgress.indeterminate ? "处理中" : `${downloadProgress.progress}%`}</strong>
+              </div>
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: downloadProgress.indeterminate ? "42%" : `${downloadProgress.progress}%` }} />
+              </div>
+            </div>
+
+            <div className="download-progress-actions">
+              <button
+                type="button"
+                className="secondary-button compact operation-button"
+                disabled={downloadProgress.status === "preparing" || downloadProgress.status === "downloading"}
+                onClick={() => setDownloadProgress(null)}
+              >
+                {downloadProgress.status === "failed" ? "关闭" : "完成"}
+              </button>
             </div>
           </section>
         </div>
