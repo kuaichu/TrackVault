@@ -12149,3 +12149,61 @@ body {
     flex-basis: auto;
   }
 }
+
+/* Narrow desktop shell: keep the sidebar beside the workspace instead of turning it into a full-width page. */
+@media (max-width: 1120px) and (min-width: 641px) {
+  body {
+    overflow: hidden;
+  }
+
+  .app-shell {
+    height: 100vh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .app-layout,
+  .app-layout.right-panel-collapsed {
+    grid-template-columns: clamp(168px, 24vw, 220px) minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .sidebar,
+  .content-panel {
+    min-height: 0;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .sidebar-nav-stack {
+    overflow-y: auto;
+  }
+
+  .utility-panel {
+    display: none;
+  }
+
+  .right-panel-restore {
+    display: none;
+  }
+
+  .content-panel {
+    padding: 18px 20px;
+  }
+
+  .sidebar {
+    padding: clamp(12px, 2vw, 18px);
+  }
+
+  .results-body {
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .player-dock {
+    max-width: calc(100vw - 36px);
+  }
+}
