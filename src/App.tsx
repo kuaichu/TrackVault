@@ -3369,8 +3369,20 @@ export default function App() {
         const useServerFallback = window.confirm(`${errorMessage}\n\n可以改用备用下载，但会消耗服务器带宽。要现在用备用下载吗？`);
 
         if (useServerFallback) {
-          startServerSongDownload(song, level);
-          setMessage(`已启动备用下载：${song.title}`);
+          try {
+            setMessage(`正在通过服务器备用下载：${song.title} · ${selectedLabel}`);
+            await startServerSongDownload(song, level);
+            setMessage(`已开始保存备用下载：${song.title}`);
+          } catch (fallbackError) {
+            const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : "备用下载失败";
+            setDownloadIssue({
+              song,
+              message: fallbackMessage,
+              attemptedLevel: level,
+              attemptedLabel: selectedLabel
+            });
+            setMessage(fallbackMessage);
+          }
         } else {
           setMessage("直连下载被浏览器拦截，未使用服务器备用下载。");
         }

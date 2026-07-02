@@ -480,13 +480,16 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
   onProgress?.(100);
 }
 
-export function startServerSongDownload(song: Song, level: DownloadQualityLevel) {
-  const link = document.createElement("a");
-  link.href = getServerDownloadUrl(song, level);
-  link.download = "";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
+export async function startServerSongDownload(song: Song, level: DownloadQualityLevel) {
+  const response = await apiFetch(getServerDownloadUrl(song, level));
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "备用下载失败");
+  }
+
+  const blob = await response.blob();
+  const filename = getFilenameFromContentDisposition(response.headers.get("content-disposition")) || `${song.title}-${song.artist}.${level === "standard" ? "mp3" : "flac"}`;
+  saveBlob(blob, filename);
 }
 
 export async function searchSongs(query: string, provider = "netease"): Promise<Song[]> {
