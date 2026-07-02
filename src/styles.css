@@ -12207,3 +12207,16 @@ body {
     max-width: calc(100vw - 36px);
   }
 }
+
+/* Keep the right queue binary on desktop: full queue on wide screens, hidden once it would squeeze the list. */
+@media (max-width: 1480px) and (min-width: 641px) {
+  .app-layout,
+  .app-layout.right-panel-collapsed {
+    grid-template-columns: clamp(168px, 16vw, 220px) minmax(0, 1fr);
+  }
+
+  .utility-panel,
+  .right-panel-restore {
+    display: none;
+  }
+}
