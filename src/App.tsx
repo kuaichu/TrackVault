@@ -270,6 +270,7 @@ const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
 const AUDIO_FADE_IN_MS = 180;
 const AUDIO_FADE_OUT_MS = 220;
 const AUDIO_FADE_READY_TIMEOUT_MS = 2500;
+const PAUSED_PLAYER_STATE_SYNC_DELAY_MS = 650;
 const playbackModeOrder: PlaybackMode[] = ["sequential", "shuffle", "repeat-one", "heartbeat"];
 const discoverFeedLabels: Record<DiscoverFeedKind, string> = {
   recommend: "系统推荐",
@@ -1024,6 +1025,7 @@ export default function App() {
     result: null
   });
   const playerStateSyncTimerRef = useRef<number | null>(null);
+  const pausedPlayerStateSyncTimerRef = useRef<number | null>(null);
   const playerStateHydratedRef = useRef(false);
   const playlistSortTriggerRef = useRef<HTMLButtonElement | null>(null);
   const qualityMenuAnchorRef = useRef<HTMLButtonElement | null>(null);
@@ -2750,6 +2752,8 @@ export default function App() {
   }
 
   function pauseAudioWithFade(audio: HTMLAudioElement) {
+    setIsPlaying(false);
+
     if (audio.paused) {
       audio.volume = getTargetAudioVolume();
       return;
@@ -4002,7 +4006,7 @@ export default function App() {
       return;
     }
 
-    if (audio.paused) {
+    if (audio.paused || !isPlaying) {
       playAudioWithFade(audio, "播放启动失败，请重新点一次播放。");
       return;
     }
@@ -5525,6 +5529,11 @@ export default function App() {
   }, [playerStateReady, currentTrack, playQueue, volume, playbackMode, Math.floor(Math.max(0, playbackSeconds) / 5)]);
 
   useEffect(() => {
+    if (pausedPlayerStateSyncTimerRef.current) {
+      window.clearTimeout(pausedPlayerStateSyncTimerRef.current);
+      pausedPlayerStateSyncTimerRef.current = null;
+    }
+
     if (!playerStateReady || !playerStateHydratedRef.current || isPlaying) {
       return;
     }
@@ -5537,7 +5546,17 @@ export default function App() {
       playbackMode
     };
 
-    void savePlayerStateRemote(exactState);
+    pausedPlayerStateSyncTimerRef.current = window.setTimeout(() => {
+      void savePlayerStateRemote(exactState);
+      pausedPlayerStateSyncTimerRef.current = null;
+    }, PAUSED_PLAYER_STATE_SYNC_DELAY_MS);
+
+    return () => {
+      if (pausedPlayerStateSyncTimerRef.current) {
+        window.clearTimeout(pausedPlayerStateSyncTimerRef.current);
+        pausedPlayerStateSyncTimerRef.current = null;
+      }
+    };
   }, [playerStateReady, isPlaying, currentTrack, playQueue, playbackSeconds, volume, playbackMode]);
 
   useEffect(() => {
