@@ -9152,8 +9152,10 @@ export default function App() {
         <div className="modal-backdrop download-progress-backdrop" role="dialog" aria-modal="true" aria-label="下载状态" onClick={() => downloadProgress.status === "done" || downloadProgress.status === "failed" ? setDownloadProgress(null) : undefined}>
           <section className="download-progress-card" onClick={(event) => event.stopPropagation()}>
             <header>
-              <p className="eyebrow">Server Download</p>
-              <h2>{downloadProgress.title}</h2>
+              <div className="download-progress-heading">
+                <p className="eyebrow">Server Download</p>
+                <h2 title={downloadProgress.title}>{downloadProgress.title}</h2>
+              </div>
               <button
                 type="button"
                 className="modal-close-button"

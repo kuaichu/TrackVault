@@ -1692,6 +1692,23 @@ input[type="range"] {
   gap: 16px;
 }
 
+.download-progress-heading {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.download-progress-heading .eyebrow,
+.download-progress-heading h2 {
+  min-width: 0;
+}
+
+.download-progress-heading h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .qr-login-card h2,
 .playlist-picker-card h2,
 .download-issue-card h2,
