@@ -98,14 +98,18 @@ type QqUserSonglistItem = {
   id?: number | string;
   dirid?: number | string;
   diss_name?: string;
+  dissname?: string;
   title?: string;
+  name?: string;
   diss_cover?: string;
   logo?: string;
   song_cnt?: number;
   songnum?: number;
   total_song_num?: number;
   listen_num?: number;
+  listennum?: number;
   visitnum?: number;
+  nickname?: string;
   creator?: {
     name?: string;
     nick?: string;
@@ -166,7 +170,15 @@ function formatDuration(durationSeconds: number | undefined) {
 }
 
 function normalizeQqText(value: unknown, fallback: string) {
-  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  return fallback;
 }
 
 function getQqSongMid(song: QqSearchSong) {
@@ -533,11 +545,11 @@ function mapQqPlaylist(playlist: QqUserSonglistItem, creatorName: string, owned:
 
   return {
     id: `qq:${id}`,
-    name: normalizeQqText(playlist.diss_name ?? playlist.title, "未命名歌单"),
+    name: normalizeQqText(playlist.diss_name ?? playlist.dissname ?? playlist.title ?? playlist.name, "未命名歌单"),
     coverUrl: getQqImageUrl(playlist.diss_cover ?? playlist.logo),
     trackCount: Number(playlist.song_cnt ?? playlist.songnum ?? playlist.total_song_num ?? 0),
-    creatorName: normalizeQqText(playlist.creator?.name ?? playlist.creator?.nick, creatorName),
-    playCount: Number(playlist.listen_num ?? playlist.visitnum ?? 0),
+    creatorName: normalizeQqText(playlist.creator?.name ?? playlist.creator?.nick ?? playlist.nickname, creatorName),
+    playCount: Number(playlist.listen_num ?? playlist.listennum ?? playlist.visitnum ?? 0),
     owned
   };
 }

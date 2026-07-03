@@ -7852,7 +7852,9 @@ export default function App() {
                   <div className="empty-box">
                     {loadingPlaylists
                       ? `正在读取 ${playlistProviderLabel} 歌单...`
-                      : `还没有读取到 ${playlistProviderLabel} 歌单，请先在账号中心导入有效 Cookie。`}
+                      : hasPlaylistCredential
+                        ? `暂时没有读取到 ${playlistProviderLabel} 歌单，可以尝试刷新，或检查账号歌单是否公开/接口是否返回。`
+                        : `还没有读取到 ${playlistProviderLabel} 歌单，请先在账号中心导入有效 Cookie。`}
                   </div>
                 ) : (
                   <>
