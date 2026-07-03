@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import type { DownloadQualityLevel, DownloadQualityOption, LyricLine, PlaylistSongsPage, QqMusicAccountStatus, QqMusicCookieCheckResult, Song, SongAudioProbe, SongAudioProbeMode, SongComment, SongCommentRepliesPage, SongCommentsPage, SongLyrics, UserPlaylist } from "./types.js";
+import type { DownloadQualityLevel, DownloadQualityOption, LyricLine, PlaylistSongsPage, QqMusicAccountStatus, QqMusicCookieCheckResult, QqMusicProfileAlbum, QqMusicProfileSinger, QqMusicProfileUser, QqMusicUserProfile, Song, SongAudioProbe, SongAudioProbeMode, SongComment, SongCommentRepliesPage, SongCommentsPage, SongLyrics, UserPlaylist } from "./types.js";
 import { getSettings } from "./settings-store.js";
 
 const require = createRequire(import.meta.url);
@@ -123,6 +123,8 @@ type QqCollectedSonglistsResult = {
   list?: QqUserSonglistItem[];
   total?: number;
 };
+
+type QqCollectionResult = Record<string, unknown>;
 
 type QqSonglistDetail = {
   dissid?: number | string;
@@ -462,6 +464,179 @@ function mapQqPlaylist(playlist: QqUserSonglistItem, creatorName: string, owned:
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function getRecordString(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+  }
+
+  return "";
+}
+
+function getRecordNumber(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.max(0, value);
+    }
+
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value.replace(/,/g, ""));
+      if (Number.isFinite(parsed)) {
+        return Math.max(0, parsed);
+      }
+    }
+  }
+
+  return 0;
+}
+
+function findFirstArray(input: unknown, keys: string[], visited = new Set<unknown>()): unknown[] {
+  if (!input || typeof input !== "object" || visited.has(input)) {
+    return [];
+  }
+
+  visited.add(input);
+  const record = input as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      return value;
+    }
+  }
+
+  for (const value of Object.values(record)) {
+    const found = findFirstArray(value, keys, visited);
+    if (found.length > 0) {
+      return found;
+    }
+  }
+
+  return [];
+}
+
+function getResultTotal(input: unknown, fallback: number) {
+  const record = asRecord(input);
+  if (!record) {
+    return fallback;
+  }
+
+  return getRecordNumber(record, ["total", "totalnum", "totalNum", "total_num", "num", "count"]) || fallback;
+}
+
+function getQqSingerAvatar(mid: string) {
+  return mid ? `https://y.gtimg.cn/music/photo_new/T001R300x300M000${mid}.jpg` : undefined;
+}
+
+function mapQqProfileAlbum(input: unknown): QqMusicProfileAlbum | null {
+  const record = asRecord(input);
+  if (!record) {
+    return null;
+  }
+
+  const albumRecord = asRecord(record.album) ?? record;
+  const id = getRecordString(albumRecord, ["mid", "albummid", "albumMid", "album_mid", "id", "albumid", "albumId"]);
+  const name = getRecordString(albumRecord, ["name", "albumname", "albumName", "title", "diss_name"]);
+  if (!id || !name) {
+    return null;
+  }
+
+  const coverUrl =
+    getQqImageUrl(getRecordString(albumRecord, ["pic", "picurl", "picUrl", "cover", "coverUrl", "logo"])) ??
+    getQqCoverUrl(id);
+  const singerRecord = asRecord(record.singer) ?? asRecord(record.artist);
+  const artistName =
+    getRecordString(record, ["singername", "singerName", "artistName", "singer", "artist"]) ||
+    (singerRecord ? getRecordString(singerRecord, ["name", "title"]) : "") ||
+    "未知歌手";
+
+  return {
+    id,
+    name,
+    coverUrl,
+    artistName,
+    songCount: getRecordNumber(record, ["songnum", "songNum", "song_count", "songCount", "total_song_num"]),
+    publishTime: getRecordString(record, ["publicTime", "publishTime", "pub_time", "date", "time"]) || undefined
+  };
+}
+
+function mapQqProfileSinger(input: unknown): QqMusicProfileSinger | null {
+  const record = asRecord(input);
+  if (!record) {
+    return null;
+  }
+
+  const id = getRecordString(record, ["mid", "singermid", "singer_mid", "singerMid", "id"]);
+  const name = getRecordString(record, ["name", "singername", "singerName", "title"]);
+  if (!id || !name) {
+    return null;
+  }
+
+  return {
+    id,
+    name,
+    avatarUrl: getQqImageUrl(getRecordString(record, ["pic", "picurl", "picUrl", "avatar", "avatarUrl", "headurl", "headUrl"])) ?? getQqSingerAvatar(id),
+    fanCount: getRecordNumber(record, ["fans", "fansnum", "fanNum", "fan_count", "fansCount"]),
+    songCount: getRecordNumber(record, ["songnum", "songNum", "song_count", "songCount"])
+  };
+}
+
+function mapQqProfileUser(input: unknown): QqMusicProfileUser | null {
+  const record = asRecord(input);
+  if (!record) {
+    return null;
+  }
+
+  const id = getRecordString(record, ["uin", "encrypt_uin", "id", "userid", "userId"]);
+  const nickname = getRecordString(record, ["nick", "nickname", "name", "hostname", "title"]);
+  if (!id || !nickname) {
+    return null;
+  }
+
+  return {
+    id,
+    nickname,
+    avatarUrl: getQqImageUrl(getRecordString(record, ["headurl", "headUrl", "avatar", "avatarUrl", "pic", "logo"])),
+    signature: getRecordString(record, ["desc", "signature", "intro", "msg"]) || "这个用户还没有简介。",
+    fanCount: getRecordNumber(record, ["fans", "fansnum", "fanNum", "followeds", "followedNum"]),
+    followed: Boolean(record.followed ?? record.isfollow ?? record.isFollow)
+  };
+}
+
+function compactMappedList<T>(items: unknown[], mapper: (item: unknown) => T | null, limit = 12) {
+  const seen = new Set<string>();
+  const output: T[] = [];
+
+  for (const mapped of items.map(mapper)) {
+    if (!mapped) {
+      continue;
+    }
+
+    const identity = "id" in (mapped as Record<string, unknown>) ? String((mapped as Record<string, unknown>).id) : JSON.stringify(mapped);
+    if (seen.has(identity)) {
+      continue;
+    }
+
+    seen.add(identity);
+    output.push(mapped);
+    if (output.length >= limit) {
+      break;
+    }
+  }
+
+  return output;
+}
+
 function getRawQqPlaylistId(playlistId: string) {
   return playlistId.replace(/^qq:/, "").trim();
 }
@@ -783,6 +958,102 @@ export async function getQqMusicAccountStatus(): Promise<QqMusicAccountStatus> {
   } catch (error) {
     return toQqAccountStatus(cookieObj, null, `QQ 音乐账号信息读取失败：${getQqErrorMessage(error)}`);
   }
+}
+
+export async function getQqMusicUserProfile(): Promise<QqMusicUserProfile> {
+  const cookieObj = await getRequiredQqCookie();
+  const issues: QqMusicUserProfile["issues"] = [];
+  const [detailResult, createdResult, collectedPlaylistsResult, collectedAlbumsResult, followSingersResult, followUsersResult, fansResult] =
+    await Promise.allSettled([
+      qqMusic.api<QqProfileDetail>("user/detail", { id: cookieObj.uin }),
+      qqMusic.api<QqUserSonglistsResult>("user/songlist", { id: cookieObj.uin }),
+      qqMusic.api<QqCollectedSonglistsResult>("user/collect/songlist", { id: cookieObj.uin, pageNo: 1, pageSize: 50 }),
+      qqMusic.api<QqCollectionResult>("user/collect/album", { id: cookieObj.uin, pageNo: 1, pageSize: 20 }),
+      qqMusic.api<QqCollectionResult>("user/follow/singers", { id: cookieObj.uin, pageNo: 1, pageSize: 20 }),
+      qqMusic.api<QqCollectionResult>("user/follow/users", { id: cookieObj.uin, pageNo: 1, pageSize: 20 }),
+      qqMusic.api<QqCollectionResult>("user/fans", { id: cookieObj.uin, pageNo: 1, pageSize: 20 })
+    ]);
+
+  const addIssue = (section: string, result: PromiseSettledResult<unknown>) => {
+    if (result.status === "rejected") {
+      issues.push({ section, message: getQqErrorMessage(result.reason) });
+    }
+  };
+
+  addIssue("主页资料", detailResult);
+  addIssue("创建歌单", createdResult);
+  addIssue("收藏歌单", collectedPlaylistsResult);
+  addIssue("收藏专辑", collectedAlbumsResult);
+  addIssue("关注歌手", followSingersResult);
+  addIssue("关注用户", followUsersResult);
+  addIssue("粉丝", fansResult);
+
+  const detail = detailResult.status === "fulfilled" ? detailResult.value : null;
+  const account = toQqAccountStatus(
+    cookieObj,
+    detail,
+    detailResult.status === "fulfilled" ? "QQ 音乐个人资料已同步。" : "QQ 音乐基础资料读取失败，已显示可用数据。"
+  );
+  const creatorName =
+    createdResult.status === "fulfilled"
+      ? normalizeQqText(createdResult.value.creator?.hostname, account.displayName ?? `QQ ${cookieObj.uin}`)
+      : account.displayName ?? `QQ ${cookieObj.uin}`;
+  const createdPlaylists =
+    createdResult.status === "fulfilled"
+      ? (createdResult.value.list ?? []).map((playlist) => mapQqPlaylist(playlist, creatorName, true)).filter((playlist): playlist is UserPlaylist => Boolean(playlist))
+      : [];
+  const collectedPlaylists =
+    collectedPlaylistsResult.status === "fulfilled"
+      ? (collectedPlaylistsResult.value.list ?? []).map((playlist) => mapQqPlaylist(playlist, creatorName, false)).filter((playlist): playlist is UserPlaylist => Boolean(playlist))
+      : [];
+  const seenPlaylistIds = new Set<string>();
+  const uniqueCollectedPlaylists = collectedPlaylists.filter((playlist) => {
+    if (createdPlaylists.some((item) => item.id === playlist.id) || seenPlaylistIds.has(playlist.id)) {
+      return false;
+    }
+
+    seenPlaylistIds.add(playlist.id);
+    return true;
+  });
+  const detailRecord = asRecord(detail) ?? {};
+  const collectedAlbumItems = collectedAlbumsResult.status === "fulfilled"
+    ? findFirstArray(collectedAlbumsResult.value, ["list", "albumlist", "albums", "data", "items"])
+    : [];
+  const followSingerItems = followSingersResult.status === "fulfilled"
+    ? findFirstArray(followSingersResult.value, ["list", "singerlist", "singers", "data", "items"])
+    : [];
+  const followUserItems = followUsersResult.status === "fulfilled"
+    ? findFirstArray(followUsersResult.value, ["list", "userlist", "users", "follow", "data", "items"])
+    : [];
+  const fanItems = fansResult.status === "fulfilled"
+    ? findFirstArray(fansResult.value, ["list", "userlist", "users", "fans", "data", "items"])
+    : [];
+
+  return {
+    account,
+    detail: {
+      signature: getRecordString(detailRecord, ["desc", "signature", "intro", "msg"]) || "这个 QQ 音乐账号还没有公开简介。",
+      level: getRecordNumber(detailRecord, ["level", "lv", "userLevel"]) || undefined,
+      listenSongs: getRecordNumber(detailRecord, ["listen_num", "listenSongs", "listenSongsNum", "totalListen", "songnum"]) || undefined,
+      locationText: getRecordString(detailRecord, ["location", "place", "city", "province"]) || undefined,
+      ageText: getRecordString(detailRecord, ["age", "ageText"]) || undefined
+    },
+    stats: {
+      createdPlaylists: createdPlaylists.length,
+      collectedPlaylists: getResultTotal(collectedPlaylistsResult.status === "fulfilled" ? collectedPlaylistsResult.value : null, uniqueCollectedPlaylists.length),
+      collectedAlbums: getResultTotal(collectedAlbumsResult.status === "fulfilled" ? collectedAlbumsResult.value : null, collectedAlbumItems.length),
+      followSingers: getResultTotal(followSingersResult.status === "fulfilled" ? followSingersResult.value : null, followSingerItems.length),
+      followUsers: getResultTotal(followUsersResult.status === "fulfilled" ? followUsersResult.value : null, followUserItems.length),
+      fans: getResultTotal(fansResult.status === "fulfilled" ? fansResult.value : null, fanItems.length)
+    },
+    createdPlaylists,
+    collectedPlaylists: uniqueCollectedPlaylists,
+    collectedAlbums: compactMappedList(collectedAlbumItems, mapQqProfileAlbum, 12),
+    followSingers: compactMappedList(followSingerItems, mapQqProfileSinger, 12),
+    followUsers: compactMappedList(followUserItems, mapQqProfileUser, 12),
+    fans: compactMappedList(fanItems, mapQqProfileUser, 12),
+    issues
+  };
 }
 
 async function resolveQqSongUrlByType(song: Song, qqType: QqAudioType): Promise<QqResolvedSong> {

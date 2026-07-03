@@ -23,6 +23,7 @@ import {
   getPlayHistory,
   getPlayerState as getPlayerStateRemote,
   getQqMusicAccountStatus,
+  getQqMusicUserProfile,
   getCloudSongs,
   getDailyRecommendSongs,
   getDiscoverSongs,
@@ -68,7 +69,7 @@ import {
   replyToSongComment,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, QqMusicAccountStatus, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, SongInsight, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, QqMusicAccountStatus, QqMusicUserProfile, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, SongInsight, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
@@ -262,6 +263,7 @@ type BrowserDownloadTask = {
 };
 type ResultSource = "search" | "playlist" | "cloud" | "daily" | "discover" | "artist" | "album";
 type UserProfileView = "profile" | UserSocialListKind | "events";
+type QqProfileView = "overview" | "playlists" | "collections" | "follows";
 type PlaylistSortMode = "default" | "title-asc" | "title-desc" | "artist-asc" | "artist-desc";
 type FloatingMenuStyle = Pick<CSSProperties, "top" | "left" | "width" | "maxHeight">;
 type SongContextMenuState = { song: Song; x: number; y: number };
@@ -1314,6 +1316,10 @@ export default function App() {
   const [resultSource, setResultSource] = useState<ResultSource>("search");
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [qqProfileOpen, setQqProfileOpen] = useState(false);
+  const [qqProfile, setQqProfile] = useState<QqMusicUserProfile | null>(null);
+  const [qqProfileView, setQqProfileView] = useState<QqProfileView>("overview");
+  const [loadingQqProfile, setLoadingQqProfile] = useState(false);
+  const [qqProfileError, setQqProfileError] = useState("");
   const [qrLoginOpen, setQrLoginOpen] = useState(false);
   const [neteaseLoginMode, setNeteaseLoginMode] = useState<NeteaseLoginMode>("qr");
   const [qrLoginKey, setQrLoginKey] = useState("");
@@ -3313,10 +3319,41 @@ export default function App() {
 
     setAccountMenuOpen(false);
     setQqProfileOpen(true);
+    setQqProfileView("overview");
+    setQqProfileError("");
+  }
+
+  function closeQqProfile() {
+    setQqProfileOpen(false);
+    setQqProfileView("overview");
+    setQqProfileError("");
+  }
+
+  async function refreshQqProfile() {
+    if (!settings.qqMusicCookie?.trim()) {
+      setQqProfileError("请先导入 QQ 音乐 Cookie。");
+      return;
+    }
+
+    setLoadingQqProfile(true);
+    setQqProfileError("");
+
+    try {
+      const profile = await getQqMusicUserProfile();
+      setQqProfile(profile);
+      setQqAccountStatus(profile.account);
+      setMessage("QQ 音乐个人主页已同步。");
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : "获取 QQ 音乐个人主页失败";
+      setQqProfileError(messageText);
+      setMessage(messageText);
+    } finally {
+      setLoadingQqProfile(false);
+    }
   }
 
   async function openQqPlaylistsFromProfile() {
-    setQqProfileOpen(false);
+    closeQqProfile();
     setAccountMenuOpen(false);
     if (activeSearchProviderMode !== "qq") {
       await handleSwitchProviderMode("qq");
@@ -3336,6 +3373,48 @@ export default function App() {
     setSelectedSongIds([]);
     navigateTopLevel("playlists");
     void loadUserPlaylists({ silentCookieCheck: true, providerMode: "qq" });
+  }
+
+  async function openQqProfilePlaylist(playlist: UserPlaylist) {
+    closeQqProfile();
+    setAccountMenuOpen(false);
+    setResults([]);
+    setActivePlaylist(playlist);
+    setActiveArtist(null);
+    setActiveAlbum(null);
+    setSelectedPlaylistId(playlist.id);
+    setResultSource("playlist");
+    setPlaylistSearchInput("");
+    setPlaylistSearchKeyword("");
+    setPlaylistSongsPage(1);
+    setPlaylistSongsHasMore(false);
+    setPlaylistSongsTotal(playlist.trackCount);
+    setSelectedSongIds([]);
+    navigateTo("playlists");
+
+    try {
+      if (activeSearchProviderMode !== "qq") {
+        const saved = await saveSettings({ ...settings, providerMode: "qq" });
+        setSettings(saved);
+      }
+
+      setLoadingPlaylistSongs(true);
+      setMessage(`正在读取 QQ 歌单：${playlist.name}`);
+      const pageData = await getPlaylistSongs(playlist.id, 1, PLAYLIST_SONGS_PAGE_SIZE, "", "default");
+      setResults(pageData.songs);
+      setPlayQueue(pageData.songs);
+      setResultSource("playlist");
+      applyQualityDefaults(pageData.songs);
+      setPlaylistSongsPage(pageData.page);
+      setPlaylistSongsLimit(pageData.limit);
+      setPlaylistSongsHasMore(pageData.hasMore);
+      setPlaylistSongsTotal(pageData.total);
+      setMessage(`${playlist.name} · 当前 ${pageData.songs.length} 首 / 共 ${pageData.total || playlist.trackCount} 首`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "打开 QQ 歌单失败");
+    } finally {
+      setLoadingPlaylistSongs(false);
+    }
   }
 
   function openProfilePlaylist(playlist: UserProfile["playlists"][number]) {
@@ -5758,6 +5837,16 @@ export default function App() {
     };
   }, [userProfileTarget?.id]);
 
+  useEffect(() => {
+    if (!qqProfileOpen) {
+      return;
+    }
+
+    if (!qqProfile || qqProfile.account.uin !== qqAccountStatus?.uin) {
+      void refreshQqProfile();
+    }
+  }, [qqProfileOpen, qqProfile?.account.uin, qqAccountStatus?.uin]);
+
   const activeLyricIndex = useMemo(() => {
     if (lyrics.length === 0) {
       return -1;
@@ -6350,6 +6439,19 @@ export default function App() {
       : userProfileView === "followeds"
         ? `${formatCompactCount(userSocialPage?.total ?? userProfileDisplay?.followeds ?? 0)} 人`
         : `${formatCompactCount(userSocialPage?.total ?? userProfileDisplay?.follows ?? 0)} 人`;
+  const qqProfileDisplay = qqProfile;
+  const qqProfileAccount = qqProfileDisplay?.account ?? qqAccountStatus;
+  const qqProfileName = qqProfileAccount?.displayName?.trim() || qqMusicAccountName || "QQ 音乐";
+  const qqProfileAvatarUrl = qqProfileAccount?.avatarUrl;
+  const qqProfileAllPlaylists = qqProfileDisplay ? [...qqProfileDisplay.createdPlaylists, ...qqProfileDisplay.collectedPlaylists] : [];
+  const qqProfileCollectionsCount = (qqProfileDisplay?.collectedAlbums.length ?? 0) + (qqProfileDisplay?.collectedPlaylists.length ?? 0);
+  const qqProfileFollowsCount = (qqProfileDisplay?.followSingers.length ?? 0) + (qqProfileDisplay?.followUsers.length ?? 0) + (qqProfileDisplay?.fans.length ?? 0);
+  const qqProfileTabs: Array<{ key: QqProfileView; label: string; count: number }> = [
+    { key: "overview", label: "概览", count: 0 },
+    { key: "playlists", label: "歌单", count: qqProfileAllPlaylists.length },
+    { key: "collections", label: "收藏", count: qqProfileCollectionsCount },
+    { key: "follows", label: "关注", count: qqProfileFollowsCount }
+  ];
 
   const renderCommentRow = (comment: SongComment, keyPrefix = "", options: { isReply?: boolean } = {}) => {
     const isReply = Boolean(options.isReply);
@@ -9236,59 +9338,241 @@ export default function App() {
       ) : null}
 
       {qqProfileOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="QQ 音乐个人信息" onClick={() => setQqProfileOpen(false)}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="QQ 音乐个人主页" onClick={closeQqProfile}>
           <section className="user-profile-card qq-profile-card" onClick={(event) => event.stopPropagation()}>
             <div className="user-profile-hero qq-profile-hero">
+              {qqProfileAvatarUrl ? <img src={qqProfileAvatarUrl} alt="" className="user-profile-bg" /> : null}
               <div className="user-profile-shade" />
-              <button type="button" className="modal-close user-profile-close" onClick={() => setQqProfileOpen(false)} aria-label="关闭 QQ 音乐个人信息">
+              <button type="button" className="modal-close user-profile-close" onClick={closeQqProfile} aria-label="关闭 QQ 音乐个人主页">
                 ×
               </button>
               <div className="user-profile-identity">
                 <div className="user-profile-avatar qq-profile-avatar">
-                  {qqAccountStatus?.avatarUrl ? <img src={qqAccountStatus.avatarUrl} alt={qqMusicAccountName || "QQ 音乐"} /> : <span>Q</span>}
+                  {qqProfileAvatarUrl ? <img src={qqProfileAvatarUrl} alt={qqProfileName} /> : <span>Q</span>}
                 </div>
                 <div className="user-profile-title">
-                  <span>QQ 音乐用户</span>
-                  <h2>{qqMusicAccountName || "QQ 音乐"}</h2>
+                  <span>QQ 音乐主页</span>
+                  <h2>{qqProfileName}</h2>
                 </div>
               </div>
             </div>
 
-            <div className="user-profile-body">
-              <p className="user-profile-signature">{qqAccountStatus?.message || "QQ 音乐账号信息已同步。"}</p>
-              <div className="user-profile-stats qq-profile-stats">
-                <div>
-                  <strong>{qqAccountStatus?.uin ?? "--"}</strong>
-                  <span>账号</span>
+            <div className="user-profile-body qq-profile-body">
+              {loadingQqProfile && !qqProfileDisplay ? (
+                <div className="user-profile-skeleton" aria-label="QQ 音乐资料加载中">
+                  <div className="profile-skeleton-line wide" />
+                  <div className="profile-skeleton-line medium" />
+                  <div className="profile-skeleton-stats">
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <div className="profile-skeleton-list">
+                    <span />
+                    <span />
+                  </div>
                 </div>
-                <div>
-                  <strong>{qqMusicPlatformStatusLabel}</strong>
-                  <span>会员</span>
-                </div>
-                <div>
-                  <strong>{hasQqMusicCookie ? "已导入" : "未导入"}</strong>
-                  <span>Cookie</span>
-                </div>
-                <div>
-                  <strong>QQ</strong>
-                  <span>曲库</span>
-                </div>
-              </div>
+              ) : null}
 
-              <div className="user-profile-meta">
-                <span>{qqAccountStatus?.vipType ? `VIP ${qqAccountStatus.vipType}` : "普通账号"}</span>
-                <span>{activeSearchProviderMode === "qq" ? "当前音乐源" : "未设为当前源"}</span>
-                {loadingQqAccountStatus ? <span>正在同步</span> : null}
-              </div>
+              {qqProfileError ? <div className="empty-box">{qqProfileError}</div> : null}
 
-              <div className="qq-profile-actions">
-                <button type="button" className="secondary-button" onClick={() => void openQqPlaylistsFromProfile()}>
-                  我的歌单
-                </button>
-                <button type="button" className="secondary-button" onClick={openQqCookieLogin}>
-                  更新 Cookie
-                </button>
-              </div>
+              {qqProfileDisplay ? (
+                <>
+                  <div className="qq-profile-tabs" role="tablist" aria-label="QQ 音乐个人主页视图">
+                    {qqProfileTabs.map((tab) => (
+                      <button
+                        key={tab.key}
+                        type="button"
+                        role="tab"
+                        aria-selected={qqProfileView === tab.key}
+                        className={qqProfileView === tab.key ? "active" : ""}
+                        onClick={() => setQqProfileView(tab.key)}
+                      >
+                        <strong>{tab.label}</strong>
+                        {tab.key !== "overview" ? <span>{formatCompactCount(tab.count)}</span> : null}
+                      </button>
+                    ))}
+                  </div>
+
+                  {qqProfileView === "overview" ? (
+                    <>
+                      <p className="user-profile-signature">{qqProfileDisplay.detail.signature}</p>
+                      <div className="user-profile-stats qq-profile-stats">
+                        <div>
+                          <strong>{qqProfileAccount?.uin ?? "--"}</strong>
+                          <span>账号</span>
+                        </div>
+                        <div>
+                          <strong>{qqProfileAccount?.vipEnabled ? "VIP" : "普通"}</strong>
+                          <span>会员</span>
+                        </div>
+                        <div>
+                          <strong>{formatCompactCount(qqProfileDisplay.stats.createdPlaylists)}</strong>
+                          <span>创建歌单</span>
+                        </div>
+                        <div>
+                          <strong>{formatCompactCount(qqProfileDisplay.stats.collectedPlaylists)}</strong>
+                          <span>收藏歌单</span>
+                        </div>
+                        <div>
+                          <strong>{formatCompactCount(qqProfileDisplay.stats.collectedAlbums)}</strong>
+                          <span>收藏专辑</span>
+                        </div>
+                        <div>
+                          <strong>{formatCompactCount(qqProfileDisplay.stats.followSingers + qqProfileDisplay.stats.followUsers)}</strong>
+                          <span>关注</span>
+                        </div>
+                      </div>
+
+                      <div className="user-profile-meta">
+                        <span>{qqProfileAccount?.vipType ? `绿钻 ${qqProfileAccount.vipType}` : "普通账号"}</span>
+                        {qqProfileDisplay.detail.level ? <span>等级 {qqProfileDisplay.detail.level}</span> : null}
+                        {qqProfileDisplay.detail.listenSongs ? <span>听歌 {formatCompactCount(qqProfileDisplay.detail.listenSongs)}</span> : null}
+                        {qqProfileDisplay.detail.locationText ? <span>{qqProfileDisplay.detail.locationText}</span> : null}
+                        <span>{activeSearchProviderMode === "qq" ? "当前音乐源" : "未设为当前源"}</span>
+                      </div>
+
+                      {qqProfileDisplay.issues.length > 0 ? (
+                        <div className="qq-profile-issues">
+                          <strong>部分资料未读取</strong>
+                          {qqProfileDisplay.issues.slice(0, 3).map((issue) => (
+                            <span key={`${issue.section}-${issue.message}`}>{issue.section}：{issue.message}</span>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      <div className="qq-profile-actions">
+                        <button type="button" className="secondary-button" onClick={() => void openQqPlaylistsFromProfile()}>
+                          我的歌单
+                        </button>
+                        <button type="button" className="secondary-button" disabled={loadingQqProfile} onClick={() => void refreshQqProfile()}>
+                          {loadingQqProfile ? "同步中" : "刷新资料"}
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
+
+                  {qqProfileView === "playlists" ? (
+                    <section className="qq-profile-section">
+                      <div className="user-profile-section-head">
+                        <h3>QQ 歌单</h3>
+                        <span>{qqProfileAllPlaylists.length} 个</span>
+                      </div>
+                      <div className="user-profile-playlist-list">
+                        {[
+                          { key: "owned", title: "创建的歌单", playlists: qqProfileDisplay.createdPlaylists },
+                          { key: "collected", title: "收藏的歌单", playlists: qqProfileDisplay.collectedPlaylists }
+                        ].filter((group) => group.playlists.length > 0).map((group) => (
+                          <div key={group.key} className="user-profile-playlist-group">
+                            <div className={`user-profile-playlist-divider ${group.key}`}>
+                              <span>{group.title}<small>{group.playlists.length} 个</small></span>
+                            </div>
+                            {group.playlists.map((playlist) => (
+                              <button key={playlist.id} type="button" className="user-profile-playlist" onClick={() => void openQqProfilePlaylist(playlist)}>
+                                <div className="user-profile-playlist-cover">
+                                  {playlist.coverUrl ? <img src={playlist.coverUrl} alt="" loading="lazy" /> : <span>{playlist.name.slice(0, 1)}</span>}
+                                </div>
+                                <div>
+                                  <strong>{playlist.name}</strong>
+                                  <span>{playlist.trackCount} 首 · 播放 {formatCompactCount(playlist.playCount)}</span>
+                                </div>
+                                <em className={playlist.owned ? "owned" : "collected"}>{playlist.owned ? "创建" : "收藏"}</em>
+                              </button>
+                            ))}
+                          </div>
+                        ))}
+                        {qqProfileAllPlaylists.length === 0 ? <div className="empty-box">暂时没有读取到 QQ 歌单。</div> : null}
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {qqProfileView === "collections" ? (
+                    <section className="qq-profile-section">
+                      <div className="user-profile-section-head">
+                        <h3>收藏内容</h3>
+                        <span>{formatCompactCount(qqProfileDisplay.stats.collectedAlbums)} 张专辑</span>
+                      </div>
+                      <div className="qq-profile-mini-list">
+                        {qqProfileDisplay.collectedAlbums.map((album) => (
+                          <article key={album.id} className="qq-profile-mini-item">
+                            <span className="qq-profile-mini-cover">
+                              {album.coverUrl ? <img src={album.coverUrl} alt="" loading="lazy" /> : album.name.slice(0, 1)}
+                            </span>
+                            <span>
+                              <strong>{album.name}</strong>
+                              <small>{album.artistName}{album.songCount ? ` · ${album.songCount} 首` : ""}{album.publishTime ? ` · ${album.publishTime}` : ""}</small>
+                            </span>
+                          </article>
+                        ))}
+                        {qqProfileDisplay.collectedAlbums.length === 0 ? <div className="empty-box">暂时没有读取到收藏专辑。</div> : null}
+                      </div>
+                    </section>
+                  ) : null}
+
+                  {qqProfileView === "follows" ? (
+                    <section className="qq-profile-section">
+                      <div className="user-profile-section-head">
+                        <h3>关注与粉丝</h3>
+                        <span>{formatCompactCount(qqProfileDisplay.stats.followSingers + qqProfileDisplay.stats.followUsers)} 关注</span>
+                      </div>
+                      <div className="qq-profile-mini-groups">
+                        <div className="qq-profile-mini-group">
+                          <strong>关注歌手</strong>
+                          <div className="qq-profile-mini-list">
+                            {qqProfileDisplay.followSingers.map((singer) => (
+                              <article key={singer.id} className="qq-profile-mini-item">
+                                <span className="qq-profile-mini-cover">
+                                  {singer.avatarUrl ? <img src={singer.avatarUrl} alt="" loading="lazy" /> : singer.name.slice(0, 1)}
+                                </span>
+                                <span>
+                                  <strong>{singer.name}</strong>
+                                  <small>{singer.songCount ? `${singer.songCount} 首歌` : "QQ 音乐歌手"}{singer.fanCount ? ` · ${formatCompactCount(singer.fanCount)} 粉丝` : ""}</small>
+                                </span>
+                              </article>
+                            ))}
+                            {qqProfileDisplay.followSingers.length === 0 ? <div className="empty-box">暂时没有读取到关注歌手。</div> : null}
+                          </div>
+                        </div>
+                        <div className="qq-profile-mini-group">
+                          <strong>关注用户</strong>
+                          <div className="qq-profile-mini-list">
+                            {qqProfileDisplay.followUsers.map((user) => (
+                              <article key={user.id} className="qq-profile-mini-item">
+                                <span className="qq-profile-mini-cover">
+                                  {user.avatarUrl ? <img src={user.avatarUrl} alt="" loading="lazy" /> : user.nickname.slice(0, 1)}
+                                </span>
+                                <span>
+                                  <strong>{user.nickname}</strong>
+                                  <small>{user.signature}</small>
+                                </span>
+                              </article>
+                            ))}
+                            {qqProfileDisplay.followUsers.length === 0 ? <div className="empty-box">暂时没有读取到关注用户。</div> : null}
+                          </div>
+                        </div>
+                        <div className="qq-profile-mini-group">
+                          <strong>粉丝</strong>
+                          <div className="qq-profile-mini-list">
+                            {qqProfileDisplay.fans.map((user) => (
+                              <article key={user.id} className="qq-profile-mini-item">
+                                <span className="qq-profile-mini-cover">
+                                  {user.avatarUrl ? <img src={user.avatarUrl} alt="" loading="lazy" /> : user.nickname.slice(0, 1)}
+                                </span>
+                                <span>
+                                  <strong>{user.nickname}</strong>
+                                  <small>{user.signature}</small>
+                                </span>
+                              </article>
+                            ))}
+                            {qqProfileDisplay.fans.length === 0 ? <div className="empty-box">暂时没有读取到粉丝。</div> : null}
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  ) : null}
+                </>
+              ) : null}
             </div>
           </section>
         </div>

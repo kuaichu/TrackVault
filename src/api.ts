@@ -15,6 +15,7 @@ import type {
   NeteaseCookieCheckResult,
   QqMusicAccountStatus,
   QqMusicCookieCheckResult,
+  QqMusicUserProfile,
   PersonalRadioKind,
   NeteaseQrCheckResult,
   NeteaseQrStartResult,
@@ -1274,6 +1275,17 @@ export async function getQqMusicAccountStatus(): Promise<QqMusicAccountStatus> {
     throw new Error("获取 QQ 音乐账号信息失败");
   }
   return (await response.json()) as QqMusicAccountStatus;
+}
+
+export async function getQqMusicUserProfile(): Promise<QqMusicUserProfile> {
+  const response = await apiFetch("/api/account/qqmusic/profile");
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取 QQ 音乐个人主页失败");
+  }
+
+  const data = (await response.json()) as { profile: QqMusicUserProfile };
+  return data.profile;
 }
 
 export async function loginAccount(payload: { accountName: string; vipEnabled: boolean; note: string }): Promise<AuthSession> {

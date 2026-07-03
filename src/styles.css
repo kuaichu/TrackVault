@@ -774,13 +774,15 @@ input[type="range"] {
   background: rgba(255, 103, 72, 0.08);
 }
 
-.qq-profile-card {
-  grid-template-rows: 170px minmax(0, 1fr);
+.user-profile-card.qq-profile-card {
+  width: min(660px, 100%);
+  grid-template-rows: 184px minmax(0, 1fr);
 }
 
 .qq-profile-hero {
   background:
-    radial-gradient(circle at 20% 20%, rgba(83, 198, 145, 0.22), transparent 34%),
+    radial-gradient(circle at 18% 20%, rgba(83, 198, 145, 0.25), transparent 34%),
+    radial-gradient(circle at 86% 8%, rgba(83, 154, 255, 0.18), transparent 30%),
     linear-gradient(135deg, rgba(24, 45, 42, 0.95), rgba(13, 18, 28, 0.95));
 }
 
@@ -789,8 +791,8 @@ input[type="range"] {
   color: #09251a;
 }
 
-.qq-profile-stats {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+.user-profile-stats.qq-profile-stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .qq-profile-stats strong {
@@ -803,6 +805,168 @@ input[type="range"] {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.qq-profile-body {
+  gap: 14px;
+}
+
+.qq-profile-tabs {
+  position: sticky;
+  top: -18px;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  margin: -18px -20px 0;
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(11, 16, 24, 0.96);
+  backdrop-filter: blur(16px);
+}
+
+.qq-profile-tabs button {
+  min-width: 0;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.qq-profile-tabs button:hover,
+.qq-profile-tabs button.active {
+  border-color: rgba(83, 198, 145, 0.28);
+  background: rgba(83, 198, 145, 0.12);
+  color: #bdf5d4;
+  transform: translateY(-1px);
+}
+
+.qq-profile-tabs strong,
+.qq-profile-tabs span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qq-profile-tabs strong {
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.qq-profile-tabs span {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.qq-profile-section,
+.qq-profile-mini-groups,
+.qq-profile-mini-group,
+.qq-profile-mini-list {
+  display: grid;
+  gap: 10px;
+}
+
+.qq-profile-mini-group > strong {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.qq-profile-mini-item {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  background: rgba(17, 24, 35, 0.72);
+}
+
+.qq-profile-mini-cover {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgba(83, 198, 145, 0.12);
+  color: #bdf5d4;
+  font-weight: 900;
+}
+
+.qq-profile-mini-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.qq-profile-mini-item span:last-child {
+  min-width: 0;
+}
+
+.qq-profile-mini-item strong,
+.qq-profile-mini-item small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qq-profile-mini-item strong {
+  color: var(--text-primary);
+  font-size: 0.92rem;
+}
+
+.qq-profile-mini-item small {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.qq-profile-issues {
+  display: grid;
+  gap: 7px;
+  padding: 11px 12px;
+  border-radius: 15px;
+  border: 1px solid rgba(255, 180, 93, 0.14);
+  background: rgba(255, 180, 93, 0.075);
+}
+
+.qq-profile-issues strong,
+.qq-profile-issues span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qq-profile-issues strong {
+  color: #ffd7a4;
+  font-size: 12px;
+}
+
+.qq-profile-issues span {
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .modal-backdrop {
@@ -12773,6 +12937,18 @@ body {
 }
 
 @media (max-width: 720px) {
+  .user-profile-card.qq-profile-card {
+    grid-template-rows: 168px minmax(0, 1fr);
+  }
+
+  .qq-profile-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .qq-profile-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .playlist-toolbar-pagination {
     grid-template-columns: 1fr 1fr;
   }

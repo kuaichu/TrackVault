@@ -390,6 +390,63 @@ export type QqMusicAccountStatus = {
   message: string;
 };
 
+export type QqMusicProfileAlbum = {
+  id: string;
+  name: string;
+  coverUrl?: string;
+  artistName: string;
+  songCount: number;
+  publishTime?: string;
+};
+
+export type QqMusicProfileSinger = {
+  id: string;
+  name: string;
+  avatarUrl?: string;
+  fanCount: number;
+  songCount: number;
+};
+
+export type QqMusicProfileUser = {
+  id: string;
+  nickname: string;
+  avatarUrl?: string;
+  signature: string;
+  fanCount: number;
+  followed: boolean;
+};
+
+export type QqMusicProfileIssue = {
+  section: string;
+  message: string;
+};
+
+export type QqMusicUserProfile = {
+  account: QqMusicAccountStatus;
+  detail: {
+    signature: string;
+    level?: number;
+    listenSongs?: number;
+    locationText?: string;
+    ageText?: string;
+  };
+  stats: {
+    createdPlaylists: number;
+    collectedPlaylists: number;
+    collectedAlbums: number;
+    followSingers: number;
+    followUsers: number;
+    fans: number;
+  };
+  createdPlaylists: UserPlaylist[];
+  collectedPlaylists: UserPlaylist[];
+  collectedAlbums: QqMusicProfileAlbum[];
+  followSingers: QqMusicProfileSinger[];
+  followUsers: QqMusicProfileUser[];
+  fans: QqMusicProfileUser[];
+  issues: QqMusicProfileIssue[];
+};
+
 export type NeteaseQrStartResult = {
   key: string;
   qrImage: string;

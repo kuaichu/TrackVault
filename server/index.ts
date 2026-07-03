@@ -20,7 +20,7 @@ import { searchProvider, type SearchProviderMode } from "./provider.js";
 import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getPersonalRadioSongs } from "./personal-radio-provider.js";
-import { checkQqMusicCookie, getQqDiscoverSongs, getQqMusicAccountStatus, getQqPlaylistSongs, getQqSongCommentReplies, getQqSongComments, getQqSongLyrics, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream, setQqSongCommentLiked } from "./qqmusic-provider.js";
+import { checkQqMusicCookie, getQqDiscoverSongs, getQqMusicAccountStatus, getQqMusicUserProfile, getQqPlaylistSongs, getQqSongCommentReplies, getQqSongComments, getQqSongLyrics, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream, setQqSongCommentLiked } from "./qqmusic-provider.js";
 import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./settings-store.js";
 import { getNeteaseSongInsight } from "./song-insight-provider.js";
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
@@ -850,6 +850,16 @@ app.get("/api/account", async (_request, response) => {
 
 app.get("/api/account/qqmusic", async (_request, response) => {
   response.json(await getQqMusicAccountStatus());
+});
+
+app.get("/api/account/qqmusic/profile", async (_request, response) => {
+  try {
+    response.json({ profile: await getQqMusicUserProfile() });
+  } catch (error) {
+    response.status(401).json({
+      message: error instanceof Error ? error.message : "获取 QQ 音乐个人主页失败"
+    });
+  }
 });
 
 app.post("/api/account/login", async (request, response) => {
