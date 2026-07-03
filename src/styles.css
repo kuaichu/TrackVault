@@ -800,6 +800,19 @@ input[type="range"] {
   box-shadow: 0 28px 72px rgba(0, 0, 0, 0.48);
 }
 
+.download-method-card {
+  width: min(600px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(100, 214, 148, 0.04), transparent 44%),
+    rgba(11, 16, 24, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 28px 72px rgba(0, 0, 0, 0.48);
+}
+
 .download-progress-backdrop {
   z-index: 340;
 }
@@ -1685,6 +1698,13 @@ input[type="range"] {
   gap: 16px;
 }
 
+.download-method-card header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .download-progress-card header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 36px;
@@ -1712,6 +1732,7 @@ input[type="range"] {
 .qr-login-card h2,
 .playlist-picker-card h2,
 .download-issue-card h2,
+.download-method-card h2,
 .download-progress-card h2,
 .qr-message {
   margin: 0;
@@ -1720,6 +1741,7 @@ input[type="range"] {
 .qr-login-card h2,
 .playlist-picker-card h2,
 .download-issue-card h2,
+.download-method-card h2,
 .download-progress-card h2 {
   margin-top: 6px;
   font-size: 1.15rem;
@@ -1835,6 +1857,72 @@ input[type="range"] {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.download-method-options {
+  display: grid;
+  gap: 10px;
+}
+
+.download-method-option {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 14px 15px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012)),
+    rgba(13, 19, 30, 0.72);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+.download-method-option:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 180, 93, 0.22);
+  background:
+    linear-gradient(135deg, rgba(255, 180, 93, 0.08), rgba(255, 255, 255, 0.018)),
+    rgba(16, 23, 35, 0.82);
+}
+
+.download-method-option:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.download-method-option span {
+  color: #ffd7a4;
+  font-size: 0.84rem;
+  font-weight: 900;
+}
+
+.download-method-option.raw span {
+  color: #a7f0c0;
+}
+
+.download-method-option.server span {
+  color: #b9ddff;
+}
+
+.download-method-option strong,
+.download-method-option small {
+  min-width: 0;
+}
+
+.download-method-option strong {
+  font-size: 0.96rem;
+  font-weight: 800;
+}
+
+.download-method-option small {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.55;
 }
 
 .server-download-progress {
@@ -4555,6 +4643,12 @@ button.quick-chip:active,
 
 .download-source-pill.browser {
   border-color: rgba(255, 180, 93, 0.16);
+  background: rgba(255, 180, 93, 0.08);
+  color: #ffd7a4;
+}
+
+.download-source-pill.tagged {
+  border-color: rgba(255, 180, 93, 0.18);
   background: rgba(255, 180, 93, 0.08);
   color: #ffd7a4;
 }

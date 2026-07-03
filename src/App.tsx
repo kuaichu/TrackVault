@@ -218,9 +218,15 @@ type DownloadProgressDialog = {
   indeterminate: boolean;
   status: "preparing" | "downloading" | "done" | "failed";
 };
+type DownloadMethod = "tagged" | "raw" | "server";
+type DownloadMethodPicker = {
+  song: Song;
+  level: DownloadQualityLevel;
+  label: string;
+};
 type BrowserDownloadTask = {
   id: string;
-  mode: "raw" | "server";
+  mode: "tagged" | "raw" | "server";
   songId: string;
   title: string;
   artist: string;
@@ -648,7 +654,7 @@ function normalizeBrowserDownloadTask(rawTask: unknown): BrowserDownloadTask | n
 
   return {
     id: String(task.id),
-    mode: task.mode === "raw" ? "raw" : "server",
+    mode: task.mode === "raw" ? "raw" : task.mode === "tagged" ? "tagged" : "server",
     songId: String(task.songId),
     title: String(task.title),
     artist: String(task.artist),
@@ -1328,6 +1334,7 @@ export default function App() {
   });
   const [message, setMessage] = useState("正在加载发现音乐。");
   const [downloadIssue, setDownloadIssue] = useState<DownloadIssueDialog | null>(null);
+  const [downloadMethodPicker, setDownloadMethodPicker] = useState<DownloadMethodPicker | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgressDialog | null>(null);
   const [downloadProgressMinimized, setDownloadProgressMinimized] = useState(false);
   const [playerStateReady, setPlayerStateReady] = useState(false);
@@ -3480,8 +3487,39 @@ export default function App() {
     );
   }
 
+  function getBrowserDownloadModeLabel(mode: BrowserDownloadTask["mode"]) {
+    switch (mode) {
+      case "tagged":
+        return "直连标签";
+      case "raw":
+        return "裸直链";
+      case "server":
+        return "本机备用";
+      default:
+        return "下载";
+    }
+  }
+
+  function openDownloadMethodPicker(song: Song, level = getSelectedLevel(song)) {
+    setDownloadIssue(null);
+    setDownloadMethodPicker({
+      song,
+      level,
+      label: getDownloadLevelLabel(song, level)
+    });
+  }
+
+  function closeDownloadMethodPicker() {
+    setDownloadMethodPicker(null);
+  }
+
   async function runServerFallbackDownload(song: Song, level: DownloadQualityLevel, selectedLabel: string) {
+    if (directDownloadingSongId || batchDownloading) {
+      return;
+    }
+
     let fallbackTaskId = "";
+    setDirectDownloadingSongId(song.id);
 
     try {
       fallbackTaskId = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -3570,80 +3608,148 @@ export default function App() {
         patchBrowserDownloadTask(fallbackTaskId, { status: "failed", detail: fallbackMessage });
       }
       setMessage(fallbackMessage);
+    } finally {
+      setDirectDownloadingSongId(null);
     }
   }
 
-  async function runDirectDownload(song: Song, level: DownloadQualityLevel, options: { showIssueDialog?: boolean } = {}) {
+  async function runTaggedDirectDownload(song: Song, level: DownloadQualityLevel, selectedLabel: string, options: { showIssueDialog?: boolean } = {}) {
     if (directDownloadingSongId || batchDownloading) {
       return;
     }
 
     const showIssueDialog = options.showIssueDialog ?? true;
-    const selectedLabel = getDownloadLevelLabel(song, level);
+    const taskId = `tagged-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const createdAt = new Date().toISOString();
     setDirectDownloadingSongId(song.id);
 
     try {
       setDownloadIssue(null);
-      setMessage(`正在从网易云直连下载：${song.title} · ${selectedLabel}`);
-      await startDirectSongDownload(song, level, (progress) => {
-        setMessage(`正在从网易云直连下载：${song.title} · ${progress}%`);
+      rememberBrowserDownloadTask({
+        id: taskId,
+        mode: "tagged",
+        songId: song.id,
+        title: song.title,
+        artist: song.artist,
+        album: song.album,
+        coverUrl: song.coverUrl,
+        quality: selectedLabel,
+        requestedLevel: level,
+        progress: 0,
+        status: "downloading",
+        detail: "浏览器正在直连读取音频，并写入封面、歌手、专辑和歌词标签。",
+        createdAt,
+        updatedAt: createdAt
       });
-      setMessage(`已保存到本机下载：${song.title}`);
+      setMessage(`方案A直连下载中：${song.title} · ${selectedLabel}`);
+      await startDirectSongDownload(song, level, (progress) => {
+        patchBrowserDownloadTask(taskId, {
+          progress,
+          status: progress >= 100 ? "done" : "downloading",
+          detail: progress >= 100 ? "已保存到本机下载，并写入可用元数据。" : "浏览器正在直连读取音频，并写入封面、歌手、专辑和歌词标签。"
+        });
+        setMessage(`方案A直连下载中：${song.title} · ${progress}%`);
+      });
+      patchBrowserDownloadTask(taskId, {
+        progress: 100,
+        status: "done",
+        detail: "已保存到本机下载，并写入可用元数据。"
+      });
+      setMessage(`方案A已保存到本机下载：${song.title}`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "启动下载失败";
-
-      if (isDirectDownloadBlockedError(error)) {
-        try {
-          setMessage(`直连读流被拦截，正在尝试裸直链下载：${song.title}`);
-          const rawDirectDownload = await startRawDirectSongDownload(song, level);
-          const rawTaskTime = new Date().toISOString();
-          rememberBrowserDownloadTask({
-            id: `raw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            mode: "raw",
-            songId: song.id,
-            title: song.title,
-            artist: song.artist,
-            album: song.album,
-            coverUrl: song.coverUrl,
-            quality: selectedLabel,
-            requestedLevel: level,
-            progress: 100,
-            status: "done",
-            detail: "已把 CDN 裸直链交给浏览器处理，不经过服务器中转，也不会写入封面和歌词标签。",
-            fileName: rawDirectDownload.filename,
-            createdAt: rawTaskTime,
-            updatedAt: rawTaskTime
-          });
-          setMessage(`已尝试裸直链下载：${song.title}。如果浏览器没有开始保存，再使用服务器备用下载。`);
-          const useServerAfterRaw = window.confirm("已尝试裸直链下载。\n\n如果浏览器已经开始下载，点取消即可；如果没有任何反应，是否现在改用服务器备用下载？");
-          if (useServerAfterRaw) {
-            await runServerFallbackDownload(song, level, selectedLabel);
-          }
-          return;
-        } catch (rawDirectError) {
-          const rawDirectMessage = rawDirectError instanceof Error ? rawDirectError.message : "裸直链下载失败";
-          const useServerFallback = window.confirm(`${errorMessage}\n\n裸直链也没有启动：${rawDirectMessage}\n\n可以改用备用下载，但会消耗服务器带宽。要现在用备用下载吗？`);
-
-          if (useServerFallback) {
-            await runServerFallbackDownload(song, level, selectedLabel);
-          } else {
-            setMessage("直连和裸直链下载都未启动，未使用服务器备用下载。");
-          }
-        }
-      } else {
-        if (showIssueDialog) {
-          setDownloadIssue({
-            song,
-            message: errorMessage,
-            attemptedLevel: level,
-            attemptedLabel: selectedLabel
-          });
-        }
-        setMessage(errorMessage);
+      const displayMessage = isDirectDownloadBlockedError(error)
+        ? `方案A被浏览器跨域策略拦截：${errorMessage}。可以重新点击下载，选择方案B裸直链或方案C服务器备用。`
+        : `方案A下载失败：${errorMessage}`;
+      patchBrowserDownloadTask(taskId, { status: "failed", detail: displayMessage });
+      if (showIssueDialog) {
+        setDownloadIssue({
+          song,
+          message: displayMessage,
+          attemptedLevel: level,
+          attemptedLabel: selectedLabel
+        });
       }
+      setMessage(displayMessage);
     } finally {
       setDirectDownloadingSongId(null);
     }
+  }
+
+  async function runRawDirectDownload(song: Song, level: DownloadQualityLevel, selectedLabel: string, options: { showIssueDialog?: boolean } = {}) {
+    if (directDownloadingSongId || batchDownloading) {
+      return;
+    }
+
+    const showIssueDialog = options.showIssueDialog ?? true;
+    const taskId = `raw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const createdAt = new Date().toISOString();
+    setDirectDownloadingSongId(song.id);
+
+    try {
+      setDownloadIssue(null);
+      rememberBrowserDownloadTask({
+        id: taskId,
+        mode: "raw",
+        songId: song.id,
+        title: song.title,
+        artist: song.artist,
+        album: song.album,
+        coverUrl: song.coverUrl,
+        quality: selectedLabel,
+        requestedLevel: level,
+        progress: 0,
+        status: "preparing",
+        detail: "正在获取 CDN 裸直链，获取后交给浏览器处理。",
+        createdAt,
+        updatedAt: createdAt
+      });
+      setMessage(`方案B正在获取裸直链：${song.title}`);
+      const rawDirectDownload = await startRawDirectSongDownload(song, level);
+      patchBrowserDownloadTask(taskId, {
+        progress: 100,
+        status: "done",
+        detail: "已把 CDN 裸直链交给浏览器处理，不经过服务器中转，也不会写入封面和歌词标签。",
+        fileName: rawDirectDownload.filename
+      });
+      setMessage(`方案B已尝试裸直链下载：${song.title}`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "裸直链下载失败";
+      const displayMessage = `方案B裸直链失败：${errorMessage}。可以重新点击下载，选择方案C服务器备用。`;
+      patchBrowserDownloadTask(taskId, { status: "failed", detail: displayMessage });
+      if (showIssueDialog) {
+        setDownloadIssue({
+          song,
+          message: displayMessage,
+          attemptedLevel: level,
+          attemptedLabel: selectedLabel
+        });
+      }
+      setMessage(displayMessage);
+    } finally {
+      setDirectDownloadingSongId(null);
+    }
+  }
+
+  async function runDownloadMethod(method: DownloadMethod) {
+    const picker = downloadMethodPicker;
+    if (!picker) {
+      return;
+    }
+
+    closeDownloadMethodPicker();
+
+    if (method === "tagged") {
+      await runTaggedDirectDownload(picker.song, picker.level, picker.label);
+      return;
+    }
+
+    if (method === "raw") {
+      await runRawDirectDownload(picker.song, picker.level, picker.label);
+      return;
+    }
+
+    await runServerFallbackDownload(picker.song, picker.level, picker.label);
   }
 
   async function handleDownload(song: Song) {
@@ -3665,7 +3771,7 @@ export default function App() {
       return;
     }
 
-    await runDirectDownload(song, getSelectedLevel(song));
+    openDownloadMethodPicker(song);
   }
 
   async function handleDownloadStandardFromIssue() {
@@ -3675,7 +3781,7 @@ export default function App() {
     }
 
     setDownloadIssue(null);
-    await runDirectDownload(issue.song, "standard", { showIssueDialog: false });
+    openDownloadMethodPicker(issue.song, "standard");
   }
 
   async function handleSaveTaskFile(task: DownloadTask) {
@@ -7950,7 +8056,7 @@ export default function App() {
                           <div className="download-task-subline">
                             <span>{task.artist}</span>
                             <span className="download-quality-pill">{task.quality}</span>
-                            <span className={`download-source-pill ${task.mode}`}>{task.mode === "raw" ? "裸直链" : "本机备用"}</span>
+                            <span className={`download-source-pill ${task.mode}`}>{getBrowserDownloadModeLabel(task.mode)}</span>
                           </div>
                         </div>
                         <div className="download-task-progress-block">
@@ -9401,6 +9507,49 @@ export default function App() {
                   下载 128K
                 </button>
               ) : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {downloadMethodPicker ? (
+        <div className="modal-backdrop download-method-backdrop" role="dialog" aria-modal="true" aria-label="选择下载方式" onClick={closeDownloadMethodPicker}>
+          <section className="download-method-card" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <p className="eyebrow">Download Method</p>
+                <h2>选择下载方式</h2>
+              </div>
+              <button type="button" className="modal-close" onClick={closeDownloadMethodPicker} aria-label="关闭下载方式选择">
+                ×
+              </button>
+            </header>
+
+            <div className="download-issue-song">
+              <CoverArt song={downloadMethodPicker.song} className="result-cover" />
+              <div>
+                <strong>{downloadMethodPicker.song.title}</strong>
+                <span>{downloadMethodPicker.song.artist} · {downloadMethodPicker.song.album}</span>
+              </div>
+              <em>{downloadMethodPicker.label}</em>
+            </div>
+
+            <div className="download-method-options">
+              <button type="button" className="download-method-option tagged" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => void runDownloadMethod("tagged")}>
+                <span>方案A：直连下载并写入标签</span>
+                <strong>保留封面、歌手、专辑和歌词信息</strong>
+                <small>不走服务器带宽，但浏览器必须能读取 CDN 音频流；被跨域拦截时会失败。</small>
+              </button>
+              <button type="button" className="download-method-option raw" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => void runDownloadMethod("raw")}>
+                <span>方案B：裸直链下载</span>
+                <strong>最省服务器带宽</strong>
+                <small>直接把 CDN 地址交给浏览器；不写封面/歌词标签，文件名也可能由浏览器决定。</small>
+              </button>
+              <button type="button" className="download-method-option server" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => void runDownloadMethod("server")}>
+                <span>方案C：服务器备用下载</span>
+                <strong>最稳，适合直链没反应时使用</strong>
+                <small>服务器拉取文件并写入元数据；会占用服务器带宽，FLAC / Hi-Res 会更慢。</small>
+              </button>
             </div>
           </section>
         </div>
