@@ -820,6 +820,61 @@ function mergeQqTranslations(lines: LyricLine[], translations: LyricLine[]) {
   }));
 }
 
+function parseQqJsonp(text: string): QqLyricResult {
+  const trimmed = text.trim();
+  const jsonText = trimmed.startsWith("MusicJsonCallback(") && trimmed.endsWith(")")
+    ? trimmed.slice("MusicJsonCallback(".length, -1)
+    : trimmed;
+
+  return JSON.parse(jsonText) as QqLyricResult;
+}
+
+function decodeQqBase64Text(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) {
+    return "";
+  }
+
+  if (value.trim().startsWith("[")) {
+    return value;
+  }
+
+  try {
+    return Buffer.from(value, "base64").toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+async function fetchQqSongLyrics(songMid: string): Promise<QqLyricResult> {
+  const params = new URLSearchParams({
+    songmid: songMid,
+    pcachetime: String(Date.now()),
+    g_tk: "5381",
+    loginUin: "0",
+    hostUin: "0",
+    inCharset: "utf8",
+    outCharset: "utf-8",
+    notice: "0",
+    platform: "yqq",
+    needNewCode: "0"
+  });
+  const response = await fetch(`https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?${params.toString()}`, {
+    headers: {
+      Referer: "https://y.qq.com"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`QQ 音乐歌词接口状态异常：${response.status}`);
+  }
+
+  const data = parseQqJsonp(await response.text());
+  return {
+    lyric: decodeQqBase64Text(data.lyric),
+    trans: decodeQqBase64Text(data.trans)
+  };
+}
+
 function formatQqCommentTime(timestamp: number | undefined) {
   if (!timestamp) {
     return "";
@@ -1268,9 +1323,7 @@ export async function getQqSongLyrics(songId: string, mediaId?: string): Promise
   }
 
   await configureQqCookie();
-  const data = await qqMusic.api<QqLyricResult>("lyric", {
-    songmid: songMid
-  });
+  const data = await fetchQqSongLyrics(songMid);
   const lines = mergeQqTranslations(parseQqLrc(data.lyric), parseQqLrc(data.trans));
 
   return {
