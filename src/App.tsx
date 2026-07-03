@@ -1424,7 +1424,7 @@ export default function App() {
   const accountStatusLabel = session.loggedIn || accountProfile?.provider === "netease" ? accountBadgeLabel : "未登录";
   const accountIsLoggedIn = session.loggedIn || accountProfile?.provider === "netease";
   const neteasePlatformStatusLabel = accountIsLoggedIn ? (accountVipEnabled ? "黑胶" : "标准") : "未登录";
-  const hasQqMusicCookie = Boolean(settings.qqMusicCookie?.trim());
+  const hasQqMusicCookie = Boolean(settings.qqMusicCookie?.trim() || qqAccountStatus?.ok);
   const qqAccountVipEnabled = Boolean(qqAccountStatus?.vipEnabled);
   const qqMusicAccountName = qqAccountStatus?.displayName?.trim() || (qqAccountStatus?.uin ? `QQ ${qqAccountStatus.uin}` : "");
   const qqMusicPlatformStatusLabel = hasQqMusicCookie ? (qqAccountVipEnabled ? "VIP" : "普通") : "未登录";
@@ -2120,8 +2120,7 @@ export default function App() {
     const targetProviderLabel = targetProviderMode === "qq" ? "QQ 音乐" : "网易云";
 
     if (targetProviderMode === "qq") {
-      const cookie = settings.qqMusicCookie?.trim();
-      if (!cookie) {
+      if (!hasQqMusicCookie) {
         if (!options.silentCookieCheck) {
           setMessage("请先在账号中心导入 QQ 音乐 Cookie。");
         }
@@ -2157,7 +2156,7 @@ export default function App() {
 
   async function loadPlaylistSongs(playlist: UserPlaylist, page = 1, keywordOverride = playlistSearchKeyword, sortOverride = playlistSortMode) {
     if (isQqDataMode) {
-      if (!settings.qqMusicCookie?.trim()) {
+      if (!hasQqMusicCookie) {
         setMessage("请先在账号中心导入 QQ 音乐 Cookie。");
         return;
       }
@@ -3342,7 +3341,7 @@ export default function App() {
   }
 
   async function refreshQqProfile() {
-    if (!settings.qqMusicCookie?.trim()) {
+    if (!hasQqMusicCookie) {
       setQqProfileError("请先导入 QQ 音乐 Cookie。");
       return;
     }
