@@ -9,7 +9,7 @@ import { getCurrentUserKey, getSession, loginSession, logoutSession } from "./ac
 import { getCloudSongs } from "./cloud-provider.js";
 import { getSongCommentReplies, getSongComments, replyToSongComment, setSongCommentLiked } from "./comment-provider.js";
 import { getDiscoverSongs } from "./discover-provider.js";
-import { addFlacMetadataToDownload, getHighResolutionCoverUrl, isFlacDownloadTarget } from "./download-metadata.js";
+import { addAudioMetadataToDownload, getAudioMetadataTarget, getHighResolutionCoverUrl } from "./download-metadata.js";
 import { getHeartbeatSongs } from "./heartbeat-provider.js";
 import { getArtistProfile, resolveArtistIdByName } from "./artist-provider.js";
 import { getPlayHistory, getSearchHistory, removeSearchHistory, savePlayHistory, saveSearchHistory } from "./history-store.js";
@@ -727,22 +727,22 @@ app.get("/api/download/proxy", async (request, response) => {
     response.setHeader("Content-Disposition", buildContentDisposition(directDownload.filename));
     response.setHeader("Access-Control-Allow-Origin", "*");
 
-    const shouldTagFlac = !request.headers.range && isFlacDownloadTarget({
+    const metadataTarget = !request.headers.range ? getAudioMetadataTarget({
       filename: directDownload.filename,
       type: directDownload.type,
       contentType
-    });
+    }) : null;
 
-    if (shouldTagFlac) {
+    if (metadataTarget) {
       const originalBytes = new Uint8Array(await upstream.arrayBuffer());
-      const taggedBytes = await addFlacMetadataToDownload({
+      const taggedBytes = await addAudioMetadataToDownload({
         song,
         bytes: originalBytes,
         filename: directDownload.filename,
         type: directDownload.type,
         contentType
       });
-      response.setHeader("Content-Type", "audio/flac");
+      response.setHeader("Content-Type", metadataTarget === "flac" ? "audio/flac" : "audio/mpeg");
       response.setHeader("Content-Length", String(taggedBytes.byteLength));
       response.send(Buffer.from(taggedBytes));
       return;

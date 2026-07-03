@@ -8,7 +8,7 @@ import type { SoundQualityType } from "NeteaseCloudMusicApi";
 import { getCurrentUserKey } from "./account-store.js";
 import { getDatabase, isSqliteAvailable, readJsonStore, updateJsonStore } from "./database.js";
 import { buildMediaCredentialPlan, extractClientSessionIdFromUserKey } from "./media-security.js";
-import { addFlacMetadataToDownload, isFlacDownloadTarget } from "./download-metadata.js";
+import { addAudioMetadataToDownload, getAudioMetadataTarget } from "./download-metadata.js";
 import { isQqMusicSong, probeQqSongAudio, resolveQqDirectDownload } from "./qqmusic-provider.js";
 import { getSettings } from "./settings-store.js";
 import type { DownloadQualityLevel, DownloadTask, NeteaseCookieCheckResult, Song, SongAudioProbe, SongAudioProbeMode } from "./types.js";
@@ -814,9 +814,9 @@ async function downloadSongFile(task: DownloadTask, song: Song) {
   await pipeline(progressStream, writeStream);
 
   let finalFileSizeBytes = contentLength > 0 ? contentLength : receivedBytes;
-  if (isFlacDownloadTarget({ filename: outputPath, type: resolvedSong.type, contentType })) {
+  if (getAudioMetadataTarget({ filename: outputPath, type: resolvedSong.type, contentType })) {
     const originalBytes = await fsPromises.readFile(outputPath);
-    const taggedBytes = await addFlacMetadataToDownload({
+    const taggedBytes = await addAudioMetadataToDownload({
       song,
       bytes: originalBytes,
       filename: outputPath,

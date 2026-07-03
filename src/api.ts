@@ -193,6 +193,30 @@ function isFlacDownload(song: Song, directDownload: DirectDownloadInfo, mediaRes
   );
 }
 
+function isMp3Download(directDownload: DirectDownloadInfo, mediaResponse: Response, blob: Blob) {
+  const normalizedType = directDownload.type?.replace(/^\./, "").toLowerCase();
+  const contentType = mediaResponse.headers.get("content-type")?.toLowerCase() ?? blob.type.toLowerCase();
+  const filename = directDownload.filename.toLowerCase();
+  return (
+    normalizedType === "mp3" ||
+    filename.endsWith(".mp3") ||
+    contentType.includes("audio/mpeg") ||
+    contentType.includes("audio/mp3")
+  );
+}
+
+function getDownloadMetadataTarget(song: Song, directDownload: DirectDownloadInfo, mediaResponse: Response, blob: Blob) {
+  if (isFlacDownload(song, directDownload, mediaResponse, blob)) {
+    return "flac";
+  }
+
+  if (isMp3Download(directDownload, mediaResponse, blob)) {
+    return "mp3";
+  }
+
+  return null;
+}
+
 function formatLrcTimestamp(seconds: number) {
   const safeSeconds = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
   const minutes = Math.floor(safeSeconds / 60);
@@ -381,6 +405,149 @@ function injectFlacMetadata(input: ArrayBuffer, song: Song, lyricsText: string, 
   return concatBytes([new Uint8Array([0x66, 0x4c, 0x61, 0x43]), ...encodedBlocks, bytes.slice(offset)]);
 }
 
+function writeSyncsafeUint32(value: number) {
+  return new Uint8Array([
+    (value >>> 21) & 0x7f,
+    (value >>> 14) & 0x7f,
+    (value >>> 7) & 0x7f,
+    value & 0x7f
+  ]);
+}
+
+function stripExistingId3Tags(bytes: Uint8Array) {
+  const id3v2Length = getId3v2TagLength(bytes);
+  const withoutId3v2 = id3v2Length > 0 ? bytes.slice(id3v2Length) : bytes;
+  const hasId3v1 = withoutId3v2.length >= 128 &&
+    withoutId3v2[withoutId3v2.length - 128] === 0x54 &&
+    withoutId3v2[withoutId3v2.length - 127] === 0x41 &&
+    withoutId3v2[withoutId3v2.length - 126] === 0x47;
+
+  return hasId3v1 ? withoutId3v2.slice(0, withoutId3v2.length - 128) : withoutId3v2;
+}
+
+function encodeUtf16Le(text: string, withBom = false) {
+  const output = new Uint8Array((withBom ? 2 : 0) + text.length * 2);
+  let offset = 0;
+
+  if (withBom) {
+    output[offset++] = 0xff;
+    output[offset++] = 0xfe;
+  }
+
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    output[offset++] = code & 0xff;
+    output[offset++] = (code >>> 8) & 0xff;
+  }
+
+  return output;
+}
+
+function buildId3Frame(id: string, data: Uint8Array) {
+  const encoder = new TextEncoder();
+  return concatBytes([
+    encoder.encode(id),
+    writeUint32BigEndian(data.length),
+    new Uint8Array([0x00, 0x00]),
+    data
+  ]);
+}
+
+function buildId3TextFrame(id: string, value: string | null | undefined) {
+  const normalizedValue = value?.trim();
+  if (!normalizedValue) {
+    return null;
+  }
+
+  return buildId3Frame(id, concatBytes([new Uint8Array([0x01]), encodeUtf16Le(normalizedValue, true)]));
+}
+
+function buildId3UserTextFrame(description: string, value: string | null | undefined) {
+  const normalizedValue = value?.trim();
+  if (!normalizedValue) {
+    return null;
+  }
+
+  return buildId3Frame(
+    "TXXX",
+    concatBytes([
+      new Uint8Array([0x01]),
+      encodeUtf16Le(description, true),
+      new Uint8Array([0x00, 0x00]),
+      encodeUtf16Le(normalizedValue)
+    ])
+  );
+}
+
+function buildId3LyricsFrame(lyricsText: string) {
+  const normalizedLyrics = lyricsText.trim();
+  if (!normalizedLyrics) {
+    return null;
+  }
+
+  const encoder = new TextEncoder();
+  return buildId3Frame(
+    "USLT",
+    concatBytes([
+      new Uint8Array([0x01]),
+      encoder.encode("XXX"),
+      encodeUtf16Le("", true),
+      new Uint8Array([0x00, 0x00]),
+      encodeUtf16Le(normalizedLyrics)
+    ])
+  );
+}
+
+function buildId3PictureFrame(cover: DownloadCoverData | null) {
+  if (!cover || cover.bytes.length === 0) {
+    return null;
+  }
+
+  const encoder = new TextEncoder();
+  const mimeType = encoder.encode(cover.mimeType.split(";")[0]?.trim() || "image/jpeg");
+
+  return buildId3Frame(
+    "APIC",
+    concatBytes([
+      new Uint8Array([0x00]),
+      mimeType,
+      new Uint8Array([0x00, 0x03, 0x00]),
+      cover.bytes
+    ])
+  );
+}
+
+function injectMp3Metadata(input: ArrayBuffer, song: Song, lyricsText: string, cover: DownloadCoverData | null) {
+  const encoder = new TextEncoder();
+  const inputBytes = new Uint8Array(input);
+  const artistText = song.artists?.length ? song.artists.map((artist) => artist.name).join("; ") : song.artist;
+  const frames: Uint8Array[] = [];
+  const frameCandidates = [
+    buildId3TextFrame("TIT2", song.title),
+    buildId3TextFrame("TPE1", artistText),
+    buildId3TextFrame("TALB", song.album),
+    buildId3TextFrame("TPE2", song.artist),
+    buildId3UserTextFrame("TRACKVAULT_SOURCE", song.source),
+    buildId3LyricsFrame(lyricsText),
+    buildId3PictureFrame(cover)
+  ];
+
+  for (const frame of frameCandidates) {
+    if (frame) {
+      frames.push(frame);
+    }
+  }
+
+  const body = concatBytes(frames);
+  const header = concatBytes([
+    encoder.encode("ID3"),
+    new Uint8Array([0x03, 0x00, 0x00]),
+    writeSyncsafeUint32(body.length)
+  ]);
+
+  return concatBytes([header, body, stripExistingId3Tags(inputBytes)]);
+}
+
 async function fetchDownloadCover(song: Song): Promise<DownloadCoverData | null> {
   if (!song.coverUrl?.trim()) {
     return null;
@@ -403,7 +570,8 @@ async function fetchDownloadCover(song: Song): Promise<DownloadCoverData | null>
 }
 
 async function addMetadataToDownloadBlob(song: Song, directDownload: DirectDownloadInfo, mediaResponse: Response, blob: Blob) {
-  if (!isFlacDownload(song, directDownload, mediaResponse, blob)) {
+  const metadataTarget = getDownloadMetadataTarget(song, directDownload, mediaResponse, blob);
+  if (!metadataTarget) {
     return blob;
   }
 
@@ -413,8 +581,11 @@ async function addMetadataToDownloadBlob(song: Song, directDownload: DirectDownl
       fetchDownloadCover(song)
     ]);
     const lyricsText = lyricsResult.status === "fulfilled" ? formatLyricsAsLrc(lyricsResult.value) : "";
-    const taggedBytes = injectFlacMetadata(await blob.arrayBuffer(), song, lyricsText, cover.status === "fulfilled" ? cover.value : null);
-    return new Blob([taggedBytes], { type: "audio/flac" });
+    const originalBytes = await blob.arrayBuffer();
+    const taggedBytes = metadataTarget === "flac"
+      ? injectFlacMetadata(originalBytes, song, lyricsText, cover.status === "fulfilled" ? cover.value : null)
+      : injectMp3Metadata(originalBytes, song, lyricsText, cover.status === "fulfilled" ? cover.value : null);
+    return new Blob([taggedBytes], { type: metadataTarget === "flac" ? "audio/flac" : "audio/mpeg" });
   } catch {
     return blob;
   }

@@ -1,6 +1,7 @@
 import { getSongLyrics } from "./lyric-provider.js";
 import { getQqSongLyrics } from "./qqmusic-provider.js";
 import { formatLyricsAsLrc, injectFlacMetadata, isFlacBytes, type FlacCoverData } from "./flac-metadata.js";
+import { injectMp3Metadata, isMp3Bytes } from "./mp3-metadata.js";
 import type { Song } from "./types.js";
 
 const COVER_MAX_BYTES = 5 * 1024 * 1024;
@@ -26,6 +27,42 @@ export function isFlacDownloadTarget(input: {
     contentType.includes("audio/x-flac") ||
     Boolean(input.bytes && isFlacBytes(input.bytes))
   );
+}
+
+export function isMp3DownloadTarget(input: {
+  filename?: string | null;
+  type?: string | null;
+  contentType?: string | null;
+  bytes?: Uint8Array | null;
+}) {
+  const filename = input.filename?.toLowerCase() ?? "";
+  const type = normalizeAudioType(input.type);
+  const contentType = input.contentType?.toLowerCase() ?? "";
+
+  return (
+    type === "mp3" ||
+    filename.endsWith(".mp3") ||
+    contentType.includes("audio/mpeg") ||
+    contentType.includes("audio/mp3") ||
+    Boolean(input.bytes && isMp3Bytes(input.bytes))
+  );
+}
+
+export function getAudioMetadataTarget(input: {
+  filename?: string | null;
+  type?: string | null;
+  contentType?: string | null;
+  bytes?: Uint8Array | null;
+}): "flac" | "mp3" | null {
+  if (isFlacDownloadTarget(input)) {
+    return "flac";
+  }
+
+  if (isMp3DownloadTarget(input)) {
+    return "mp3";
+  }
+
+  return null;
 }
 
 function isAllowedCoverHost(hostname: string) {
@@ -114,14 +151,15 @@ async function fetchLyricsText(song: Song) {
   }
 }
 
-export async function addFlacMetadataToDownload(input: {
+export async function addAudioMetadataToDownload(input: {
   song: Song;
   bytes: Uint8Array;
   filename?: string | null;
   type?: string | null;
   contentType?: string | null;
 }) {
-  if (!isFlacDownloadTarget(input)) {
+  const target = getAudioMetadataTarget(input);
+  if (!target) {
     return input.bytes;
   }
 
@@ -130,7 +168,9 @@ export async function addFlacMetadataToDownload(input: {
       fetchLyricsText(input.song),
       fetchCover(input.song).catch(() => null)
     ]);
-    return injectFlacMetadata(input.bytes, input.song, lyricsText, cover);
+    return target === "flac"
+      ? injectFlacMetadata(input.bytes, input.song, lyricsText, cover)
+      : injectMp3Metadata(input.bytes, input.song, lyricsText, cover);
   } catch {
     return input.bytes;
   }
