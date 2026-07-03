@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import type { DownloadQualityLevel, DownloadQualityOption, LyricLine, PlaylistSongsPage, QqMusicAccountStatus, QqMusicCookieCheckResult, QqMusicProfileAlbum, QqMusicProfileSinger, QqMusicProfileUser, QqMusicUserProfile, Song, SongAudioProbe, SongAudioProbeMode, SongComment, SongCommentRepliesPage, SongCommentsPage, SongLyrics, UserPlaylist } from "./types.js";
+import type { DownloadQualityLevel, DownloadQualityOption, LyricLine, PlaylistSongsPage, QqMusicAccountStatus, QqMusicCookieCheckResult, QqMusicProfileAlbum, QqMusicProfileSinger, QqMusicProfileUser, QqMusicUserProfile, Song, SongAudioProbe, SongAudioProbeMode, SongAvailability, SongComment, SongCommentRepliesPage, SongCommentsPage, SongLyrics, UserPlaylist } from "./types.js";
 import { getSettings } from "./settings-store.js";
 
 const require = createRequire(import.meta.url);
@@ -40,6 +40,21 @@ type QqSearchSong = {
   };
   albummid?: string;
   interval?: number;
+  switch?: number;
+  msgid?: number;
+  alertid?: number;
+  pay?: {
+    payplay?: number;
+    paydownload?: number;
+    payinfo?: number;
+    paytrackmouth?: number;
+    paytrackprice?: number;
+  };
+  preview?: {
+    trybegin?: number;
+    tryend?: number;
+    trysize?: number;
+  };
   size128?: number;
   size320?: number;
   sizeflac?: number;
@@ -207,6 +222,62 @@ function getHighestQualityLabel(qualities: DownloadQualityOption[]) {
   return qualities[qualities.length - 1]?.label ?? "128K";
 }
 
+function getQqSongAvailability(song: QqSearchSong): SongAvailability | undefined {
+  if (song.switch === 0) {
+    return {
+      playback: {
+        status: "copyright",
+        locked: true,
+        label: "无版权",
+        reason: "QQ 音乐当前没有开放这首歌的可播放音源。"
+      },
+      download: {
+        status: "copyright",
+        locked: true,
+        label: "无版权",
+        reason: "QQ 音乐当前没有开放这首歌的可下载音源。"
+      }
+    };
+  }
+
+  const payPlay = Number(song.pay?.payplay ?? 0) > 0;
+  const payDownload = Number(song.pay?.paydownload ?? 0) > 0;
+  const hasPaySignal = payPlay || payDownload || Number(song.pay?.paytrackprice ?? 0) > 0;
+
+  if (!hasPaySignal) {
+    return undefined;
+  }
+
+  return {
+    playback: payPlay
+      ? {
+          status: "vip",
+          locked: true,
+          label: "VIP",
+          reason: "这首歌需要 QQ 音乐会员或付费权限才能播放。"
+        }
+      : {
+          status: "available",
+          locked: false,
+          label: "可播放",
+          reason: "当前账号可播放该音源。"
+        },
+    download: payDownload
+      ? {
+          status: "vip",
+          locked: true,
+          label: "VIP",
+          reason: "这首歌需要 QQ 音乐会员或付费权限才能下载。"
+        }
+      : {
+          status: "available",
+          locked: false,
+          label: "可下载",
+          reason: "当前账号可下载该音源。"
+        }
+  };
+}
+
 function getQqCoverUrl(albumMid: string | undefined) {
   const mid = albumMid?.trim();
   return mid ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${mid}.jpg` : undefined;
@@ -242,6 +313,7 @@ function mapQqSong(song: QqSearchSong): Song | null {
     duration: formatDuration(Number(song.interval ?? 0)),
     quality: getHighestQualityLabel(qualities),
     availableQualities: qualities,
+    availability: getQqSongAvailability(song),
     source: "qqmusic"
   };
 }
