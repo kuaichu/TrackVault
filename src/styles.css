@@ -4542,6 +4542,29 @@ button.quick-chip:active,
   line-height: 1;
 }
 
+.download-source-pill {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
+.download-source-pill.browser {
+  border-color: rgba(255, 180, 93, 0.16);
+  background: rgba(255, 180, 93, 0.08);
+  color: #ffd7a4;
+}
+
+.download-source-pill.server {
+  border-color: rgba(130, 198, 255, 0.16);
+  background: rgba(130, 198, 255, 0.07);
+  color: #b9ddff;
+}
+
 .download-task-status {
   display: inline-flex;
   align-items: center;
@@ -4666,6 +4689,20 @@ button.quick-chip:active,
 .download-task-action .action-svg {
   width: 16px;
   height: 16px;
+}
+
+.download-local-note {
+  min-width: 72px;
+  display: inline-flex;
+  justify-content: center;
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 
 .playlist-manager {

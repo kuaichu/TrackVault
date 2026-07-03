@@ -483,7 +483,7 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
 export async function startServerSongDownload(
   song: Song,
   level: DownloadQualityLevel,
-  callbacks: { onStatus?: (status: string) => void; onProgress?: (progress: number) => void } = {}
+  callbacks: { onStatus?: (status: string) => void; onProgress?: (progress: number) => void; onReady?: (info: { filename: string; sizeBytes?: number }) => void } = {}
 ) {
   const response = await apiFetch(getServerDownloadUrl(song, level));
   if (!response.ok) {
@@ -498,10 +498,13 @@ export async function startServerSongDownload(
 
   if (!response.body || !contentLength) {
     const blob = await response.blob();
+    callbacks.onReady?.({ filename, sizeBytes: blob.size });
     callbacks.onProgress?.(100);
     saveBlob(blob, filename);
     return;
   }
+
+  callbacks.onReady?.({ filename, sizeBytes: contentLength });
 
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];

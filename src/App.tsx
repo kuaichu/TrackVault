@@ -209,12 +209,30 @@ type DownloadIssueDialog = {
   attemptedLabel: string;
 };
 type DownloadProgressDialog = {
+  taskId: string;
   song: Song;
   title: string;
   detail: string;
   progress: number;
   indeterminate: boolean;
   status: "preparing" | "downloading" | "done" | "failed";
+};
+type BrowserDownloadTask = {
+  id: string;
+  songId: string;
+  title: string;
+  artist: string;
+  album: string;
+  coverUrl?: string;
+  quality: string;
+  requestedLevel: DownloadQualityLevel;
+  progress: number;
+  status: DownloadTask["status"];
+  detail: string;
+  fileName?: string;
+  fileSizeBytes?: number;
+  createdAt: string;
+  updatedAt: string;
 };
 type ResultSource = "search" | "playlist" | "cloud" | "daily" | "discover" | "artist" | "album";
 type UserProfileView = "profile" | UserSocialListKind | "events";
@@ -255,7 +273,7 @@ const navText: Record<NavKey, { title: string; subtitle: string }> = {
   playlists: { title: "我的歌单", subtitle: "读取当前平台账号歌单并载入歌曲" },
   transfer: { title: "歌单互转", subtitle: "跨平台匹配、缺失识别与文字歌单导出" },
   cloud: { title: "云盘音乐", subtitle: "读取网易云音乐云盘并载入歌曲" },
-  downloads: { title: "下载管理", subtitle: "查看服务器下载任务、进度和输出文件" },
+  downloads: { title: "下载管理", subtitle: "查看下载任务、进度和输出状态" },
   history: { title: "播放历史", subtitle: "回看最近播放并快速继续收听" }
   ,
   artist: { title: "歌手", subtitle: "查看歌手热门歌曲与简介" },
@@ -266,6 +284,8 @@ const SEARCH_HISTORY_STORAGE_KEY = "net-music-down:search-history";
 const DISCOVER_CACHE_STORAGE_KEY = "net-music-down:discover-cache";
 const PLAY_HISTORY_STORAGE_KEY = "net-music-down:play-history";
 const PLAYER_STATE_STORAGE_KEY = "net-music-down:player-state";
+const BROWSER_DOWNLOAD_TASKS_STORAGE_KEY = "net-music-down:browser-download-tasks";
+const BROWSER_DOWNLOAD_TASK_LIMIT = 30;
 const DISCOVER_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const USER_PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
@@ -600,6 +620,73 @@ function normalizePlaybackMode(mode: unknown): PlaybackMode {
 function savePlayerStateLocal(state: PersistedPlayerState) {
   try {
     window.localStorage.setItem(PLAYER_STATE_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Best-effort only.
+  }
+}
+
+function normalizeBrowserDownloadStatus(status: unknown): DownloadTask["status"] {
+  return status === "done" || status === "failed" || status === "queued" || status === "preparing" || status === "downloading" ? status : "failed";
+}
+
+function normalizeBrowserDownloadTask(rawTask: unknown): BrowserDownloadTask | null {
+  if (!rawTask || typeof rawTask !== "object") {
+    return null;
+  }
+
+  const task = rawTask as Partial<BrowserDownloadTask>;
+  if (!task.id || !task.songId || !task.title || !task.artist) {
+    return null;
+  }
+
+  const loadedStatus = normalizeBrowserDownloadStatus(task.status);
+  const status = loadedStatus === "queued" || loadedStatus === "preparing" || loadedStatus === "downloading" ? "failed" : loadedStatus;
+  const progress = Number.isFinite(task.progress) ? Math.max(0, Math.min(100, Math.round(Number(task.progress)))) : status === "done" ? 100 : 0;
+  const now = new Date().toISOString();
+
+  return {
+    id: String(task.id),
+    songId: String(task.songId),
+    title: String(task.title),
+    artist: String(task.artist),
+    album: typeof task.album === "string" ? task.album : "",
+    coverUrl: typeof task.coverUrl === "string" ? task.coverUrl : undefined,
+    quality: typeof task.quality === "string" ? task.quality : "备用下载",
+    requestedLevel: task.requestedLevel ?? "standard",
+    progress: status === "done" ? 100 : progress,
+    status,
+    detail: status === "failed" && loadedStatus !== "failed" ? "页面刷新后下载中断，请重新下载。" : typeof task.detail === "string" ? task.detail : "",
+    fileName: typeof task.fileName === "string" ? task.fileName : undefined,
+    fileSizeBytes: Number.isFinite(task.fileSizeBytes) ? Number(task.fileSizeBytes) : undefined,
+    createdAt: typeof task.createdAt === "string" ? task.createdAt : now,
+    updatedAt: typeof task.updatedAt === "string" ? task.updatedAt : now
+  };
+}
+
+function loadBrowserDownloadTasks() {
+  try {
+    const rawTasks = window.localStorage.getItem(BROWSER_DOWNLOAD_TASKS_STORAGE_KEY);
+    if (!rawTasks) {
+      return [];
+    }
+
+    const parsedTasks = JSON.parse(rawTasks);
+    if (!Array.isArray(parsedTasks)) {
+      return [];
+    }
+
+    return parsedTasks
+      .map(normalizeBrowserDownloadTask)
+      .filter((task): task is BrowserDownloadTask => Boolean(task))
+      .slice(0, BROWSER_DOWNLOAD_TASK_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function saveBrowserDownloadTasks(tasks: BrowserDownloadTask[]) {
+  try {
+    window.localStorage.setItem(BROWSER_DOWNLOAD_TASKS_STORAGE_KEY, JSON.stringify(tasks.slice(0, BROWSER_DOWNLOAD_TASK_LIMIT)));
   } catch {
     // Best-effort only.
   }
@@ -1054,6 +1141,7 @@ export default function App() {
   const [searchHistory, setSearchHistory] = useState<string[]>(loadSearchHistory);
   const [playlists, setPlaylists] = useState<UserPlaylist[]>([]);
   const [tasks, setTasks] = useState<DownloadTask[]>([]);
+  const [browserDownloadTasks, setBrowserDownloadTasks] = useState<BrowserDownloadTask[]>(loadBrowserDownloadTasks);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [switchingProviderMode, setSwitchingProviderMode] = useState(false);
   const [adminConfig, setAdminConfig] = useState<AdminConfigView>(defaultAdminConfig);
@@ -3378,6 +3466,17 @@ export default function App() {
     closeDownloadProgress();
   }
 
+  function rememberBrowserDownloadTask(task: BrowserDownloadTask) {
+    setBrowserDownloadTasks((current) => [task, ...current.filter((item) => item.id !== task.id)].slice(0, BROWSER_DOWNLOAD_TASK_LIMIT));
+  }
+
+  function patchBrowserDownloadTask(taskId: string, patch: Partial<BrowserDownloadTask>) {
+    const updatedAt = new Date().toISOString();
+    setBrowserDownloadTasks((current) =>
+      current.map((task) => task.id === taskId ? { ...task, ...patch, updatedAt } : task)
+    );
+  }
+
   async function runDirectDownload(song: Song, level: DownloadQualityLevel, options: { showIssueDialog?: boolean } = {}) {
     if (directDownloadingSongId || batchDownloading) {
       return;
@@ -3401,13 +3500,33 @@ export default function App() {
         const useServerFallback = window.confirm(`${errorMessage}\n\n可以改用备用下载，但会消耗服务器带宽。要现在用备用下载吗？`);
 
         if (useServerFallback) {
+          let fallbackTaskId = "";
           try {
+            fallbackTaskId = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const fallbackDetail = "服务器正在拉取音源，并写入封面、歌手、专辑和歌词信息。";
+            const fallbackCreatedAt = new Date().toISOString();
             setMessage(`正在通过服务器备用下载：${song.title} · ${selectedLabel}`);
             setDownloadProgressMinimized(false);
+            rememberBrowserDownloadTask({
+              id: fallbackTaskId,
+              songId: song.id,
+              title: song.title,
+              artist: song.artist,
+              album: song.album,
+              coverUrl: song.coverUrl,
+              quality: selectedLabel,
+              requestedLevel: level,
+              progress: 0,
+              status: "preparing",
+              detail: fallbackDetail,
+              createdAt: fallbackCreatedAt,
+              updatedAt: fallbackCreatedAt
+            });
             setDownloadProgress({
+              taskId: fallbackTaskId,
               song,
               title: `备用下载：${song.title}`,
-              detail: "服务器正在拉取音源，并写入封面、歌手、专辑和歌词信息。",
+              detail: fallbackDetail,
               progress: 0,
               indeterminate: true,
               status: "preparing"
@@ -3415,6 +3534,10 @@ export default function App() {
             await startServerSongDownload(song, level, {
               onStatus: (status) => {
                 setDownloadProgress((current) => current ? { ...current, detail: status, status: "downloading" } : current);
+                patchBrowserDownloadTask(fallbackTaskId, { detail: status, status: "downloading" });
+              },
+              onReady: ({ filename, sizeBytes }) => {
+                patchBrowserDownloadTask(fallbackTaskId, { fileName: filename, fileSizeBytes: sizeBytes });
               },
               onProgress: (progress) => {
                 setDownloadProgress((current) => current ? {
@@ -3424,6 +3547,11 @@ export default function App() {
                   status: progress >= 100 ? "done" : "downloading",
                   detail: progress >= 100 ? "文件已准备完成，浏览器正在保存到本机。" : "正在传输备用下载文件。"
                 } : current);
+                patchBrowserDownloadTask(fallbackTaskId, {
+                  progress,
+                  status: progress >= 100 ? "done" : "downloading",
+                  detail: progress >= 100 ? "文件已准备完成，浏览器正在保存到本机。" : "正在传输备用下载文件。"
+                });
               }
             });
             setDownloadProgress((current) => current ? {
@@ -3433,6 +3561,11 @@ export default function App() {
               status: "done",
               detail: "已开始保存到本机，可以在浏览器下载列表中查看。"
             } : current);
+            patchBrowserDownloadTask(fallbackTaskId, {
+              progress: 100,
+              status: "done",
+              detail: "已开始保存到本机，可以在浏览器下载列表中查看。"
+            });
             setMessage(`已开始保存备用下载：${song.title}`);
           } catch (fallbackError) {
             const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : "备用下载失败";
@@ -3442,6 +3575,7 @@ export default function App() {
               status: "failed",
               detail: fallbackMessage
             } : {
+              taskId: fallbackTaskId || `browser-failed-${Date.now()}`,
               song,
               title: `备用下载：${song.title}`,
               detail: fallbackMessage,
@@ -3449,6 +3583,9 @@ export default function App() {
               indeterminate: false,
               status: "failed"
             });
+            if (fallbackTaskId) {
+              patchBrowserDownloadTask(fallbackTaskId, { status: "failed", detail: fallbackMessage });
+            }
             setMessage(fallbackMessage);
           }
         } else {
@@ -4681,6 +4818,10 @@ export default function App() {
   }
 
   useEffect(() => {
+    saveBrowserDownloadTasks(browserDownloadTasks);
+  }, [browserDownloadTasks]);
+
+  useEffect(() => {
     function handleWindowClick() {
       setOpenQualityMenuId(null);
       setQualityMenuStyle(null);
@@ -5674,11 +5815,14 @@ export default function App() {
   }, [currentTrack?.id, playbackLocked]);
 
   const activeCount = useMemo(
-    () => tasks.filter((task) => task.status === "queued" || task.status === "downloading" || task.status === "preparing").length,
-    [tasks]
+    () =>
+      tasks.filter((task) => task.status === "queued" || task.status === "downloading" || task.status === "preparing").length +
+      browserDownloadTasks.filter((task) => task.status === "queued" || task.status === "downloading" || task.status === "preparing").length,
+    [browserDownloadTasks, tasks]
   );
-  const completedCount = useMemo(() => tasks.filter((task) => task.status === "done").length, [tasks]);
-  const failedCount = useMemo(() => tasks.filter((task) => task.status === "failed").length, [tasks]);
+  const completedCount = useMemo(() => tasks.filter((task) => task.status === "done").length + browserDownloadTasks.filter((task) => task.status === "done").length, [browserDownloadTasks, tasks]);
+  const failedCount = useMemo(() => tasks.filter((task) => task.status === "failed").length + browserDownloadTasks.filter((task) => task.status === "failed").length, [browserDownloadTasks, tasks]);
+  const downloadTaskTotal = tasks.length + browserDownloadTasks.length;
   const visibleSongs = useMemo(() => {
     const sourceSongs = resultSource === "playlist" || resultSource === "cloud" || resultSource === "daily" || resultSource === "discover" || resultSource === "artist" || resultSource === "album"
       ? results
@@ -7737,7 +7881,7 @@ export default function App() {
               <header className="download-manager-head">
                 <div>
                   <p className="eyebrow">下载管理</p>
-                  <h2>服务器下载任务</h2>
+                  <h2>下载任务</h2>
                 </div>
                 <div className="download-summary">
                   <span className="download-summary-pill done">
@@ -7756,63 +7900,120 @@ export default function App() {
               </header>
 
               <div className="download-task-list">
-                {tasks.length === 0 ? (
+                {downloadTaskTotal === 0 ? (
                   <div className="empty-box">还没有下载任务，回到发现音乐添加一首歌。</div>
                 ) : (
-                  tasks.map((task) => (
-                    <article key={task.id} className={`download-task-row ${task.status}`}>
-                      <div className="download-task-main">
-                        <strong className="download-task-title">{task.title}</strong>
-                        <div className="download-task-subline">
-                          <span>{task.artist}</span>
-                          <span className="download-quality-pill">{task.quality}</span>
+                  <>
+                    {browserDownloadTasks.map((task) => (
+                      <article key={task.id} className={`download-task-row browser ${task.status}`}>
+                        <div className="download-task-main">
+                          <strong className="download-task-title">{task.title}</strong>
+                          <div className="download-task-subline">
+                            <span>{task.artist}</span>
+                            <span className="download-quality-pill">{task.quality}</span>
+                            <span className="download-source-pill browser">本机备用</span>
+                          </div>
                         </div>
-                      </div>
-                      <div className="download-task-progress-block">
-                        <div className="download-task-progress-head">
-                          <span className={`download-task-status ${task.status}`}>{statusLabel(task.status)}</span>
-                          <strong>{task.progress}%</strong>
+                        <div className="download-task-progress-block">
+                          <div className="download-task-progress-head">
+                            <span className={`download-task-status ${task.status}`}>{statusLabel(task.status)}</span>
+                            <strong>{task.progress}%</strong>
+                          </div>
+                          <div className="progress-track">
+                            <div className="progress-fill" style={{ width: `${task.progress}%` }} />
+                          </div>
                         </div>
-                        <div className="progress-track">
-                          <div className="progress-fill" style={{ width: `${task.progress}%` }} />
+                        <div className="download-task-meta">
+                          {task.status === "done" ? (
+                            <>
+                              <span>
+                                <em>大小</em>
+                                <strong>{formatFileSize(task.fileSizeBytes)}</strong>
+                              </span>
+                              <span>
+                                <em>位置</em>
+                                <strong>浏览器下载列表</strong>
+                              </span>
+                            </>
+                          ) : null}
+                          <span className="download-file-chip" title={task.fileName ?? task.detail}>
+                            <em>文件</em>
+                            <strong>{task.fileName ?? (task.status === "done" ? "浏览器已接管保存" : "等待浏览器保存")}</strong>
+                          </span>
+                          {task.status === "failed" ? <span className="queue-error">{task.detail || "备用下载失败"}</span> : null}
                         </div>
-                      </div>
-                      <div className="download-task-meta">
-                        {task.status === "done" ? (
-                          <>
-                            <span>
-                              <em>时长</em>
-                              <strong>{task.downloadedDuration ?? "--"}</strong>
-                            </span>
-                            <span>
-                              <em>大小</em>
-                              <strong>{formatFileSize(task.fileSizeBytes)}</strong>
-                            </span>
-                          </>
-                        ) : null}
-                        <span className="download-file-chip" title={task.outputPath ?? "等待写入产物"}>
-                          <em>文件</em>
-                          <strong>{formatDownloadFileName(task.outputPath)}</strong>
-                        </span>
-                        {task.error ? <span className="queue-error">{task.error}</span> : null}
-                      </div>
-                      <div className="download-task-action">
-                        {task.status === "done" ? (
-                          <button
-                            type="button"
-                            className="secondary-button compact operation-button download-save-button"
-                            disabled={savingTaskFileId === task.id}
-                            aria-label={`保存 ${task.title} 到本机`}
-                            title="保存到本机"
-                            onClick={() => void handleSaveTaskFile(task)}
-                          >
-                            <OperationIcon name="download" />
-                            <span>{savingTaskFileId === task.id ? "保存中" : "保存"}</span>
-                          </button>
-                        ) : null}
-                      </div>
-                    </article>
-                  ))
+                        <div className="download-task-action">
+                          {downloadProgress?.taskId === task.id ? (
+                            <button
+                              type="button"
+                              className="secondary-button compact operation-button download-save-button"
+                              onClick={() => setDownloadProgressMinimized(false)}
+                            >
+                              <span>查看</span>
+                            </button>
+                          ) : (
+                            <span className="download-local-note">{task.status === "done" ? "已保存" : task.status === "failed" ? "已停止" : "后台中"}</span>
+                          )}
+                        </div>
+                      </article>
+                    ))}
+
+                    {tasks.map((task) => (
+                      <article key={task.id} className={`download-task-row ${task.status}`}>
+                        <div className="download-task-main">
+                          <strong className="download-task-title">{task.title}</strong>
+                          <div className="download-task-subline">
+                            <span>{task.artist}</span>
+                            <span className="download-quality-pill">{task.quality}</span>
+                            <span className="download-source-pill server">服务器</span>
+                          </div>
+                        </div>
+                        <div className="download-task-progress-block">
+                          <div className="download-task-progress-head">
+                            <span className={`download-task-status ${task.status}`}>{statusLabel(task.status)}</span>
+                            <strong>{task.progress}%</strong>
+                          </div>
+                          <div className="progress-track">
+                            <div className="progress-fill" style={{ width: `${task.progress}%` }} />
+                          </div>
+                        </div>
+                        <div className="download-task-meta">
+                          {task.status === "done" ? (
+                            <>
+                              <span>
+                                <em>时长</em>
+                                <strong>{task.downloadedDuration ?? "--"}</strong>
+                              </span>
+                              <span>
+                                <em>大小</em>
+                                <strong>{formatFileSize(task.fileSizeBytes)}</strong>
+                              </span>
+                            </>
+                          ) : null}
+                          <span className="download-file-chip" title={task.outputPath ?? "等待写入产物"}>
+                            <em>文件</em>
+                            <strong>{formatDownloadFileName(task.outputPath)}</strong>
+                          </span>
+                          {task.error ? <span className="queue-error">{task.error}</span> : null}
+                        </div>
+                        <div className="download-task-action">
+                          {task.status === "done" ? (
+                            <button
+                              type="button"
+                              className="secondary-button compact operation-button download-save-button"
+                              disabled={savingTaskFileId === task.id}
+                              aria-label={`保存 ${task.title} 到本机`}
+                              title="保存到本机"
+                              onClick={() => void handleSaveTaskFile(task)}
+                            >
+                              <OperationIcon name="download" />
+                              <span>{savingTaskFileId === task.id ? "保存中" : "保存"}</span>
+                            </button>
+                          ) : null}
+                        </div>
+                      </article>
+                    ))}
+                  </>
                 )}
               </div>
             </section>
