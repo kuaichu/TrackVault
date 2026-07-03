@@ -121,18 +121,31 @@ const playbackQualityOptions: Array<{ level: DownloadQualityLevel; label: string
   { level: "hires", label: "Hi-Res" }
 ];
 
-const qualityDisplayMeta: Record<DownloadQualityLevel, { title: string; detail: string; badge: string }> = {
-  standard: { title: "标准音质", detail: "128kbps", badge: "标" },
-  exhigh: { title: "极高音质", detail: "320kbps", badge: "HQ" },
-  lossless: { title: "无损音质", detail: "FLAC / 44.1-48kHz / 16bit", badge: "SQ" },
-  hires: { title: "Hi-Res", detail: "最高 192kHz / 24bit", badge: "HR" },
-  jyeffect: { title: "高清环绕声", detail: "沉浸环绕效果", badge: "环" },
-  jymaster: { title: "超清母带", detail: "更高规格母带音质", badge: "母" },
-  sky: { title: "沉浸环绕声", detail: "空间环绕声场", badge: "空" }
+const qualityDisplayMeta: Record<DownloadQualityLevel, { title: string; detail: string; badge: string; compact: string }> = {
+  standard: { title: "标准音质", detail: "128kbps", badge: "标", compact: "标准" },
+  exhigh: { title: "极高音质", detail: "320kbps", badge: "HQ", compact: "极高" },
+  lossless: { title: "无损音质", detail: "FLAC / 44.1-48kHz / 16bit", badge: "SQ", compact: "无损" },
+  hires: { title: "Hi-Res", detail: "最高 192kHz / 24bit", badge: "HR", compact: "Hi-Res" },
+  jyeffect: { title: "高清环绕声", detail: "沉浸环绕效果", badge: "环", compact: "环绕" },
+  jymaster: { title: "超清母带", detail: "更高规格母带音质", badge: "母", compact: "母带" },
+  sky: { title: "沉浸环绕声", detail: "空间环绕声场", badge: "空", compact: "空间" }
 };
 
 function getQualityDisplayMeta(level: DownloadQualityLevel, fallbackLabel: string) {
-  return qualityDisplayMeta[level] ?? { title: fallbackLabel, detail: "", badge: fallbackLabel.slice(0, 2) };
+  return qualityDisplayMeta[level] ?? { title: fallbackLabel, detail: "", badge: fallbackLabel.slice(0, 2), compact: fallbackLabel };
+}
+
+function getQualityCompactLabel(level: DownloadQualityLevel, fallbackLabel: string) {
+  return getQualityDisplayMeta(level, fallbackLabel).compact || fallbackLabel;
+}
+
+function getQualityOptionDisplayLabel(
+  options: Array<{ level: DownloadQualityLevel; label: string }>,
+  level: DownloadQualityLevel,
+  fallbackLabel: string
+) {
+  const option = options.find((item) => item.level === level);
+  return getQualityCompactLabel(level, option?.label ?? fallbackLabel);
 }
 
 function renderQualityOptionContent(level: DownloadQualityLevel, label: string) {
@@ -1098,14 +1111,28 @@ function PlayerIcon({ name }: { name: PlayerIconName }) {
   );
 }
 
+function getBrowserImageUrl(url: string | undefined) {
+  const trimmed = url?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (/^http:\/\/p\d+\.music\.126\.net\//i.test(trimmed)) {
+    return trimmed.replace(/^http:\/\//i, "https://");
+  }
+
+  return trimmed;
+}
+
 function CoverArt({ song, className }: { song: Song | null; className: string }) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  const coverUrl = song?.coverUrl && song.coverUrl !== failedUrl ? song.coverUrl : null;
+  const coverUrl = getBrowserImageUrl(song?.coverUrl);
+  const visibleCoverUrl = coverUrl && coverUrl !== failedUrl ? coverUrl : null;
 
   return (
     <div className={className}>
-      {coverUrl ? (
-        <img src={coverUrl} alt={`${song?.title ?? "歌曲"} 封面`} loading="lazy" onError={() => setFailedUrl(coverUrl)} />
+      {visibleCoverUrl ? (
+        <img src={visibleCoverUrl} alt={`${song?.title ?? "歌曲"} 封面`} loading="lazy" onError={() => setFailedUrl(visibleCoverUrl)} />
       ) : (
         <MusicGlyph />
       )}
@@ -1414,6 +1441,11 @@ export default function App() {
     return song.availableQualities.find((quality) => quality.level === selectedLevel)?.label ?? "128K";
   }
 
+  function getSelectedDisplayLabel(song: Song) {
+    const selectedLevel = getSelectedLevel(song);
+    return getQualityCompactLabel(selectedLevel, getSelectedLabel(song));
+  }
+
   function getPlaybackLevel(song: Song, level = getSelectedLevel(song)): DownloadQualityLevel {
     return level;
   }
@@ -1421,8 +1453,9 @@ export default function App() {
   function getPlaybackLabel(song: Song) {
     const selectedLevel = getSelectedLevel(song);
     const playbackLevel = getPlaybackLevel(song, selectedLevel);
-    const selectedLabel = song.availableQualities.find((quality) => quality.level === selectedLevel)?.label ?? "128K";
-    const playbackLabel = song.availableQualities.find((quality) => quality.level === playbackLevel)?.label ?? selectedLabel;
+    const selectedLabel = getSelectedDisplayLabel(song);
+    const playbackRawLabel = song.availableQualities.find((quality) => quality.level === playbackLevel)?.label ?? getSelectedLabel(song);
+    const playbackLabel = getQualityCompactLabel(playbackLevel, playbackRawLabel);
 
     return selectedLevel === playbackLevel ? selectedLabel : `${playbackLabel} 播放`;
   }
@@ -5258,12 +5291,13 @@ export default function App() {
   }, [currentTrack?.id, settings.neteaseCookie]);
 
   useEffect(() => {
-    if (!currentTrack?.coverUrl) {
+    const coverUrl = getBrowserImageUrl(currentTrack?.coverUrl);
+    if (!coverUrl) {
       setPlayerTheme(defaultPlayerTheme);
       return;
     }
 
-    const themeCacheKey = currentTrack.coverUrl;
+    const themeCacheKey = coverUrl;
     const cachedTheme = playerThemeCacheRef.current[themeCacheKey];
     if (cachedTheme) {
       setPlayerTheme(cachedTheme);
@@ -5285,7 +5319,7 @@ export default function App() {
         playerThemeCacheRef.current[themeCacheKey] = nextTheme;
         setPlayerTheme(nextTheme);
       } catch {
-        const fallbackTheme = buildFallbackPlayerTheme(`${currentTrack.title}-${currentTrack.artist}-${currentTrack.coverUrl}`);
+        const fallbackTheme = buildFallbackPlayerTheme(`${currentTrack.title}-${currentTrack.artist}-${coverUrl}`);
         playerThemeCacheRef.current[themeCacheKey] = fallbackTheme;
         setPlayerTheme(fallbackTheme);
       }
@@ -5296,12 +5330,12 @@ export default function App() {
         return;
       }
 
-      const fallbackTheme = buildFallbackPlayerTheme(`${currentTrack.title}-${currentTrack.artist}-${currentTrack.coverUrl}`);
+      const fallbackTheme = buildFallbackPlayerTheme(`${currentTrack.title}-${currentTrack.artist}-${coverUrl}`);
       playerThemeCacheRef.current[themeCacheKey] = fallbackTheme;
       setPlayerTheme(fallbackTheme);
     };
 
-    coverImage.src = currentTrack.coverUrl;
+    coverImage.src = coverUrl;
 
     return () => {
       cancelled = true;
@@ -6111,6 +6145,7 @@ export default function App() {
   const bufferedRatio = playbackDuration > 0 ? Math.min(100, (Math.max(bufferedSeconds, playbackSeconds) / playbackDuration) * 100) : 0;
   const playbackRangeStyle = { "--range-fill": `${playbackRatio}%`, "--range-buffer": `${bufferedRatio}%` } as CSSProperties;
   const volumeRangeStyle = { "--range-fill": `${volume}%` } as CSSProperties;
+  const currentTrackCoverUrl = getBrowserImageUrl(currentTrack?.coverUrl);
   const playerThemeStyle = useMemo<PlayerThemeStyle>(
     () => ({
       "--player-theme-base": playerTheme.base,
@@ -6118,9 +6153,9 @@ export default function App() {
       "--player-theme-soft": playerTheme.soft,
       "--player-theme-glow": playerTheme.glow,
       "--player-theme-accent": playerTheme.accent,
-      "--player-cover-image": currentTrack?.coverUrl ? `url("${currentTrack.coverUrl}")` : "none"
+      "--player-cover-image": currentTrackCoverUrl ? `url("${currentTrackCoverUrl}")` : "none"
     }),
-    [currentTrack?.coverUrl, playerTheme]
+    [currentTrackCoverUrl, playerTheme]
   );
   const activeMeta = navText[navKey];
   const contentMeta =
@@ -6239,7 +6274,7 @@ export default function App() {
             ? "当前歌单没有读取到歌曲。"
             : "暂时没有读取到该歌手的热门歌曲。";
   const hasReadableLyrics = Boolean(currentTrack && !loadingLyrics && !lyricsError && lyrics.length > 0);
-  const shouldShowLyricsAtmosphere = Boolean(currentTrack?.coverUrl && (loadingLyrics || hasReadableLyrics));
+  const shouldShowLyricsAtmosphere = Boolean(currentTrackCoverUrl && (loadingLyrics || hasReadableLyrics));
   const activeSongComments = songComments?.songId === commentTrack?.id ? songComments : null;
   const commentTotalLabel = activeSongComments?.total ? (activeSongComments.total > 999 ? "999+" : String(activeSongComments.total)) : "";
   const commentContextLabel =
@@ -6535,7 +6570,7 @@ export default function App() {
             setOpenQualityMenuId(menuKey);
           }}
         >
-          <span>{getSelectedLabel(song)}</span>
+          <span>{getSelectedDisplayLabel(song)}</span>
           <span className={isOpen ? "quality-caret open" : "quality-caret"}>
             <ChevronIcon />
           </span>
@@ -8519,7 +8554,7 @@ export default function App() {
                       <span>试听音质</span>
                       <small>双击播放和底部播放器默认使用</small>
                     </div>
-                    <strong>{playbackQualityOptions.find((option) => option.level === settings.defaultPlaybackQuality)?.label ?? "128K"}</strong>
+                    <strong>{getQualityOptionDisplayLabel(playbackQualityOptions, settings.defaultPlaybackQuality, "标准")}</strong>
                   </div>
                   <div className="settings-quality-select">
                     <button
@@ -8531,7 +8566,7 @@ export default function App() {
                         toggleSettingsQualityMenu("playback", event.currentTarget, playbackQualityOptions.length);
                       }}
                     >
-                      <span>{playbackQualityOptions.find((option) => option.level === settings.defaultPlaybackQuality)?.label ?? "128K"}</span>
+                      <span>{getQualityOptionDisplayLabel(playbackQualityOptions, settings.defaultPlaybackQuality, "标准")}</span>
                       <span className={openSettingsQualityMenu === "playback" ? "quality-caret open" : "quality-caret"}>
                         <ChevronIcon />
                       </span>
@@ -8566,7 +8601,7 @@ export default function App() {
                       <span>下载音质</span>
                       <small>直连下载和服务器任务默认使用</small>
                     </div>
-                    <strong>{settingsQualityOptions.find((option) => option.level === settings.defaultDownloadQuality)?.label ?? "Hi-Res"}</strong>
+                    <strong>{getQualityOptionDisplayLabel(settingsQualityOptions, settings.defaultDownloadQuality, "Hi-Res")}</strong>
                   </div>
                   <div className="settings-quality-select">
                     <button
@@ -8578,7 +8613,7 @@ export default function App() {
                         toggleSettingsQualityMenu("download", event.currentTarget, settingsQualityOptions.length);
                       }}
                     >
-                      <span>{settingsQualityOptions.find((option) => option.level === settings.defaultDownloadQuality)?.label ?? "Hi-Res"}</span>
+                      <span>{getQualityOptionDisplayLabel(settingsQualityOptions, settings.defaultDownloadQuality, "Hi-Res")}</span>
                       <span className={openSettingsQualityMenu === "download" ? "quality-caret open" : "quality-caret"}>
                         <ChevronIcon />
                       </span>
@@ -8806,7 +8841,7 @@ export default function App() {
                 {shouldShowLyricsAtmosphere ? (
                   <div
                     className="lyrics-atmosphere"
-                    style={{ backgroundImage: `url("${currentTrack?.coverUrl}")` }}
+                    style={{ backgroundImage: `url("${currentTrackCoverUrl}")` }}
                     aria-hidden="true"
                   />
                 ) : null}
@@ -9869,7 +9904,7 @@ export default function App() {
       <section className={isPlayerExpanded ? "player-modal open" : "player-modal"} aria-hidden={!isPlayerExpanded}>
         <div
           className="player-modal-backdrop"
-          style={currentTrack?.coverUrl ? { backgroundImage: `url("${currentTrack.coverUrl}")` } : undefined}
+          style={currentTrackCoverUrl ? { backgroundImage: `url("${currentTrackCoverUrl}")` } : undefined}
           aria-hidden="true"
         />
         <div className="player-modal-shade" aria-hidden="true" />
