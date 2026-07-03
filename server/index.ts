@@ -755,7 +755,11 @@ app.get("/api/download/proxy", async (request, response) => {
 
     response.setHeader("Content-Type", contentType);
     response.setHeader("Content-Disposition", buildContentDisposition(directDownload.filename));
+    if (directDownload.quality) {
+      response.setHeader("X-TrackVault-Quality", directDownload.quality);
+    }
     response.setHeader("Access-Control-Allow-Origin", "*");
+    response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, Content-Length, Content-Range, X-TrackVault-Quality");
 
     const metadataTarget = !request.headers.range ? getAudioMetadataTarget({
       filename: directDownload.filename,

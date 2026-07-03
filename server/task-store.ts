@@ -58,6 +58,7 @@ export type DirectDownloadResolution = {
   url: string;
   filename: string;
   type?: string | null;
+  quality?: string | null;
   time?: number | null;
 };
 

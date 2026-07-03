@@ -103,6 +103,7 @@ export type DirectDownloadInfo = {
   url: string;
   filename: string;
   type?: string | null;
+  quality?: string | null;
   time?: number | null;
 };
 
@@ -631,7 +632,7 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
     } catch {
       throw new DirectDownloadBlockedError(`${providerLabel}下载流中断，浏览器无法稳定直连保存到本机。`);
     }
-    return;
+    return directDownload;
   }
 
   const reader = mediaResponse.body.getReader();
@@ -658,6 +659,7 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
   const blob = new Blob(chunks, { type: mediaResponse.headers.get("content-type") ?? "application/octet-stream" });
   saveBlob(await addMetadataToDownloadBlob(song, directDownload, mediaResponse, blob), directDownload.filename);
   onProgress?.(100);
+  return directDownload;
 }
 
 export async function startRawDirectSongDownload(song: Song, level: DownloadQualityLevel) {
@@ -682,7 +684,7 @@ export async function startRawDirectSongDownload(song: Song, level: DownloadQual
 export async function startServerSongDownload(
   song: Song,
   level: DownloadQualityLevel,
-  callbacks: { onStatus?: (status: string) => void; onProgress?: (info: ServerDownloadProgressInfo) => void; onReady?: (info: { filename: string; sizeBytes?: number }) => void } = {}
+  callbacks: { onStatus?: (status: string) => void; onProgress?: (info: ServerDownloadProgressInfo) => void; onReady?: (info: { filename: string; sizeBytes?: number; quality?: string }) => void } = {}
 ) {
   const response = await apiFetch(getServerDownloadUrl(song, level));
   if (!response.ok) {
@@ -692,18 +694,19 @@ export async function startServerSongDownload(
 
   const filename = getFilenameFromContentDisposition(response.headers.get("content-disposition")) || `${song.title}-${song.artist}.${level === "standard" ? "mp3" : "flac"}`;
   const contentLength = Number(response.headers.get("content-length") ?? "0");
+  const quality = response.headers.get("x-trackvault-quality") ?? undefined;
 
   callbacks.onStatus?.("服务器已返回文件，正在保存到本机。");
 
   if (!response.body || !contentLength) {
     const blob = await response.blob();
-    callbacks.onReady?.({ filename, sizeBytes: blob.size });
+    callbacks.onReady?.({ filename, sizeBytes: blob.size, quality });
     callbacks.onProgress?.({ progress: 100, receivedBytes: blob.size, totalBytes: blob.size });
     saveBlob(blob, filename);
     return;
   }
 
-  callbacks.onReady?.({ filename, sizeBytes: contentLength });
+  callbacks.onReady?.({ filename, sizeBytes: contentLength, quality });
 
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];

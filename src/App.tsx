@@ -3635,9 +3635,13 @@ export default function App() {
           setDownloadProgress((current) => current ? { ...current, detail: status, status: "downloading" } : current);
           patchBrowserDownloadTask(fallbackTaskId, { detail: status, status: "downloading" });
         },
-        onReady: ({ filename, sizeBytes }) => {
-          setDownloadProgress((current) => current ? { ...current, fileSizeBytes: sizeBytes, detail: "服务器已返回文件，正在保存到本机。" } : current);
-          patchBrowserDownloadTask(fallbackTaskId, { fileName: filename, fileSizeBytes: sizeBytes });
+        onReady: ({ filename, sizeBytes, quality }) => {
+          const resolvedQuality = quality || selectedLabel;
+          const resolvedDetail = quality && quality !== selectedLabel
+            ? `服务器已返回文件，实际下载音质为 ${quality}，正在保存到本机。`
+            : "服务器已返回文件，正在保存到本机。";
+          setDownloadProgress((current) => current ? { ...current, fileSizeBytes: sizeBytes, detail: resolvedDetail } : current);
+          patchBrowserDownloadTask(fallbackTaskId, { fileName: filename, fileSizeBytes: sizeBytes, quality: resolvedQuality, detail: resolvedDetail });
         },
         onProgress: ({ progress, receivedBytes, totalBytes, speedBytesPerSecond }) => {
           const taskProgressPatch: Partial<BrowserDownloadTask> = {
@@ -3736,7 +3740,7 @@ export default function App() {
         updatedAt: createdAt
       });
       setMessage(`方案A直连下载中：${song.title} · ${selectedLabel}`);
-      await startDirectSongDownload(song, level, (progress) => {
+      const directDownload = await startDirectSongDownload(song, level, (progress) => {
         patchBrowserDownloadTask(taskId, {
           progress,
           status: progress >= 100 ? "done" : "downloading",
@@ -3744,12 +3748,17 @@ export default function App() {
         });
         setMessage(`方案A直连下载中：${song.title} · ${progress}%`);
       });
+      const resolvedQuality = directDownload.quality || selectedLabel;
+      const doneDetail = directDownload.quality && directDownload.quality !== selectedLabel
+        ? `已保存到本机下载，并写入可用元数据。实际下载音质：${directDownload.quality}。`
+        : "已保存到本机下载，并写入可用元数据。";
       patchBrowserDownloadTask(taskId, {
         progress: 100,
         status: "done",
-        detail: "已保存到本机下载，并写入可用元数据。"
+        quality: resolvedQuality,
+        detail: doneDetail
       });
-      setMessage(`方案A已保存到本机下载：${song.title}`);
+      setMessage(directDownload.quality && directDownload.quality !== selectedLabel ? `方案A已保存：${song.title} · 实际 ${directDownload.quality}` : `方案A已保存到本机下载：${song.title}`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "启动下载失败";
       const displayMessage = isDirectDownloadBlockedError(error)
@@ -3804,9 +3813,10 @@ export default function App() {
         progress: 100,
         status: "done",
         detail: "已把 CDN 裸直链交给浏览器处理，不经过服务器中转，也不会写入封面和歌词标签；文件名可能由 CDN 决定。",
-        fileName: rawDirectDownload.filename
+        fileName: rawDirectDownload.filename,
+        quality: rawDirectDownload.quality || selectedLabel
       });
-      setMessage(`方案B已尝试裸直链下载：${song.title}`);
+      setMessage(rawDirectDownload.quality && rawDirectDownload.quality !== selectedLabel ? `方案B已提交裸直链：${song.title} · 实际 ${rawDirectDownload.quality}` : `方案B已尝试裸直链下载：${song.title}`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "裸直链下载失败";
       const displayMessage = `方案B裸直链失败：${errorMessage}。可以重新点击下载，选择方案C服务器备用。`;

@@ -999,7 +999,27 @@ export async function resolveQqSongStream(song: Song, level: DownloadQualityLeve
 }
 
 export async function resolveQqDirectDownload(song: Song, level: DownloadQualityLevel) {
-  const resolved = await resolveQqSongUrl(song, level);
+  const fallbackTypes = getQqPlaybackFallbackTypes(level);
+  let resolved: QqResolvedSong | null = null;
+  let lastError: Error | null = null;
+
+  for (const qqType of fallbackTypes) {
+    try {
+      resolved = await resolveQqSongUrlByType(song, qqType);
+      break;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("下载链接获取失败");
+    }
+  }
+
+  if (!resolved) {
+    const requestedLabel = getQqRequestedLabel(level);
+    const triedText = fallbackTypes.map(getQqAudioTypeLabel).join(" / ");
+    const suffix = lastError ? `最后错误：${lastError.message}` : "请检查 QQ Cookie、绿钻权限或该版本版权状态。";
+    throw new Error(`QQ 音乐未返回 ${requestedLabel} 下载链接（已尝试 ${triedText}）。${suffix}`);
+  }
+
+  const meta = getQqResolvedMeta(resolved.qqType);
   const safeTitle = [song.title, song.artist]
     .map((item) => item.trim())
     .filter(Boolean)
@@ -1012,6 +1032,7 @@ export async function resolveQqDirectDownload(song: Song, level: DownloadQuality
     url: resolved.url,
     filename: `${safeTitle}.${resolved.extension}`,
     type: resolved.extension,
+    quality: meta.label,
     time: null
   };
 }
