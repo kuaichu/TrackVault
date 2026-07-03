@@ -412,6 +412,80 @@ function serializeQqCookie(cookieObj: Record<string, string>) {
     .join("; ");
 }
 
+async function fetchQqJson(path: string, query: Record<string, string | number>, cookieObj: Record<string, string>): Promise<QqCollectionResult> {
+  const url = new URL(path);
+  Object.entries(query).forEach(([key, value]) => {
+    url.searchParams.set(key, String(value));
+  });
+
+  const response = await fetch(url, {
+    headers: {
+      Cookie: serializeQqCookie(cookieObj),
+      Referer: "https://y.qq.com/",
+      "User-Agent": "Mozilla/5.0"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`QQ 音乐接口状态异常：${response.status}`);
+  }
+
+  const text = await response.text();
+  const jsonText = text.replace(/^[\w$]+\(/, "").replace(/\);?$/, "");
+  const data = JSON.parse(jsonText) as QqCollectionResult;
+  const code = data.code ?? data.result;
+  if (code === 1000 || code === 301) {
+    throw new Error("QQ 音乐登录态失效或权限不足");
+  }
+
+  return data;
+}
+
+function getQqCollectedAlbums(cookieObj: Record<string, string>) {
+  return fetchQqJson("https://c.y.qq.com/fav/fcgi-bin/fcg_get_profile_order_asset.fcg", {
+    ct: 20,
+    cid: 205360956,
+    userid: cookieObj.uin,
+    reqtype: 2,
+    sin: 0,
+    ein: 19
+  }, cookieObj);
+}
+
+function getQqFollowSingers(cookieObj: Record<string, string>) {
+  return fetchQqJson("https://c.y.qq.com/rsc/fcgi-bin/fcg_order_singer_getlist.fcg", {
+    utf8: 1,
+    page: 1,
+    perpage: 20,
+    uin: cookieObj.uin,
+    g_tk: 5381,
+    format: "json"
+  }, cookieObj);
+}
+
+function getQqFollowUsers(cookieObj: Record<string, string>) {
+  return fetchQqJson("https://c.y.qq.com/rsc/fcgi-bin/friend_follow_or_listen_list.fcg", {
+    utf8: 1,
+    start: 0,
+    num: 20,
+    uin: cookieObj.uin,
+    format: "json",
+    g_tk: 5381
+  }, cookieObj);
+}
+
+function getQqFans(cookieObj: Record<string, string>) {
+  return fetchQqJson("https://c.y.qq.com/rsc/fcgi-bin/friend_follow_or_listen_list.fcg", {
+    utf8: 1,
+    start: 0,
+    num: 20,
+    uin: cookieObj.uin,
+    format: "json",
+    g_tk: 5381,
+    is_listen: 1
+  }, cookieObj);
+}
+
 function getQqCookieIdentity(cookie: string) {
   const cookieObj = parseQqCookie(cookie);
   if (!cookieObj.uin) {
@@ -968,10 +1042,10 @@ export async function getQqMusicUserProfile(): Promise<QqMusicUserProfile> {
       qqMusic.api<QqProfileDetail>("user/detail", { id: cookieObj.uin }),
       qqMusic.api<QqUserSonglistsResult>("user/songlist", { id: cookieObj.uin }),
       qqMusic.api<QqCollectedSonglistsResult>("user/collect/songlist", { id: cookieObj.uin, pageNo: 1, pageSize: 50 }),
-      qqMusic.api<QqCollectionResult>("user/collect/album", { id: cookieObj.uin, pageNo: 1, pageSize: 20 }),
-      qqMusic.api<QqCollectionResult>("user/follow/singers", { id: cookieObj.uin, pageNo: 1, pageSize: 20 }),
-      qqMusic.api<QqCollectionResult>("user/follow/users", { id: cookieObj.uin, pageNo: 1, pageSize: 20 }),
-      qqMusic.api<QqCollectionResult>("user/fans", { id: cookieObj.uin, pageNo: 1, pageSize: 20 })
+      getQqCollectedAlbums(cookieObj),
+      getQqFollowSingers(cookieObj),
+      getQqFollowUsers(cookieObj),
+      getQqFans(cookieObj)
     ]);
 
   const addIssue = (section: string, result: PromiseSettledResult<unknown>) => {
