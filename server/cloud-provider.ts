@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { getSettings } from "./settings-store.js";
 import type { DownloadQualityOption, Song } from "./types.js";
-import { getNeteaseSongAvailability, type NeteasePrivilegeLike } from "./song-availability.js";
+import type { NeteasePrivilegeLike } from "./song-availability.js";
 
 const require = createRequire(import.meta.url);
 const { user_cloud } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
@@ -139,7 +139,6 @@ function mapCloudSong(item: CloudSongItem): Song | null {
     duration: formatDuration(song.dt),
     quality: getQualityLabel(song),
     availableQualities: getAvailableQualities(song),
-    availability: getNeteaseSongAvailability(song),
     source: "netease-cloud"
   };
 }
