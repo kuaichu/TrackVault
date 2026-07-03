@@ -99,7 +99,7 @@ export function getStreamUrl(song: Song | string, level: DownloadQualityLevel, e
   return `/api/stream?${params.toString()}`;
 }
 
-type DirectDownloadInfo = {
+export type DirectDownloadInfo = {
   url: string;
   filename: string;
   type?: string | null;
@@ -478,6 +478,25 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
   const blob = new Blob(chunks, { type: mediaResponse.headers.get("content-type") ?? "application/octet-stream" });
   saveBlob(await addMetadataToDownloadBlob(song, directDownload, mediaResponse, blob), directDownload.filename);
   onProgress?.(100);
+}
+
+export async function startRawDirectSongDownload(song: Song, level: DownloadQualityLevel) {
+  const directResponse = await apiFetch(getDirectDownloadUrl(song, level));
+  if (!directResponse.ok) {
+    const data = (await directResponse.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取裸直链下载地址失败");
+  }
+
+  const directDownload = (await directResponse.json()) as DirectDownloadInfo;
+  const link = document.createElement("a");
+  link.href = directDownload.url;
+  link.download = directDownload.filename;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  return directDownload;
 }
 
 export async function startServerSongDownload(

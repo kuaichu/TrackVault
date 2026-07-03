@@ -4559,6 +4559,12 @@ button.quick-chip:active,
   color: #ffd7a4;
 }
 
+.download-source-pill.raw {
+  border-color: rgba(100, 214, 148, 0.18);
+  background: rgba(100, 214, 148, 0.08);
+  color: #a7f0c0;
+}
+
 .download-source-pill.server {
   border-color: rgba(130, 198, 255, 0.16);
   background: rgba(130, 198, 255, 0.07);

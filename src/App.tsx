@@ -60,6 +60,7 @@ import {
   setUserFollowed,
   startNeteaseQrLogin,
   startDirectSongDownload,
+  startRawDirectSongDownload,
   startServerSongDownload,
   startNeteaseImportAuditJob,
   startPlaylistCompareJob,
@@ -219,6 +220,7 @@ type DownloadProgressDialog = {
 };
 type BrowserDownloadTask = {
   id: string;
+  mode: "raw" | "server";
   songId: string;
   title: string;
   artist: string;
@@ -646,6 +648,7 @@ function normalizeBrowserDownloadTask(rawTask: unknown): BrowserDownloadTask | n
 
   return {
     id: String(task.id),
+    mode: task.mode === "raw" ? "raw" : "server",
     songId: String(task.songId),
     title: String(task.title),
     artist: String(task.artist),
@@ -3477,6 +3480,99 @@ export default function App() {
     );
   }
 
+  async function runServerFallbackDownload(song: Song, level: DownloadQualityLevel, selectedLabel: string) {
+    let fallbackTaskId = "";
+
+    try {
+      fallbackTaskId = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const fallbackDetail = "服务器正在拉取音源，并写入封面、歌手、专辑和歌词信息。";
+      const fallbackCreatedAt = new Date().toISOString();
+      setMessage(`正在通过服务器备用下载：${song.title} · ${selectedLabel}`);
+      setDownloadProgressMinimized(false);
+      rememberBrowserDownloadTask({
+        id: fallbackTaskId,
+        mode: "server",
+        songId: song.id,
+        title: song.title,
+        artist: song.artist,
+        album: song.album,
+        coverUrl: song.coverUrl,
+        quality: selectedLabel,
+        requestedLevel: level,
+        progress: 0,
+        status: "preparing",
+        detail: fallbackDetail,
+        createdAt: fallbackCreatedAt,
+        updatedAt: fallbackCreatedAt
+      });
+      setDownloadProgress({
+        taskId: fallbackTaskId,
+        song,
+        title: `备用下载：${song.title}`,
+        detail: fallbackDetail,
+        progress: 0,
+        indeterminate: true,
+        status: "preparing"
+      });
+      await startServerSongDownload(song, level, {
+        onStatus: (status) => {
+          setDownloadProgress((current) => current ? { ...current, detail: status, status: "downloading" } : current);
+          patchBrowserDownloadTask(fallbackTaskId, { detail: status, status: "downloading" });
+        },
+        onReady: ({ filename, sizeBytes }) => {
+          patchBrowserDownloadTask(fallbackTaskId, { fileName: filename, fileSizeBytes: sizeBytes });
+        },
+        onProgress: (progress) => {
+          setDownloadProgress((current) => current ? {
+            ...current,
+            progress,
+            indeterminate: false,
+            status: progress >= 100 ? "done" : "downloading",
+            detail: progress >= 100 ? "文件已准备完成，浏览器正在保存到本机。" : "正在传输备用下载文件。"
+          } : current);
+          patchBrowserDownloadTask(fallbackTaskId, {
+            progress,
+            status: progress >= 100 ? "done" : "downloading",
+            detail: progress >= 100 ? "文件已准备完成，浏览器正在保存到本机。" : "正在传输备用下载文件。"
+          });
+        }
+      });
+      setDownloadProgress((current) => current ? {
+        ...current,
+        progress: 100,
+        indeterminate: false,
+        status: "done",
+        detail: "已开始保存到本机，可以在浏览器下载列表中查看。"
+      } : current);
+      patchBrowserDownloadTask(fallbackTaskId, {
+        progress: 100,
+        status: "done",
+        detail: "已开始保存到本机，可以在浏览器下载列表中查看。"
+      });
+      setMessage(`已开始保存备用下载：${song.title}`);
+    } catch (fallbackError) {
+      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : "备用下载失败";
+      setDownloadProgress((current) => current ? {
+        ...current,
+        indeterminate: false,
+        status: "failed",
+        detail: fallbackMessage
+      } : {
+        taskId: fallbackTaskId || `browser-failed-${Date.now()}`,
+        song,
+        title: `备用下载：${song.title}`,
+        detail: fallbackMessage,
+        progress: 0,
+        indeterminate: false,
+        status: "failed"
+      });
+      if (fallbackTaskId) {
+        patchBrowserDownloadTask(fallbackTaskId, { status: "failed", detail: fallbackMessage });
+      }
+      setMessage(fallbackMessage);
+    }
+  }
+
   async function runDirectDownload(song: Song, level: DownloadQualityLevel, options: { showIssueDialog?: boolean } = {}) {
     if (directDownloadingSongId || batchDownloading) {
       return;
@@ -3497,99 +3593,42 @@ export default function App() {
       const errorMessage = error instanceof Error ? error.message : "启动下载失败";
 
       if (isDirectDownloadBlockedError(error)) {
-        const useServerFallback = window.confirm(`${errorMessage}\n\n可以改用备用下载，但会消耗服务器带宽。要现在用备用下载吗？`);
-
-        if (useServerFallback) {
-          let fallbackTaskId = "";
-          try {
-            fallbackTaskId = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            const fallbackDetail = "服务器正在拉取音源，并写入封面、歌手、专辑和歌词信息。";
-            const fallbackCreatedAt = new Date().toISOString();
-            setMessage(`正在通过服务器备用下载：${song.title} · ${selectedLabel}`);
-            setDownloadProgressMinimized(false);
-            rememberBrowserDownloadTask({
-              id: fallbackTaskId,
-              songId: song.id,
-              title: song.title,
-              artist: song.artist,
-              album: song.album,
-              coverUrl: song.coverUrl,
-              quality: selectedLabel,
-              requestedLevel: level,
-              progress: 0,
-              status: "preparing",
-              detail: fallbackDetail,
-              createdAt: fallbackCreatedAt,
-              updatedAt: fallbackCreatedAt
-            });
-            setDownloadProgress({
-              taskId: fallbackTaskId,
-              song,
-              title: `备用下载：${song.title}`,
-              detail: fallbackDetail,
-              progress: 0,
-              indeterminate: true,
-              status: "preparing"
-            });
-            await startServerSongDownload(song, level, {
-              onStatus: (status) => {
-                setDownloadProgress((current) => current ? { ...current, detail: status, status: "downloading" } : current);
-                patchBrowserDownloadTask(fallbackTaskId, { detail: status, status: "downloading" });
-              },
-              onReady: ({ filename, sizeBytes }) => {
-                patchBrowserDownloadTask(fallbackTaskId, { fileName: filename, fileSizeBytes: sizeBytes });
-              },
-              onProgress: (progress) => {
-                setDownloadProgress((current) => current ? {
-                  ...current,
-                  progress,
-                  indeterminate: false,
-                  status: progress >= 100 ? "done" : "downloading",
-                  detail: progress >= 100 ? "文件已准备完成，浏览器正在保存到本机。" : "正在传输备用下载文件。"
-                } : current);
-                patchBrowserDownloadTask(fallbackTaskId, {
-                  progress,
-                  status: progress >= 100 ? "done" : "downloading",
-                  detail: progress >= 100 ? "文件已准备完成，浏览器正在保存到本机。" : "正在传输备用下载文件。"
-                });
-              }
-            });
-            setDownloadProgress((current) => current ? {
-              ...current,
-              progress: 100,
-              indeterminate: false,
-              status: "done",
-              detail: "已开始保存到本机，可以在浏览器下载列表中查看。"
-            } : current);
-            patchBrowserDownloadTask(fallbackTaskId, {
-              progress: 100,
-              status: "done",
-              detail: "已开始保存到本机，可以在浏览器下载列表中查看。"
-            });
-            setMessage(`已开始保存备用下载：${song.title}`);
-          } catch (fallbackError) {
-            const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : "备用下载失败";
-            setDownloadProgress((current) => current ? {
-              ...current,
-              indeterminate: false,
-              status: "failed",
-              detail: fallbackMessage
-            } : {
-              taskId: fallbackTaskId || `browser-failed-${Date.now()}`,
-              song,
-              title: `备用下载：${song.title}`,
-              detail: fallbackMessage,
-              progress: 0,
-              indeterminate: false,
-              status: "failed"
-            });
-            if (fallbackTaskId) {
-              patchBrowserDownloadTask(fallbackTaskId, { status: "failed", detail: fallbackMessage });
-            }
-            setMessage(fallbackMessage);
+        try {
+          setMessage(`直连读流被拦截，正在尝试裸直链下载：${song.title}`);
+          const rawDirectDownload = await startRawDirectSongDownload(song, level);
+          const rawTaskTime = new Date().toISOString();
+          rememberBrowserDownloadTask({
+            id: `raw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            mode: "raw",
+            songId: song.id,
+            title: song.title,
+            artist: song.artist,
+            album: song.album,
+            coverUrl: song.coverUrl,
+            quality: selectedLabel,
+            requestedLevel: level,
+            progress: 100,
+            status: "done",
+            detail: "已把 CDN 裸直链交给浏览器处理，不经过服务器中转，也不会写入封面和歌词标签。",
+            fileName: rawDirectDownload.filename,
+            createdAt: rawTaskTime,
+            updatedAt: rawTaskTime
+          });
+          setMessage(`已尝试裸直链下载：${song.title}。如果浏览器没有开始保存，再使用服务器备用下载。`);
+          const useServerAfterRaw = window.confirm("已尝试裸直链下载。\n\n如果浏览器已经开始下载，点取消即可；如果没有任何反应，是否现在改用服务器备用下载？");
+          if (useServerAfterRaw) {
+            await runServerFallbackDownload(song, level, selectedLabel);
           }
-        } else {
-          setMessage("直连下载被浏览器拦截，未使用服务器备用下载。");
+          return;
+        } catch (rawDirectError) {
+          const rawDirectMessage = rawDirectError instanceof Error ? rawDirectError.message : "裸直链下载失败";
+          const useServerFallback = window.confirm(`${errorMessage}\n\n裸直链也没有启动：${rawDirectMessage}\n\n可以改用备用下载，但会消耗服务器带宽。要现在用备用下载吗？`);
+
+          if (useServerFallback) {
+            await runServerFallbackDownload(song, level, selectedLabel);
+          } else {
+            setMessage("直连和裸直链下载都未启动，未使用服务器备用下载。");
+          }
         }
       } else {
         if (showIssueDialog) {
@@ -7911,7 +7950,7 @@ export default function App() {
                           <div className="download-task-subline">
                             <span>{task.artist}</span>
                             <span className="download-quality-pill">{task.quality}</span>
-                            <span className="download-source-pill browser">本机备用</span>
+                            <span className={`download-source-pill ${task.mode}`}>{task.mode === "raw" ? "裸直链" : "本机备用"}</span>
                           </div>
                         </div>
                         <div className="download-task-progress-block">
