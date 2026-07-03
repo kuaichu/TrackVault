@@ -15,6 +15,8 @@ import type {
   NeteaseCookieCheckResult,
   QqMusicAccountStatus,
   QqMusicCookieCheckResult,
+  QqMusicQrCheckResult,
+  QqMusicQrStartResult,
   QqMusicUserProfile,
   PersonalRadioKind,
   NeteaseQrCheckResult,
@@ -1293,6 +1295,30 @@ export async function getQqMusicUserProfile(): Promise<QqMusicUserProfile> {
 
   const data = (await response.json()) as { profile: QqMusicUserProfile };
   return data.profile;
+}
+
+export async function startQqMusicQrLogin(): Promise<QqMusicQrStartResult> {
+  const response = await apiFetch("/api/account/qqmusic/qr/start", {
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "QQ 音乐二维码生成失败");
+  }
+
+  return (await response.json()) as QqMusicQrStartResult;
+}
+
+export async function checkQqMusicQrLogin(key: string): Promise<QqMusicQrCheckResult> {
+  const response = await apiFetch(`/api/account/qqmusic/qr/check?key=${encodeURIComponent(key)}`);
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "QQ 音乐扫码状态检查失败");
+  }
+
+  return (await response.json()) as QqMusicQrCheckResult;
 }
 
 export async function loginAccount(payload: { accountName: string; vipEnabled: boolean; note: string }): Promise<AuthSession> {

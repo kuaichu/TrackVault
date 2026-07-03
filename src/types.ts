@@ -394,6 +394,18 @@ export type QqMusicAccountStatus = {
   message: string;
 };
 
+export type QqMusicQrStartResult = {
+  key: string;
+  qrImage: string;
+};
+
+export type QqMusicQrCheckResult = {
+  code: number;
+  message: string;
+  cookie?: string;
+  account?: QqMusicAccountStatus;
+};
+
 export type QqMusicProfileAlbum = {
   id: string;
   name: string;

@@ -4,6 +4,7 @@ import {
   addSongToPlaylist,
   checkNeteaseCookie,
   checkQqMusicCookie,
+  checkQqMusicQrLogin,
   getAdminConfig as getAdminConfigRemote,
   sendNeteaseCaptcha,
   downloadTaskFile,
@@ -60,6 +61,7 @@ import {
   setSongCommentLiked,
   setUserFollowed,
   startNeteaseQrLogin,
+  startQqMusicQrLogin,
   startDirectSongDownload,
   startRawDirectSongDownload,
   startServerSongDownload,
@@ -270,6 +272,7 @@ type FloatingMenuStyle = Pick<CSSProperties, "top" | "left" | "width" | "maxHeig
 type SongContextMenuState = { song: Song; x: number; y: number };
 type UserProfileTarget = { id: string; fallbackName?: string; fallbackAvatarUrl?: string };
 type NeteaseLoginMode = "qr" | "cellphone" | "cookie";
+type QqLoginMode = "qr" | "cookie";
 type DiscoverFeedKind = "recommend" | "daily" | PersonalRadioKind;
 type ViewSnapshot = {
   results: Song[];
@@ -1343,6 +1346,11 @@ export default function App() {
   const [importingCookie, setImportingCookie] = useState(false);
   const [copyingCookieGuide, setCopyingCookieGuide] = useState(false);
   const [qqLoginOpen, setQqLoginOpen] = useState(false);
+  const [qqLoginMode, setQqLoginMode] = useState<QqLoginMode>("qr");
+  const [startingQqQrLogin, setStartingQqQrLogin] = useState(false);
+  const [qqQrLoginKey, setQqQrLoginKey] = useState("");
+  const [qqQrLoginImage, setQqQrLoginImage] = useState("");
+  const [qqQrLoginExpiresIn, setQqQrLoginExpiresIn] = useState(0);
   const [qqCookieInput, setQqCookieInput] = useState("");
   const [checkingQqCookie, setCheckingQqCookie] = useState(false);
   const [copyingQqCookieGuide, setCopyingQqCookieGuide] = useState(false);
@@ -4409,15 +4417,57 @@ export default function App() {
 
   function openQqCookieLogin() {
     setAccountMenuOpen(false);
+    setQqLoginMode("qr");
     setQqCookieInput(settings.qqMusicCookie ?? "");
-    setQqLoginMessage(QQ_COOKIE_LOGIN_DEFAULT_MESSAGE);
+    setQqLoginMessage("正在生成 QQ 音乐登录二维码...");
     setQqLoginOpen(true);
+    void startQqQrLoginFlow();
   }
 
   function closeQqLogin() {
     setQqLoginOpen(false);
+    setQqLoginMode("qr");
+    setQqQrLoginKey("");
+    setQqQrLoginImage("");
+    setQqQrLoginExpiresIn(0);
     setQqCookieInput("");
     setQqLoginMessage(QQ_COOKIE_LOGIN_DEFAULT_MESSAGE);
+  }
+
+  async function startQqQrLoginFlow() {
+    try {
+      setStartingQqQrLogin(true);
+      setQqLoginOpen(true);
+      setQqLoginMode("qr");
+      setQqQrLoginKey("");
+      setQqQrLoginImage("");
+      setQqQrLoginExpiresIn(0);
+      setQqLoginMessage("正在生成 QQ 音乐登录二维码...");
+      const data = await startQqMusicQrLogin();
+      setQqQrLoginKey(data.key);
+      setQqQrLoginImage(data.qrImage);
+      setQqQrLoginExpiresIn(300);
+      setQqLoginMessage("打开 QQ 手机版扫码，并在手机上确认登录。");
+    } catch (error) {
+      setQqLoginMessage(error instanceof Error ? error.message : "QQ 音乐二维码生成失败，请使用 Cookie 导入。");
+    } finally {
+      setStartingQqQrLogin(false);
+    }
+  }
+
+  function handleSwitchQqLoginMode(mode: QqLoginMode) {
+    setQqLoginMode(mode);
+    setQqLoginMessage(
+      mode === "qr"
+        ? qqQrLoginKey && qqQrLoginImage
+          ? "打开 QQ 手机版扫码，并在手机上确认登录。"
+          : "点击重新生成 QQ 音乐登录二维码。"
+        : QQ_COOKIE_LOGIN_DEFAULT_MESSAGE
+    );
+
+    if (mode === "qr" && !qqQrLoginKey && !startingQqQrLogin) {
+      void startQqQrLoginFlow();
+    }
   }
 
   async function importQqCookie(cookieInput: string) {
@@ -5648,6 +5698,82 @@ export default function App() {
 
     return () => window.clearInterval(timer);
   }, [qrLoginOpen, qrLoginKey, qrLoginExpiresIn, neteaseLoginMode]);
+
+  useEffect(() => {
+    if (!qqLoginOpen || qqLoginMode !== "qr" || !qqQrLoginKey) {
+      return;
+    }
+
+    let cancelled = false;
+    let checking = false;
+
+    const checkLogin = async () => {
+      if (checking || cancelled) {
+        return;
+      }
+
+      checking = true;
+      try {
+        const result = await checkQqMusicQrLogin(qqQrLoginKey);
+        if (cancelled) {
+          return;
+        }
+
+        setQqLoginMessage(result.message);
+
+        if (result.code === 0) {
+          await refreshSettings();
+          await refreshQqMusicAccountStatus(result.cookie);
+          setMessage(result.message || "QQ 音乐扫码登录成功。");
+          window.setTimeout(() => {
+            if (!cancelled) {
+              closeQqLogin();
+            }
+          }, 650);
+          return;
+        }
+
+        if (result.code === 65 || result.code === 23013) {
+          setQqQrLoginKey("");
+          setQqQrLoginExpiresIn(0);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setQqLoginMessage(error instanceof Error ? error.message : "QQ 音乐扫码状态检查失败，请使用 Cookie 导入。");
+        }
+      } finally {
+        checking = false;
+      }
+    };
+
+    void checkLogin();
+    const timer = window.setInterval(() => void checkLogin(), 2200);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [qqLoginOpen, qqLoginMode, qqQrLoginKey]);
+
+  useEffect(() => {
+    if (!qqLoginOpen || qqLoginMode !== "qr" || !qqQrLoginKey || qqQrLoginExpiresIn <= 0) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setQqQrLoginExpiresIn((current) => {
+        const nextValue = Math.max(0, current - 1);
+        if (nextValue === 0) {
+          setQqLoginMessage("QQ 音乐二维码已过期，请重新生成。");
+          setQqQrLoginKey("");
+        }
+
+        return nextValue;
+      });
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [qqLoginOpen, qqLoginMode, qqQrLoginKey, qqQrLoginExpiresIn]);
 
   useEffect(() => {
     if (!currentTrack) {
@@ -9971,52 +10097,81 @@ export default function App() {
       ) : null}
 
       {qqLoginOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="QQ 音乐 Cookie 导入" onClick={closeQqLogin}>
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="QQ 音乐登录" onClick={closeQqLogin}>
           <section className="qr-login-card qq-login-card" onClick={(event) => event.stopPropagation()}>
             <header>
               <div>
                 <p className="eyebrow">QQ Music</p>
                 <h2>QQ 音乐接入</h2>
               </div>
-              <button type="button" className="modal-close" onClick={closeQqLogin} aria-label="关闭 QQ 音乐 Cookie 导入">
+              <button type="button" className="modal-close" onClick={closeQqLogin} aria-label="关闭 QQ 音乐登录">
                 ×
               </button>
             </header>
 
-            <form className="cellphone-login-form" onSubmit={handleQqCookieSubmit}>
-              <div className="cookie-login-tools qq-cookie-tools">
-                <a className="secondary-button" href="https://y.qq.com/" target="_blank" rel="noreferrer">
-                  打开网页
-                </a>
-                <button type="button" className="secondary-button" onClick={() => void handleCopyQqCookieGuide()}>
-                  {copyingQqCookieGuide ? "已复制" : "复制指令"}
+            <div className="qr-mode-switch qq-mode-switch" role="tablist" aria-label="QQ 音乐登录方式">
+              <button type="button" className={qqLoginMode === "qr" ? "qr-mode-button active" : "qr-mode-button"} onClick={() => handleSwitchQqLoginMode("qr")}>扫码登录</button>
+              <button type="button" className={qqLoginMode === "cookie" ? "qr-mode-button active" : "qr-mode-button"} onClick={() => handleSwitchQqLoginMode("cookie")}>Cookie 导入</button>
+            </div>
+
+            {qqLoginMode === "qr" ? (
+              <>
+                <div className="qr-box qq-qr-box">
+                  {qqQrLoginImage ? (
+                    <img src={qqQrLoginImage} alt="QQ 音乐扫码登录二维码" />
+                  ) : (
+                    <div className="qr-placeholder">{startingQqQrLogin ? "生成中..." : "二维码暂不可用"}</div>
+                  )}
+                </div>
+
+                <div className="qr-expiry">
+                  <span>有效期</span>
+                  <strong>{formatPlaybackTime(qqQrLoginExpiresIn)}</strong>
+                </div>
+                <p className="cookie-login-warning">QQ 扫码属于实验功能。如果提示接口拒绝或风控，切换到 Cookie 导入即可继续使用。</p>
+              </>
+            ) : (
+              <form className="cellphone-login-form" onSubmit={handleQqCookieSubmit}>
+                <div className="cookie-login-tools qq-cookie-tools">
+                  <a className="secondary-button" href="https://y.qq.com/" target="_blank" rel="noreferrer">
+                    打开网页
+                  </a>
+                  <button type="button" className="secondary-button" onClick={() => void handleCopyQqCookieGuide()}>
+                    {copyingQqCookieGuide ? "已复制" : "复制指令"}
+                  </button>
+                  <button type="button" className="secondary-button" disabled={checkingQqCookie} onClick={() => void handlePasteAndCheckQqCookie()}>
+                    粘贴检测
+                  </button>
+                </div>
+                <p className="cookie-login-guide">{QQ_COOKIE_LOGIN_GUIDE}</p>
+                <p className="cookie-login-warning">由于浏览器跨域限制，TrackVault 不能直接读取 y.qq.com 登录态。复制指令后在 QQ 音乐网页控制台运行，回来点“粘贴检测”即可。</p>
+                <label>
+                  <span>QQ 音乐 Cookie</span>
+                  <textarea
+                    className="cookie-login-input"
+                    value={qqCookieInput}
+                    onChange={(event) => setQqCookieInput(event.target.value)}
+                    placeholder="uin=...; qm_keyst=... 或 qqmusic_key=..."
+                    spellCheck={false}
+                  />
+                </label>
+                <button type="submit" className="primary-button wide" disabled={checkingQqCookie}>
+                  {checkingQqCookie ? "检测中" : "检测并导入"}
                 </button>
-                <button type="button" className="secondary-button" disabled={checkingQqCookie} onClick={() => void handlePasteAndCheckQqCookie()}>
-                  粘贴检测
-                </button>
-              </div>
-              <p className="cookie-login-guide">{QQ_COOKIE_LOGIN_GUIDE}</p>
-              <p className="cookie-login-warning">由于浏览器跨域限制，TrackVault 不能直接读取 y.qq.com 登录态。复制指令后在 QQ 音乐网页控制台运行，回来点“粘贴检测”即可。</p>
-              <label>
-                <span>QQ 音乐 Cookie</span>
-                <textarea
-                  className="cookie-login-input"
-                  value={qqCookieInput}
-                  onChange={(event) => setQqCookieInput(event.target.value)}
-                  placeholder="uin=...; qm_keyst=... 或 qqmusic_key=..."
-                  spellCheck={false}
-                />
-              </label>
-              <button type="submit" className="primary-button wide" disabled={checkingQqCookie}>
-                {checkingQqCookie ? "检测中" : "检测并导入"}
-              </button>
-            </form>
+              </form>
+            )}
 
             <p className="qr-message">{qqLoginMessage}</p>
             <div className="qr-actions">
-              <button type="button" className="secondary-button" onClick={() => setQqCookieInput("")}>
-                清空
-              </button>
+              {qqLoginMode === "qr" ? (
+                <button type="button" className="secondary-button" disabled={startingQqQrLogin} onClick={() => void startQqQrLoginFlow()}>
+                  重新生成
+                </button>
+              ) : (
+                <button type="button" className="secondary-button" onClick={() => setQqCookieInput("")}>
+                  清空
+                </button>
+              )}
               <button type="button" className="primary-button" onClick={closeQqLogin}>
                 关闭
               </button>

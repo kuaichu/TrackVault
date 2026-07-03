@@ -21,6 +21,7 @@ import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getPersonalRadioSongs } from "./personal-radio-provider.js";
 import { checkQqMusicCookie, getQqDiscoverSongs, getQqMusicAccountStatus, getQqMusicUserProfile, getQqPlaylistSongs, getQqSongCommentReplies, getQqSongComments, getQqSongLyrics, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream, setQqSongCommentLiked } from "./qqmusic-provider.js";
+import { checkQqMusicQrLogin, startQqMusicQrLogin } from "./qqmusic-auth.js";
 import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./settings-store.js";
 import { getNeteaseSongInsight } from "./song-insight-provider.js";
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
@@ -874,6 +875,24 @@ app.get("/api/account/qqmusic/profile", async (_request, response) => {
     response.status(401).json({
       message: error instanceof Error ? error.message : "获取 QQ 音乐个人主页失败"
     });
+  }
+});
+
+app.post("/api/account/qqmusic/qr/start", async (_request, response) => {
+  try {
+    response.json(await startQqMusicQrLogin());
+  } catch (error) {
+    response.status(500).json({ message: error instanceof Error ? error.message : "QQ 音乐二维码生成失败" });
+  }
+});
+
+app.get("/api/account/qqmusic/qr/check", async (request, response) => {
+  const key = typeof request.query.key === "string" ? request.query.key : "";
+
+  try {
+    response.json(await checkQqMusicQrLogin(key));
+  } catch (error) {
+    response.status(500).json({ message: error instanceof Error ? error.message : "QQ 音乐扫码状态检查失败" });
   }
 });
 
