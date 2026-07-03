@@ -474,7 +474,7 @@ function buildId3UserTextFrame(description: string, value: string | null | undef
       new Uint8Array([0x01]),
       encodeUtf16Le(description, true),
       new Uint8Array([0x00, 0x00]),
-      encodeUtf16Le(normalizedValue)
+      encodeUtf16Le(normalizedValue, true)
     ])
   );
 }
@@ -493,7 +493,7 @@ function buildId3LyricsFrame(lyricsText: string) {
       encoder.encode("XXX"),
       encodeUtf16Le("", true),
       new Uint8Array([0x00, 0x00]),
-      encodeUtf16Le(normalizedLyrics)
+      encodeUtf16Le(normalizedLyrics, true)
     ])
   );
 }
@@ -528,6 +528,8 @@ function injectMp3Metadata(input: ArrayBuffer, song: Song, lyricsText: string, c
     buildId3TextFrame("TALB", song.album),
     buildId3TextFrame("TPE2", song.artist),
     buildId3UserTextFrame("TRACKVAULT_SOURCE", song.source),
+    buildId3UserTextFrame("LYRICS", lyricsText),
+    buildId3UserTextFrame("UNSYNCEDLYRICS", lyricsText),
     buildId3LyricsFrame(lyricsText),
     buildId3PictureFrame(cover)
   ];
