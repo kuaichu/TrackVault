@@ -678,7 +678,7 @@ function toQqAccountStatus(cookieObj: Record<string, string>, detail: QqProfileD
   const displayName =
     firstStringByKeys(detail, ["nick", "nickname", "hostname", "creatorName", "name"]) ??
     (cookieObj.uin ? `QQ ${cookieObj.uin}` : null);
-  const avatarUrl = firstStringByKeys(detail, ["headurl", "headUrl", "avatar", "avatarUrl", "pic", "logo"]);
+  const avatarUrl = getQqImageUrl(firstStringByKeys(detail, ["headurl", "headUrl", "avatar", "avatarUrl", "pic", "logo"]));
   const vipType = firstTruthyVip(detail);
 
   return {

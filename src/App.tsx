@@ -170,14 +170,14 @@ const startupViewOptions: Array<{ value: AppSettings["startupView"]; label: stri
 type ActiveProviderMode = Exclude<AppSettings["providerMode"], "demo">;
 
 const searchProviderOptions: Array<{ value: ActiveProviderMode; label: string; detail: string }> = [
-  { value: "netease", label: "网易云", detail: "当前主源" },
-  { value: "qq", label: "QQ 音乐", detail: "QQ 曲库" },
-  { value: "aggregate", label: "聚合", detail: "双平台" }
+  { value: "netease", label: "网易云", detail: "网易曲库" },
+  { value: "qq", label: "QQ 音乐", detail: "Q 音曲库" },
+  { value: "aggregate", label: "聚合", detail: "双源搜索" }
 ];
 const accountProviderHints: Record<ActiveProviderMode, string> = {
-  netease: "只看网易云数据",
-  qq: "只看 QQ 音乐数据",
-  aggregate: "双平台聚合数据"
+  netease: "网易云曲库",
+  qq: "QQ 音乐曲库",
+  aggregate: "双平台合并"
 };
 const playlistSortOptions: Array<{ value: PlaylistSortMode; label: string }> = [
   { value: "default", label: "默认顺序" },
@@ -1408,7 +1408,6 @@ export default function App() {
   const accountDisplayName = accountProfile?.displayName ?? settings.accountName;
   const accountAvatarUrl = accountProfile?.avatarUrl;
   const accountVipEnabled = accountProfile?.vipEnabled ?? settings.vipEnabled;
-  const accountProviderLabel = accountProfile?.provider === "netease" ? "网易云已同步" : session.loggedIn ? "本地登录中" : "未登录";
   const accountBadgeLabel = accountVipEnabled ? "黑胶 VIP" : "标准";
   const accountStatusLabel = session.loggedIn || accountProfile?.provider === "netease" ? accountBadgeLabel : "未登录";
   const accountIsLoggedIn = session.loggedIn || accountProfile?.provider === "netease";
@@ -1425,6 +1424,14 @@ export default function App() {
     : "未登录 · 当前仅可搜索";
   const activeSearchProviderMode = settings.providerMode === "demo" ? "netease" : settings.providerMode;
   const activeSearchProviderLabel = searchProviderOptions.find((option) => option.value === activeSearchProviderMode)?.label ?? "网易云";
+  const activeIdentityName = activeSearchProviderMode === "qq"
+    ? qqMusicAccountName || "QQ 音乐"
+    : activeSearchProviderMode === "aggregate"
+      ? accountDisplayName || "TrackVault"
+      : accountDisplayName;
+  const activeIdentityAvatarUrl = activeSearchProviderMode === "qq" ? qqAccountStatus?.avatarUrl : accountAvatarUrl;
+  const activeIdentityFallback = activeSearchProviderMode === "qq" ? "Q" : activeSearchProviderMode === "aggregate" ? "T" : activeIdentityName.slice(0, 1);
+  const activeIdentitySubtitle = activeSearchProviderMode === "aggregate" ? "当前音乐源 · 聚合" : `当前音乐源 · ${activeSearchProviderLabel}`;
   const isQqDataMode = activeSearchProviderMode === "qq";
   const playlistProviderLabel = isQqDataMode ? "QQ 音乐" : "网易云";
   const hasPlaylistCredential = isQqDataMode ? hasQqMusicCookie : Boolean(settings.neteaseCookie.trim());
@@ -6962,13 +6969,14 @@ export default function App() {
               className="identity-card"
               onClick={() => setAccountMenuOpen((current) => !current)}
             >
-              {accountAvatarUrl ? (
-                <img className="identity-avatar" src={accountAvatarUrl} alt={accountDisplayName} />
+              {activeIdentityAvatarUrl ? (
+                <img className="identity-avatar" src={activeIdentityAvatarUrl} alt={activeIdentityName} />
               ) : (
-                <div className="identity-avatar">{accountDisplayName.slice(0, 1)}</div>
+                <div className="identity-avatar">{activeIdentityFallback}</div>
               )}
               <div className="identity-copy">
-                <strong>{accountDisplayName}</strong>
+                <strong>{activeIdentityName}</strong>
+                <span>{activeIdentitySubtitle}</span>
               </div>
               <div className="identity-platforms" aria-label="平台账号状态">
                 <span className={accountIsLoggedIn ? "identity-platform-chip active" : "identity-platform-chip"}>
@@ -6985,13 +6993,13 @@ export default function App() {
             {accountMenuOpen ? (
               <div className="identity-popover account-center-popover" role="menu" aria-label="账号中心">
                 <div className="account-center-head">
-                  <strong>账号中心</strong>
-                  <span>账号接入与当前数据来源</span>
+                  <strong>音乐源</strong>
+                  <span>切换曲库来源，账号状态会跟随这里变化</span>
                 </div>
 
                 <section className="account-provider-panel" aria-label="当前数据来源">
                   <div className="account-provider-panel-head">
-                    <span>当前数据</span>
+                    <span>当前音乐源</span>
                     <strong>{activeSearchProviderLabel}</strong>
                   </div>
                   <div className="account-provider-switch" role="tablist" aria-label="切换数据来源">
@@ -7017,16 +7025,16 @@ export default function App() {
                     <span className="platform-account-mark netease" aria-hidden="true">网</span>
                     <div className="platform-account-copy">
                       <strong>网易云音乐</strong>
-                      <span>{accountIsLoggedIn ? `${accountDisplayName} · ${accountProviderLabel}` : "未登录 · 播放网易云内容需登录"}</span>
+                      <span>{accountIsLoggedIn ? `${accountDisplayName} · 网易云资料已同步` : "未登录 · 网易云播放和评论需登录"}</span>
                     </div>
                     <div className="platform-account-badges">
-                      {activeSearchProviderMode === "netease" ? <span className="platform-account-current">当前数据</span> : null}
+                      {activeSearchProviderMode === "netease" ? <span className="platform-account-current">当前源</span> : null}
                       <span className={accountVipEnabled ? "platform-account-state vip" : "platform-account-state"}>
                         {accountStatusLabel}
                       </span>
                     </div>
                   </div>
-                  <p>{accountIsLoggedIn ? "当前用于网易云搜索、播放、下载、歌单与评论操作。" : "扫码、验证码或 MUSIC_U Cookie 均可接入网易云账号。"}</p>
+                  <p>{accountIsLoggedIn ? "用于网易云曲库、歌单、评论、喜欢与下载权限校验。" : "扫码、验证码或 MUSIC_U Cookie 均可接入网易云账号。"}</p>
                   <div className={accountIsLoggedIn ? "platform-account-actions" : "platform-account-actions single"}>
                     {accountIsLoggedIn ? (
                       <button type="button" role="menuitem" onClick={openMyUserProfile}>
@@ -7047,11 +7055,11 @@ export default function App() {
                       <span>{qqMusicAccountDetailLabel}</span>
                     </div>
                     <div className="platform-account-badges">
-                      {activeSearchProviderMode === "qq" ? <span className="platform-account-current">当前数据</span> : null}
+                      {activeSearchProviderMode === "qq" ? <span className="platform-account-current">当前源</span> : null}
                       <span className={hasQqMusicCookie ? (qqAccountVipEnabled ? "platform-account-state vip" : "platform-account-state") : "platform-account-state muted"}>{qqMusicPlatformStatusLabel}</span>
                     </div>
                   </div>
-                  <p>{hasQqMusicCookie ? (qqAccountStatus?.message || "用于 QQ 搜索结果的试听、下载与后续绿钻优先策略。") : "导入 y.qq.com Cookie 后，QQ 搜索结果才能尝试会员音源和高品质链接。"}</p>
+                  <p>{hasQqMusicCookie ? "用于 QQ 曲库搜索、试听与下载；高音质仍取决于账号权限和当前版权。" : "导入 y.qq.com Cookie 后，QQ 搜索结果才能尝试会员音源和高品质链接。"}</p>
                   <div className="platform-account-actions">
                     <button type="button" role="menuitem" onClick={openQqCookieLogin}>
                       {hasQqMusicCookie ? "更新 Cookie" : "导入 Cookie"}
