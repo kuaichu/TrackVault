@@ -255,6 +255,11 @@ input[type="range"] {
   text-align: left;
   cursor: pointer;
   appearance: none;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 120ms ease;
 }
 
 .identity-avatar {
@@ -9482,6 +9487,33 @@ body {
     linear-gradient(135deg, rgba(255, 180, 93, 0.08), rgba(255, 255, 255, 0.035)),
     rgba(17, 25, 38, 0.78);
   border-color: rgba(255, 255, 255, 0.08);
+}
+
+.identity-card:hover,
+.identity-card[aria-expanded="true"] {
+  background:
+    linear-gradient(135deg, rgba(255, 180, 93, 0.15), rgba(255, 255, 255, 0.052)),
+    rgba(21, 31, 46, 0.86);
+  border-color: rgba(255, 180, 93, 0.2);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 12px 28px rgba(0, 0, 0, 0.22);
+}
+
+.identity-card:active {
+  transform: translateY(1px) scale(0.985);
+  border-color: rgba(255, 180, 93, 0.32);
+  background:
+    linear-gradient(135deg, rgba(255, 180, 93, 0.2), rgba(255, 255, 255, 0.045)),
+    rgba(18, 25, 37, 0.94);
+  box-shadow:
+    inset 0 2px 8px rgba(0, 0, 0, 0.16),
+    0 8px 18px rgba(0, 0, 0, 0.18);
+}
+
+.identity-card:focus-visible {
+  outline: 2px solid rgba(255, 180, 93, 0.48);
+  outline-offset: 3px;
 }
 
 .identity-avatar {
