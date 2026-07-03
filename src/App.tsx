@@ -1216,6 +1216,7 @@ export default function App() {
   const qrAutoRefreshPendingRef = useRef(false);
   const qrAutoRefreshCountRef = useRef(0);
   const qrCloseTimerRef = useRef<number | null>(null);
+  const accountMenuFrameRef = useRef<number | null>(null);
   const transferRunJobIdRef = useRef("");
   const neteaseAuditJobIdRef = useRef("");
   const playlistCompareJobIdRef = useRef("");
@@ -1358,6 +1359,7 @@ export default function App() {
   const [qqAccountStatus, setQqAccountStatus] = useState<QqMusicAccountStatus | null>(null);
   const [loadingQqAccountStatus, setLoadingQqAccountStatus] = useState(false);
   const [accountMenuRendered, setAccountMenuRendered] = useState(false);
+  const [accountMenuEntering, setAccountMenuEntering] = useState(false);
   const [accountMenuClosing, setAccountMenuClosing] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSeconds, setPlaybackSeconds] = useState(initialPlayerState.playbackSeconds);
@@ -5278,23 +5280,47 @@ export default function App() {
   }, [browserDownloadTasks]);
 
   useEffect(() => {
+    if (accountMenuFrameRef.current !== null) {
+      window.cancelAnimationFrame(accountMenuFrameRef.current);
+      accountMenuFrameRef.current = null;
+    }
+
     if (accountMenuOpen) {
       setAccountMenuRendered(true);
+      setAccountMenuEntering(true);
       setAccountMenuClosing(false);
-      return;
+      accountMenuFrameRef.current = window.requestAnimationFrame(() => {
+        accountMenuFrameRef.current = window.requestAnimationFrame(() => {
+          setAccountMenuEntering(false);
+          accountMenuFrameRef.current = null;
+        });
+      });
+      return () => {
+        if (accountMenuFrameRef.current !== null) {
+          window.cancelAnimationFrame(accountMenuFrameRef.current);
+          accountMenuFrameRef.current = null;
+        }
+      };
     }
 
     if (!accountMenuRendered) {
       return;
     }
 
+    setAccountMenuEntering(false);
     setAccountMenuClosing(true);
     const closeTimer = window.setTimeout(() => {
       setAccountMenuRendered(false);
       setAccountMenuClosing(false);
-    }, 180);
+    }, 260);
 
-    return () => window.clearTimeout(closeTimer);
+    return () => {
+      if (accountMenuFrameRef.current !== null) {
+        window.cancelAnimationFrame(accountMenuFrameRef.current);
+        accountMenuFrameRef.current = null;
+      }
+      window.clearTimeout(closeTimer);
+    };
   }, [accountMenuOpen, accountMenuRendered]);
 
   useEffect(() => {
@@ -7308,7 +7334,7 @@ export default function App() {
                 className={[
                   "identity-popover",
                   "account-center-popover",
-                  accountMenuClosing ? "is-closing" : "is-open"
+                  accountMenuClosing ? "is-closing" : accountMenuEntering ? "is-entering" : "is-open"
                 ].join(" ")}
                 role="menu"
                 id="account-center-popover"
