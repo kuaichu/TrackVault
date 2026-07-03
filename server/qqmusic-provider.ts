@@ -1389,14 +1389,22 @@ export async function getQqPlaylistSongs(playlistId: string, page = 1, limit = 1
 }
 
 export async function getQqSongLyrics(songId: string, mediaId?: string): Promise<SongLyrics> {
-  const songMid = (mediaId || songId).trim();
-  if (!songMid) {
+  const candidates = Array.from(new Set([mediaId, songId].map((item) => item?.trim()).filter((item): item is string => Boolean(item))))
+    .sort((left, right) => Number(/^\d+$/.test(left)) - Number(/^\d+$/.test(right)));
+  if (candidates.length === 0) {
     throw new Error("缺少 QQ 音乐 songmid。");
   }
 
   await configureQqCookie();
-  const data = await fetchQqSongLyrics(songMid);
-  const lines = mergeQqTranslations(parseQqLrc(data.lyric), parseQqLrc(data.trans));
+  let lines: LyricLine[] = [];
+
+  for (const candidate of candidates) {
+    const data = await fetchQqSongLyrics(candidate);
+    lines = mergeQqTranslations(parseQqLrc(data.lyric), parseQqLrc(data.trans));
+    if (lines.length > 0) {
+      break;
+    }
+  }
 
   return {
     songId,
