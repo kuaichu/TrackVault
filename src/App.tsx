@@ -1423,11 +1423,25 @@ export default function App() {
   const accountBadgeLabel = accountVipEnabled ? "黑胶 VIP" : "标准";
   const accountStatusLabel = session.loggedIn || accountProfile?.provider === "netease" ? accountBadgeLabel : "未登录";
   const accountIsLoggedIn = session.loggedIn || accountProfile?.provider === "netease";
+  const neteaseMembershipExpireLabel = accountIsLoggedIn
+    ? accountVipEnabled
+      ? accountProfile?.vipExpireText
+        ? `${accountProfile.vipExpireText} 到期`
+        : "到期时间未返回"
+      : "当前为普通账号"
+    : "登录后显示";
   const neteasePlatformStatusLabel = accountIsLoggedIn ? (accountVipEnabled ? "黑胶" : "标准") : "未登录";
   const hasQqMusicCookie = Boolean(settings.qqMusicCookie?.trim() || qqAccountStatus?.ok);
   const qqAccountVipEnabled = Boolean(qqAccountStatus?.vipEnabled);
   const qqMusicAccountName = qqAccountStatus?.displayName?.trim() || (qqAccountStatus?.uin ? `QQ ${qqAccountStatus.uin}` : "");
   const qqMusicPlatformStatusLabel = hasQqMusicCookie ? (qqAccountVipEnabled ? "VIP" : "普通") : "未登录";
+  const qqMusicMembershipExpireLabel = hasQqMusicCookie
+    ? qqAccountVipEnabled
+      ? qqAccountStatus?.vipExpireText
+        ? `${qqAccountStatus.vipExpireText} 到期`
+        : "到期时间未返回"
+      : "当前为普通账号"
+    : "导入 Cookie 后显示";
   const qqMusicSidebarStatusLabel = qqMusicPlatformStatusLabel;
   const qqMusicAccountDetailLabel = hasQqMusicCookie
     ? loadingQqAccountStatus
@@ -7183,6 +7197,10 @@ export default function App() {
                     </div>
                   </div>
                   <p>{accountIsLoggedIn ? "用于网易云曲库、歌单、评论、喜欢与下载权限校验。" : "扫码、验证码或 MUSIC_U Cookie 均可接入网易云账号。"}</p>
+                  <div className="platform-account-membership" aria-label="网易云会员有效期">
+                    <span>会员有效期</span>
+                    <strong>{neteaseMembershipExpireLabel}</strong>
+                  </div>
                   <div className={accountIsLoggedIn ? "platform-account-actions" : "platform-account-actions single"}>
                     {accountIsLoggedIn ? (
                       <button type="button" role="menuitem" onClick={openMyUserProfile}>
@@ -7208,6 +7226,10 @@ export default function App() {
                     </div>
                   </div>
                   <p>{hasQqMusicCookie ? "用于 QQ 曲库搜索、试听与下载；高音质仍取决于账号权限和当前版权。" : "导入 y.qq.com Cookie 后，QQ 搜索结果才能尝试会员音源和高品质链接。"}</p>
+                  <div className="platform-account-membership" aria-label="QQ音乐会员有效期">
+                    <span>会员有效期</span>
+                    <strong>{qqMusicMembershipExpireLabel}</strong>
+                  </div>
                   <div className="platform-account-actions triple">
                     <button type="button" role="menuitem" disabled={!hasQqMusicCookie} onClick={openQqProfile}>
                       个人信息

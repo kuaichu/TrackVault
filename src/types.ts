@@ -346,6 +346,8 @@ export type AccountProfile = {
   level: number;
   vipEnabled: boolean;
   vipType?: number;
+  vipExpireAt?: number;
+  vipExpireText?: string;
   avatarUrl?: string;
   avatarSeed: string;
   provider: "demo" | "netease";
@@ -387,6 +389,8 @@ export type QqMusicAccountStatus = {
   avatarUrl?: string;
   vipEnabled: boolean;
   vipType?: number | string;
+  vipExpireAt?: number;
+  vipExpireText?: string;
   message: string;
 };
 

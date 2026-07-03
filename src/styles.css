@@ -694,6 +694,38 @@ input[type="range"] {
   line-height: 1.55;
 }
 
+.platform-account-membership {
+  margin-left: 43px;
+  min-width: 0;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 9px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.038);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.055);
+}
+
+.platform-account-membership span,
+.platform-account-membership strong {
+  min-width: 0;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.platform-account-membership span {
+  color: var(--text-muted);
+}
+
+.platform-account-membership strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgba(255, 231, 201, 0.9);
+  font-weight: 700;
+}
+
 .platform-account-state {
   padding: 4px 7px;
   border-radius: 999px;

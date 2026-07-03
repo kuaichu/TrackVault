@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import type { DownloadQualityLevel, DownloadQualityOption, LyricLine, PlaylistSongsPage, QqMusicAccountStatus, QqMusicCookieCheckResult, QqMusicProfileAlbum, QqMusicProfileSinger, QqMusicProfileUser, QqMusicUserProfile, Song, SongAudioProbe, SongAudioProbeMode, SongAvailability, SongComment, SongCommentRepliesPage, SongCommentsPage, SongLyrics, UserPlaylist } from "./types.js";
 import { getSettings } from "./settings-store.js";
+import { findMembershipExpireAt, formatMembershipExpireText } from "./membership-utils.js";
 
 const require = createRequire(import.meta.url);
 
@@ -1072,6 +1073,7 @@ function toQqAccountStatus(cookieObj: Record<string, string>, detail: QqProfileD
   const displayName = isUsefulQqDisplayName(rawDisplayName) ? rawDisplayName! : cookieObj.uin ? `QQ ${cookieObj.uin}` : null;
   const avatarUrl = getQqImageUrl(firstStringByKeys(detail, ["headpic", "headPic", "headurl", "headUrl", "avatar", "avatarUrl", "pic", "logo"]));
   const vipType = firstTruthyVip(detail);
+  const vipExpireAt = findMembershipExpireAt(detail);
 
   return {
     ok: Boolean(cookieObj.uin),
@@ -1080,6 +1082,8 @@ function toQqAccountStatus(cookieObj: Record<string, string>, detail: QqProfileD
     avatarUrl,
     vipEnabled: Boolean(vipType),
     vipType,
+    vipExpireAt,
+    vipExpireText: formatMembershipExpireText(vipExpireAt),
     message
   };
 }

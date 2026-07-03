@@ -3,10 +3,11 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { getClientSessionId, runWithRequestContext } from "./request-context.js";
 import { getSettings } from "./settings-store.js";
+import { findMembershipExpireAt, formatMembershipExpireText } from "./membership-utils.js";
 import type { AccountProfile, AuthSession } from "./types.js";
 
 const require = createRequire(import.meta.url);
-const { login_status } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
+const { login_status, vip_info, vip_info_v2 } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
 const dataDir = path.resolve(process.cwd(), "data");
 
 type LoginStatusBody = {
@@ -53,6 +54,31 @@ function isVip(vipType: number | undefined) {
   return typeof vipType === "number" && vipType > 0;
 }
 
+async function getNeteaseVipExpireAt(accountId: number | undefined, cookie: string) {
+  if (!accountId) {
+    return undefined;
+  }
+
+  const query = { uid: accountId, cookie };
+  const responses = await Promise.allSettled([
+    vip_info_v2(query),
+    vip_info(query)
+  ]);
+
+  for (const response of responses) {
+    if (response.status !== "fulfilled") {
+      continue;
+    }
+
+    const expireAt = findMembershipExpireAt(response.value.body);
+    if (expireAt) {
+      return expireAt;
+    }
+  }
+
+  return undefined;
+}
+
 async function getNeteaseSession(): Promise<AuthSession | null> {
   const settings = await getSettings();
   const cookie = settings.neteaseCookie.trim();
@@ -72,6 +98,8 @@ async function getNeteaseSession(): Promise<AuthSession | null> {
 
   const vipType = body.data?.profile?.vipType ?? body.profile?.vipType ?? body.data?.account?.vipType ?? body.account?.vipType ?? body.data?.vipType ?? body.vipType ?? 0;
   const displayName = nickname?.trim() || `UID ${accountId}`;
+  const vipExpireAt = await getNeteaseVipExpireAt(accountId, cookie).catch(() => undefined);
+  const vipExpireText = formatMembershipExpireText(vipExpireAt);
 
   return {
     loggedIn: true,
@@ -81,6 +109,8 @@ async function getNeteaseSession(): Promise<AuthSession | null> {
       level: isVip(vipType) ? 10 : 0,
       vipEnabled: isVip(vipType),
       vipType,
+      vipExpireAt,
+      vipExpireText,
       avatarUrl: body.data?.profile?.avatarUrl ?? body.profile?.avatarUrl,
       avatarSeed: displayName.slice(0, 2),
       provider: "netease",
