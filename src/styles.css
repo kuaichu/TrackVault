@@ -420,14 +420,14 @@ input[type="range"] {
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
   transform-origin: calc(100% - 28px) -6px;
   opacity: 0;
-  transform: translate3d(-14px, -7px, 0) scale(0.94);
-  clip-path: inset(0 100% 0 0 round 16px);
+  transform: translate3d(-34px, -2px, 0) scaleX(0.82) scaleY(0.96);
+  clip-path: inset(0 96% 0 0 round 16px);
   will-change: opacity, transform, clip-path;
   transition:
-    opacity 220ms ease,
-    transform 260ms cubic-bezier(0.2, 0.78, 0.24, 1),
-    clip-path 260ms cubic-bezier(0.2, 0.78, 0.24, 1),
-    box-shadow 260ms ease;
+    opacity 320ms ease,
+    transform 360ms cubic-bezier(0.18, 0.88, 0.22, 1),
+    clip-path 360ms cubic-bezier(0.18, 0.88, 0.22, 1),
+    box-shadow 360ms ease;
 }
 
 .identity-popover.is-open {
@@ -443,9 +443,9 @@ input[type="range"] {
 
 .identity-popover.is-closing {
   opacity: 0;
-  transform: translate3d(-12px, -5px, 0) scale(0.955);
-  clip-path: inset(0 100% 0 0 round 16px);
-  transition-duration: 210ms, 240ms, 240ms, 240ms;
+  transform: translate3d(-30px, -2px, 0) scaleX(0.84) scaleY(0.965);
+  clip-path: inset(0 96% 0 0 round 16px);
+  transition-duration: 220ms, 260ms, 260ms, 260ms;
   transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
 }
 
@@ -521,6 +521,27 @@ input[type="range"] {
   transform-origin: -6px 28px;
 }
 
+.account-center-popover > * {
+  opacity: 0;
+  transform: translate3d(-12px, 0, 0);
+  transition:
+    opacity 220ms ease,
+    transform 260ms cubic-bezier(0.18, 0.88, 0.22, 1);
+}
+
+.account-center-popover.is-open > * {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+  transition-delay: 80ms;
+}
+
+.account-center-popover.is-closing > * {
+  opacity: 0;
+  transform: translate3d(-10px, 0, 0);
+  transition-duration: 120ms;
+  transition-delay: 0ms;
+}
+
 .account-center-popover::before {
   top: 24px;
   right: auto;
@@ -529,22 +550,6 @@ input[type="range"] {
   border-right: 0;
   border-left: 1px solid rgba(255, 255, 255, 0.1);
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .identity-popover,
-  .identity-popover.is-entering,
-  .identity-popover.is-open,
-  .identity-popover.is-closing {
-    transition: none;
-    transform: none;
-    clip-path: inset(0 0 0 0 round 16px);
-  }
-
-  .identity-popover.is-entering,
-  .identity-popover.is-closing {
-    opacity: 0;
-  }
 }
 
 .account-center-head {

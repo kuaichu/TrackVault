@@ -5312,7 +5312,7 @@ export default function App() {
     const closeTimer = window.setTimeout(() => {
       setAccountMenuRendered(false);
       setAccountMenuClosing(false);
-    }, 260);
+    }, 310);
 
     return () => {
       if (accountMenuFrameRef.current !== null) {
