@@ -660,7 +660,7 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
   onProgress?.(100);
 }
 
-export async function startRawDirectSongDownload(song: Song, level: DownloadQualityLevel) {
+export async function startRawDirectSongDownload(song: Song, level: DownloadQualityLevel, onProgress?: (progress: number) => void) {
   const directResponse = await apiFetch(getDirectDownloadUrl(song, level));
   if (!directResponse.ok) {
     const data = (await directResponse.json().catch(() => null)) as { message?: string } | null;
@@ -668,14 +668,57 @@ export async function startRawDirectSongDownload(song: Song, level: DownloadQual
   }
 
   const directDownload = (await directResponse.json()) as DirectDownloadInfo;
-  const link = document.createElement("a");
-  link.href = directDownload.url;
-  link.download = directDownload.filename;
-  link.target = "_blank";
-  link.rel = "noopener noreferrer";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
+  const providerLabel = song.source === "qqmusic" ? "QQ 音乐 CDN" : "网易云 CDN";
+  let mediaResponse: Response;
+  try {
+    mediaResponse = await fetch(directDownload.url, {
+      credentials: "omit",
+      mode: "cors"
+    });
+  } catch {
+    throw new DirectDownloadBlockedError(`浏览器被${providerLabel}跨域策略拦截，方案B无法保证文件名，会保存成 CDN 对象名；请改用方案C服务器备用下载。`);
+  }
+
+  if (!mediaResponse.ok) {
+    throw new Error(`${providerLabel}裸直链下载失败：HTTP ${mediaResponse.status}`);
+  }
+
+  const contentLength = Number(mediaResponse.headers.get("content-length") ?? "0");
+  if (!mediaResponse.body || !contentLength) {
+    try {
+      const blob = await mediaResponse.blob();
+      saveBlob(blob, directDownload.filename);
+      onProgress?.(100);
+    } catch {
+      throw new DirectDownloadBlockedError(`${providerLabel}下载流中断，方案B无法稳定保存指定文件名；请改用方案C服务器备用下载。`);
+    }
+    return directDownload;
+  }
+
+  const reader = mediaResponse.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let receivedBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      if (value) {
+        chunks.push(value);
+        receivedBytes += value.length;
+        onProgress?.(Math.max(1, Math.min(99, Math.round((receivedBytes / contentLength) * 100))));
+      }
+    }
+  } catch {
+    throw new DirectDownloadBlockedError(`${providerLabel}下载流中断，方案B无法稳定保存指定文件名；请改用方案C服务器备用下载。`);
+  }
+
+  const blob = new Blob(chunks, { type: mediaResponse.headers.get("content-type") ?? "application/octet-stream" });
+  saveBlob(blob, directDownload.filename);
+  onProgress?.(100);
   return directDownload;
 }
 

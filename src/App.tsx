@@ -3760,23 +3760,32 @@ export default function App() {
         quality: selectedLabel,
         requestedLevel: level,
         progress: 0,
-        status: "preparing",
-        detail: "正在获取 CDN 裸直链，获取后交给浏览器处理。",
+        status: "downloading",
+        detail: "正在直读 CDN 音频流，并按项目文件名保存到本机。",
         createdAt,
         updatedAt: createdAt
       });
-      setMessage(`方案B正在获取裸直链：${song.title}`);
-      const rawDirectDownload = await startRawDirectSongDownload(song, level);
+      setMessage(`方案B正在直读裸音频：${song.title}`);
+      const rawDirectDownload = await startRawDirectSongDownload(song, level, (progress) => {
+        patchBrowserDownloadTask(taskId, {
+          progress,
+          status: progress >= 100 ? "done" : "downloading",
+          detail: progress >= 100 ? "已按项目文件名保存到本机，不写入元数据。" : "正在直读 CDN 音频流，并按项目文件名保存到本机。"
+        });
+        setMessage(`方案B裸音频下载中：${song.title} · ${progress}%`);
+      });
       patchBrowserDownloadTask(taskId, {
         progress: 100,
         status: "done",
-        detail: "已把 CDN 裸直链交给浏览器处理，不经过服务器中转，也不会写入封面和歌词标签。",
+        detail: "已按项目文件名保存到本机，不经过服务器中转，也不会写入封面和歌词标签。",
         fileName: rawDirectDownload.filename
       });
-      setMessage(`方案B已尝试裸直链下载：${song.title}`);
+      setMessage(`方案B已保存裸音频：${song.title}`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "裸直链下载失败";
-      const displayMessage = `方案B裸直链失败：${errorMessage}。可以重新点击下载，选择方案C服务器备用。`;
+      const displayMessage = isDirectDownloadBlockedError(error)
+        ? `方案B已停止：${errorMessage}`
+        : `方案B裸直链失败：${errorMessage}。可以重新点击下载，选择方案C服务器备用。`;
       patchBrowserDownloadTask(taskId, { status: "failed", detail: displayMessage });
       if (showIssueDialog) {
         setDownloadIssue({
@@ -9630,7 +9639,7 @@ export default function App() {
               <button type="button" className="download-method-option raw" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => void runDownloadMethod("raw")}>
                 <span>方案B：裸直链下载</span>
                 <strong>最省服务器带宽</strong>
-                <small>直接把 CDN 地址交给浏览器；不写封面/歌词标签，文件名也可能由浏览器决定。</small>
+                <small>浏览器直读 CDN 流并按项目文件名保存；不写封面/歌词标签，被跨域拦截时会停止。</small>
               </button>
               <button type="button" className="download-method-option server" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => void runDownloadMethod("server")}>
                 <span>方案C：服务器备用下载</span>
