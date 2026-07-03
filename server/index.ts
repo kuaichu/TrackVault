@@ -382,11 +382,10 @@ app.get("/api/comments/songs/:id", async (request, response) => {
   try {
     const page = Number(request.query.page);
     const limit = Number(request.query.limit);
-    response.json(
-      source === "qqmusic"
-        ? await getQqSongComments(providerSongId, page, limit)
-        : await getSongComments(request.params.id, page, limit)
-    );
+    const comments = source === "qqmusic"
+      ? await getQqSongComments(providerSongId, page, limit)
+      : await getSongComments(request.params.id, page, limit);
+    response.json(source === "qqmusic" ? { ...comments, songId: request.params.id } : comments);
   } catch (error) {
     response.status(502).json({
       message: error instanceof Error ? error.message : "获取评论失败"

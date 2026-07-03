@@ -1353,11 +1353,11 @@ export async function getQqSongComments(songId: string, page = 1, limit = 20): P
   const hotComments = safePage === 1
     ? (data.hotComment?.commentlist ?? []).map(mapQqComment).filter((comment): comment is SongComment => Boolean(comment))
     : [];
-  const total = Number(data.comment?.commenttotal ?? comments.length);
+  const total = Number(data.comment?.commenttotal ?? 0);
 
   return {
     songId: safeSongId,
-    total: Math.max(0, total),
+    total: Math.max(0, total, comments.length + hotComments.length),
     page: safePage,
     limit: safeLimit,
     hasMore: comments.length >= safeLimit,
