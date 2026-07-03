@@ -169,6 +169,7 @@ const startupViewOptions: Array<{ value: AppSettings["startupView"]; label: stri
   { value: "downloads", label: "下载" }
 ];
 type ActiveProviderMode = Exclude<AppSettings["providerMode"], "demo">;
+type PlaylistProviderMode = "netease" | "qq";
 
 const searchProviderOptions: Array<{ value: ActiveProviderMode; label: string; detail: string }> = [
   { value: "netease", label: "网易云", detail: "网易曲库" },
@@ -553,6 +554,10 @@ function isEditableKeyboardTarget(target: EventTarget | null) {
 
 function getDiscoverCacheKey(providerMode: ActiveProviderMode) {
   return `${DISCOVER_CACHE_STORAGE_KEY}:${providerMode}`;
+}
+
+function getPlaylistProviderMode(providerMode: ActiveProviderMode): PlaylistProviderMode {
+  return providerMode === "qq" ? "qq" : "netease";
 }
 
 function loadCachedDiscoverSongs(providerMode: ActiveProviderMode) {
@@ -2140,7 +2145,7 @@ export default function App() {
     setMessage(`正在读取 ${targetProviderLabel} 歌单`);
 
     try {
-      const data = await getPlaylists();
+      const data = await getPlaylists(getPlaylistProviderMode(targetProviderMode));
       setPlaylists(data);
       setMessage(`${targetProviderLabel} 共读取 ${data.length} 个歌单`);
     } catch (error) {
@@ -2176,7 +2181,14 @@ export default function App() {
     );
 
     try {
-      const pageData = await getPlaylistSongs(playlist.id, page, PLAYLIST_SONGS_PAGE_SIZE, normalizedKeyword, sortOverride);
+      const pageData = await getPlaylistSongs(
+        playlist.id,
+        page,
+        PLAYLIST_SONGS_PAGE_SIZE,
+        normalizedKeyword,
+        sortOverride,
+        getPlaylistProviderMode(activeSearchProviderMode)
+      );
       setResults(pageData.songs);
       setPlayQueue(pageData.songs);
       setResultSource("playlist");
@@ -3400,7 +3412,7 @@ export default function App() {
 
       setLoadingPlaylistSongs(true);
       setMessage(`正在读取 QQ 歌单：${playlist.name}`);
-      const pageData = await getPlaylistSongs(playlist.id, 1, PLAYLIST_SONGS_PAGE_SIZE, "", "default");
+      const pageData = await getPlaylistSongs(playlist.id, 1, PLAYLIST_SONGS_PAGE_SIZE, "", "default", "qq");
       setResults(pageData.songs);
       setPlayQueue(pageData.songs);
       setResultSource("playlist");
@@ -4676,7 +4688,7 @@ export default function App() {
     setPlaylistPickerLoading(true);
 
     try {
-      const data = await getPlaylists();
+      const data = await getPlaylists("netease");
       setPlaylists(data);
       if (!data.some((playlist) => playlist.owned)) {
         setPlaylistPickerError("当前账号没有可编辑的自建歌单。");

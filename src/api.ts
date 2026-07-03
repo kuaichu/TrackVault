@@ -827,8 +827,12 @@ export async function downloadTaskFile(task: DownloadTask): Promise<void> {
   window.URL.revokeObjectURL(objectUrl);
 }
 
-export async function getPlaylists(): Promise<UserPlaylist[]> {
-  const response = await apiFetch("/api/playlists");
+export async function getPlaylists(provider?: "netease" | "qq"): Promise<UserPlaylist[]> {
+  const params = new URLSearchParams();
+  if (provider) {
+    params.set("provider", provider);
+  }
+  const response = await apiFetch(`/api/playlists${params.size > 0 ? `?${params.toString()}` : ""}`);
   if (!response.ok) {
     const data = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new Error(data?.message ?? "获取歌单失败");
@@ -837,12 +841,15 @@ export async function getPlaylists(): Promise<UserPlaylist[]> {
   return data.playlists;
 }
 
-export async function getPlaylistSongs(playlistId: string, page = 1, limit = 100, keyword = "", sort = "default"): Promise<PlaylistSongsPage> {
+export async function getPlaylistSongs(playlistId: string, page = 1, limit = 100, keyword = "", sort = "default", provider?: "netease" | "qq"): Promise<PlaylistSongsPage> {
   const params = new URLSearchParams({
     page: String(page),
     limit: String(limit),
     sort
   });
+  if (provider) {
+    params.set("provider", provider);
+  }
   if (keyword.trim()) {
     params.set("keyword", keyword.trim());
   }

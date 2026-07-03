@@ -47,6 +47,20 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const clientDistDir = path.resolve(__dirname, "../dist");
 const COVER_PROXY_MAX_BYTES = 5 * 1024 * 1024;
+type PlaylistProviderMode = "netease" | "qq";
+
+function resolvePlaylistProvider(request: express.Request, settings: AppSettings): PlaylistProviderMode {
+  const provider = typeof request.query.provider === "string" ? request.query.provider : "";
+  if (provider === "qq") {
+    return "qq";
+  }
+
+  if (provider === "netease") {
+    return "netease";
+  }
+
+  return settings.providerMode === "qq" ? "qq" : "netease";
+}
 
 app.use(cors());
 app.use(express.json());
@@ -229,10 +243,11 @@ app.put("/api/history/play", async (request, response) => {
   response.json({ items: await savePlayHistory(items) });
 });
 
-app.get("/api/playlists", async (_request, response) => {
+app.get("/api/playlists", async (request, response) => {
   try {
     const settings = await getSettings();
-    response.json({ playlists: settings.providerMode === "qq" ? await getQqUserPlaylists() : await getUserPlaylists() });
+    const provider = resolvePlaylistProvider(request, settings);
+    response.json({ playlists: provider === "qq" ? await getQqUserPlaylists() : await getUserPlaylists() });
   } catch (error) {
     response.status(401).json({
       message: error instanceof Error ? error.message : "获取歌单失败"
@@ -247,8 +262,9 @@ app.get("/api/playlists/:id/songs", async (request, response) => {
     const keyword = typeof request.query.keyword === "string" ? request.query.keyword : "";
     const sort = typeof request.query.sort === "string" ? request.query.sort : "default";
     const settings = await getSettings();
+    const provider = resolvePlaylistProvider(request, settings);
     response.json(
-      settings.providerMode === "qq"
+      provider === "qq"
         ? await getQqPlaylistSongs(request.params.id, page, limit, keyword, sort)
         : await getPlaylistSongs(request.params.id, page, limit, keyword, sort)
     );
