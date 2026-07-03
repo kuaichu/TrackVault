@@ -1238,6 +1238,7 @@ export default function App() {
   const [message, setMessage] = useState("正在加载发现音乐。");
   const [downloadIssue, setDownloadIssue] = useState<DownloadIssueDialog | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgressDialog | null>(null);
+  const [downloadProgressMinimized, setDownloadProgressMinimized] = useState(false);
   const [playerStateReady, setPlayerStateReady] = useState(false);
   const accountProfile = session.profile;
   const accountDisplayName = accountProfile?.displayName ?? settings.accountName;
@@ -3355,6 +3356,28 @@ export default function App() {
     return downloadStatus === "vip" || downloadStatus === "copyright" || downloadStatus === "restricted" ? "Availability" : "Download Quality";
   }
 
+  function isDownloadProgressActive(progress: DownloadProgressDialog | null) {
+    return progress?.status === "preparing" || progress?.status === "downloading";
+  }
+
+  function closeDownloadProgress() {
+    setDownloadProgress(null);
+    setDownloadProgressMinimized(false);
+  }
+
+  function minimizeDownloadProgress() {
+    setDownloadProgressMinimized(true);
+  }
+
+  function handleDownloadProgressBackdrop() {
+    if (isDownloadProgressActive(downloadProgress)) {
+      minimizeDownloadProgress();
+      return;
+    }
+
+    closeDownloadProgress();
+  }
+
   async function runDirectDownload(song: Song, level: DownloadQualityLevel, options: { showIssueDialog?: boolean } = {}) {
     if (directDownloadingSongId || batchDownloading) {
       return;
@@ -3380,6 +3403,7 @@ export default function App() {
         if (useServerFallback) {
           try {
             setMessage(`正在通过服务器备用下载：${song.title} · ${selectedLabel}`);
+            setDownloadProgressMinimized(false);
             setDownloadProgress({
               song,
               title: `备用下载：${song.title}`,
@@ -3424,12 +3448,6 @@ export default function App() {
               progress: 0,
               indeterminate: false,
               status: "failed"
-            });
-            setDownloadIssue({
-              song,
-              message: fallbackMessage,
-              attemptedLevel: level,
-              attemptedLabel: selectedLabel
             });
             setMessage(fallbackMessage);
           }
@@ -9148,8 +9166,8 @@ export default function App() {
         </div>
       ) : null}
 
-      {downloadProgress ? (
-        <div className="modal-backdrop download-progress-backdrop" role="dialog" aria-modal="true" aria-label="下载状态" onClick={() => downloadProgress.status === "done" || downloadProgress.status === "failed" ? setDownloadProgress(null) : undefined}>
+      {downloadProgress && !downloadProgressMinimized ? (
+        <div className="modal-backdrop download-progress-backdrop" role="dialog" aria-modal="true" aria-label="下载状态" onClick={handleDownloadProgressBackdrop}>
           <section className="download-progress-card" onClick={(event) => event.stopPropagation()}>
             <header>
               <div className="download-progress-heading">
@@ -9159,11 +9177,11 @@ export default function App() {
               <button
                 type="button"
                 className="modal-close-button"
-                aria-label="关闭下载状态"
-                disabled={downloadProgress.status === "preparing" || downloadProgress.status === "downloading"}
-                onClick={() => setDownloadProgress(null)}
+                aria-label={isDownloadProgressActive(downloadProgress) ? "转到后台下载" : "关闭下载状态"}
+                title={isDownloadProgressActive(downloadProgress) ? "转到后台下载" : "关闭"}
+                onClick={() => isDownloadProgressActive(downloadProgress) ? minimizeDownloadProgress() : closeDownloadProgress()}
               >
-                ×
+                {isDownloadProgressActive(downloadProgress) ? "−" : "×"}
               </button>
             </header>
 
@@ -9186,17 +9204,38 @@ export default function App() {
             </div>
 
             <div className="download-progress-actions">
-              <button
-                type="button"
-                className="secondary-button compact operation-button"
-                disabled={downloadProgress.status === "preparing" || downloadProgress.status === "downloading"}
-                onClick={() => setDownloadProgress(null)}
-              >
-                {downloadProgress.status === "failed" ? "关闭" : "完成"}
-              </button>
+              {isDownloadProgressActive(downloadProgress) ? (
+                <button type="button" className="secondary-button compact operation-button" onClick={minimizeDownloadProgress}>
+                  转到后台
+                </button>
+              ) : (
+                <button type="button" className="secondary-button compact operation-button" onClick={closeDownloadProgress}>
+                  {downloadProgress.status === "failed" ? "关闭" : "完成"}
+                </button>
+              )}
             </div>
           </section>
         </div>
+      ) : null}
+
+      {downloadProgress && downloadProgressMinimized ? (
+        <button
+          type="button"
+          className={`download-progress-dock ${downloadProgress.indeterminate ? "indeterminate" : ""} ${downloadProgress.status}`}
+          aria-label={`打开下载状态：${downloadProgress.song.title}`}
+          title="打开下载状态"
+          onClick={() => setDownloadProgressMinimized(false)}
+        >
+          <CoverArt song={downloadProgress.song} className="download-progress-dock-cover" />
+          <span className="download-progress-dock-copy">
+            <strong>{downloadProgress.status === "failed" ? "备用下载失败" : downloadProgress.status === "done" ? "备用下载完成" : "备用下载中"}</strong>
+            <span>{downloadProgress.song.title}</span>
+          </span>
+          <span className="download-progress-dock-percent">{downloadProgress.indeterminate ? "处理中" : `${downloadProgress.progress}%`}</span>
+          <span className="download-progress-dock-bar" aria-hidden="true">
+            <span style={{ width: downloadProgress.indeterminate ? "42%" : `${downloadProgress.progress}%` }} />
+          </span>
+        </button>
       ) : null}
 
       {playlistPickerSong ? (
