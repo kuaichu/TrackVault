@@ -371,11 +371,7 @@ function getQqErrorMessage(error: unknown) {
 }
 
 function isUsefulQqDisplayName(value: string | undefined) {
-  if (!value) {
-    return false;
-  }
-
-  return value.replace(/[.\-_\s·•。]+/g, "").length > 0;
+  return Boolean(value?.trim());
 }
 
 function parseQqCookie(cookie: string) {
