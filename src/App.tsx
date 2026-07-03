@@ -1428,7 +1428,7 @@ export default function App() {
   const accountDisplayName = accountProfile?.displayName ?? settings.accountName;
   const accountAvatarUrl = accountProfile?.avatarUrl;
   const accountVipEnabled = accountProfile?.vipEnabled ?? settings.vipEnabled;
-  const accountBadgeLabel = accountVipEnabled ? "黑胶 VIP" : "标准";
+  const accountBadgeLabel = accountVipEnabled ? "黑胶 VIP" : "普通";
   const accountStatusLabel = session.loggedIn || accountProfile?.provider === "netease" ? accountBadgeLabel : "未登录";
   const accountIsLoggedIn = session.loggedIn || accountProfile?.provider === "netease";
   const neteaseMembershipExpireLabel = accountIsLoggedIn
@@ -1438,7 +1438,7 @@ export default function App() {
         : "到期时间未返回"
       : "当前为普通账号"
     : "登录后显示";
-  const neteasePlatformStatusLabel = accountIsLoggedIn ? (accountVipEnabled ? "黑胶" : "标准") : "未登录";
+  const neteasePlatformStatusLabel = accountIsLoggedIn ? accountBadgeLabel : "未登录";
   const hasQqMusicCookie = Boolean(settings.qqMusicCookie?.trim() || qqAccountStatus?.ok);
   const qqAccountVipEnabled = Boolean(qqAccountStatus?.vipEnabled);
   const qqMusicAccountName = qqAccountStatus?.displayName?.trim() || (qqAccountStatus?.uin ? `QQ ${qqAccountStatus.uin}` : "");
@@ -7308,7 +7308,7 @@ export default function App() {
                   </div>
                 </section>
 
-                <section className={`${accountIsLoggedIn ? "platform-account-card active" : "platform-account-card"} ${activeSearchProviderMode === "netease" ? "current-source" : ""}`} aria-label="网易云音乐账号">
+                <section className={`${accountIsLoggedIn ? "platform-account-card active" : "platform-account-card pending"} ${activeSearchProviderMode === "netease" ? "current-source" : ""}`} aria-label="网易云音乐账号">
                   <div className="platform-account-main">
                     <span className="platform-account-mark netease" aria-hidden="true">网</span>
                     <div className="platform-account-copy">
@@ -7327,14 +7327,15 @@ export default function App() {
                     <span>会员有效期</span>
                     <strong>{neteaseMembershipExpireLabel}</strong>
                   </div>
-                  <div className={accountIsLoggedIn ? "platform-account-actions" : "platform-account-actions single"}>
-                    {accountIsLoggedIn ? (
-                      <button type="button" role="menuitem" onClick={openMyUserProfile}>
-                        个人信息
-                      </button>
-                    ) : null}
+                  <div className="platform-account-actions">
+                    <button type="button" role="menuitem" disabled={!accountIsLoggedIn} onClick={openMyUserProfile}>
+                      个人信息
+                    </button>
                     <button type="button" role="menuitem" onClick={() => void handleStartQrLogin()}>
-                      {accountIsLoggedIn ? "重新登录" : "登录网易云"}
+                      {accountIsLoggedIn ? "重新登录" : "登录账号"}
+                    </button>
+                    <button type="button" role="menuitem" className="danger" disabled={!accountIsLoggedIn} onClick={() => void handleClearCookie()}>
+                      退出登录
                     </button>
                   </div>
                 </section>
@@ -7356,24 +7357,18 @@ export default function App() {
                     <span>会员有效期</span>
                     <strong>{qqMusicMembershipExpireLabel}</strong>
                   </div>
-                  <div className="platform-account-actions triple">
+                  <div className="platform-account-actions">
                     <button type="button" role="menuitem" disabled={!hasQqMusicCookie} onClick={openQqProfile}>
                       个人信息
                     </button>
                     <button type="button" role="menuitem" onClick={openQqCookieLogin}>
-                      {hasQqMusicCookie ? "更新 Cookie" : "导入 Cookie"}
+                      {hasQqMusicCookie ? "重新登录" : "登录账号"}
                     </button>
-                    <button type="button" role="menuitem" disabled={!hasQqMusicCookie} onClick={() => void handleClearQqCookie()}>
-                      清除
+                    <button type="button" role="menuitem" className="danger" disabled={!hasQqMusicCookie} onClick={() => void handleClearQqCookie()}>
+                      退出登录
                     </button>
                   </div>
                 </section>
-
-                {accountIsLoggedIn ? (
-                  <button type="button" role="menuitem" className="account-center-danger" onClick={() => void handleClearCookie()}>
-                    退出网易云账号
-                  </button>
-                ) : null}
               </div>
             ) : null}
           </div>
