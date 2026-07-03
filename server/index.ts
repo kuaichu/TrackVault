@@ -72,6 +72,36 @@ app.get("/api/health", (_request, response) => {
   response.json({ ok: true });
 });
 
+function getErrorMessage(error: unknown, fallbackMessage: string) {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  if (error && typeof error === "object") {
+    const record = error as {
+      message?: unknown;
+      msg?: unknown;
+      body?: { message?: unknown; msg?: unknown; code?: unknown };
+      status?: unknown;
+    };
+    const bodyMessage = typeof record.body?.message === "string" ? record.body.message.trim() : "";
+    const bodyMsg = typeof record.body?.msg === "string" ? record.body.msg.trim() : "";
+    const message = typeof record.message === "string" ? record.message.trim() : "";
+    const msg = typeof record.msg === "string" ? record.msg.trim() : "";
+
+    if (bodyMessage || bodyMsg || message || msg) {
+      return bodyMessage || bodyMsg || message || msg;
+    }
+
+    const code = record.body?.code ?? record.status;
+    if (typeof code === "number" || typeof code === "string") {
+      return `${fallbackMessage}：${code}`;
+    }
+  }
+
+  return fallbackMessage;
+}
+
 function isAllowedCoverHost(hostname: string) {
   const normalizedHost = hostname.toLowerCase();
   return (
@@ -379,7 +409,7 @@ app.post("/api/comments/songs/:id/:commentId/like", async (request, response) =>
     );
   } catch (error) {
     response.status(401).json({
-      message: error instanceof Error ? error.message : liked ? "点赞评论失败" : "取消点赞失败"
+      message: getErrorMessage(error, liked ? "点赞评论失败" : "取消点赞失败")
     });
   }
 });
