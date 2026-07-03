@@ -1357,6 +1357,8 @@ export default function App() {
   const [qqLoginMessage, setQqLoginMessage] = useState(QQ_COOKIE_LOGIN_DEFAULT_MESSAGE);
   const [qqAccountStatus, setQqAccountStatus] = useState<QqMusicAccountStatus | null>(null);
   const [loadingQqAccountStatus, setLoadingQqAccountStatus] = useState(false);
+  const [accountMenuRendered, setAccountMenuRendered] = useState(false);
+  const [accountMenuClosing, setAccountMenuClosing] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSeconds, setPlaybackSeconds] = useState(initialPlayerState.playbackSeconds);
   const [playbackDuration, setPlaybackDuration] = useState(0);
@@ -5276,6 +5278,26 @@ export default function App() {
   }, [browserDownloadTasks]);
 
   useEffect(() => {
+    if (accountMenuOpen) {
+      setAccountMenuRendered(true);
+      setAccountMenuClosing(false);
+      return;
+    }
+
+    if (!accountMenuRendered) {
+      return;
+    }
+
+    setAccountMenuClosing(true);
+    const closeTimer = window.setTimeout(() => {
+      setAccountMenuRendered(false);
+      setAccountMenuClosing(false);
+    }, 180);
+
+    return () => window.clearTimeout(closeTimer);
+  }, [accountMenuOpen, accountMenuRendered]);
+
+  useEffect(() => {
     function handleWindowClick() {
       setOpenQualityMenuId(null);
       setQualityMenuStyle(null);
@@ -7256,6 +7278,9 @@ export default function App() {
             <button
               type="button"
               className="identity-card"
+              aria-haspopup="menu"
+              aria-expanded={accountMenuOpen}
+              aria-controls="account-center-popover"
               onClick={() => setAccountMenuOpen((current) => !current)}
             >
               {activeIdentityAvatarUrl ? (
@@ -7278,8 +7303,18 @@ export default function App() {
               </div>
             </button>
 
-            {accountMenuOpen ? (
-              <div className="identity-popover account-center-popover" role="menu" aria-label="账号中心">
+            {accountMenuRendered ? (
+              <div
+                className={[
+                  "identity-popover",
+                  "account-center-popover",
+                  accountMenuClosing ? "is-closing" : "is-open"
+                ].join(" ")}
+                role="menu"
+                id="account-center-popover"
+                aria-label="账号中心"
+                aria-hidden={accountMenuClosing}
+              >
                 <div className="account-center-head">
                   <strong>音乐源</strong>
                   <span>切换曲库来源，账号状态会跟随这里变化</span>
