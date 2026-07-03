@@ -37,15 +37,12 @@ type NeteaseResponseBody = {
 };
 
 function formatCommentTime(timestamp: number | undefined, fallback: string | undefined) {
-  if (fallback?.trim()) {
-    return fallback.trim();
-  }
-
   if (!timestamp) {
-    return "";
+    return fallback?.trim() ?? "";
   }
 
   return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",

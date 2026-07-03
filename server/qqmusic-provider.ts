@@ -954,6 +954,7 @@ function formatQqCommentTime(timestamp: number | undefined) {
 
   const milliseconds = timestamp > 10_000_000_000 ? timestamp : timestamp * 1000;
   return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
