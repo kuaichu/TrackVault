@@ -370,6 +370,14 @@ function getQqErrorMessage(error: unknown) {
   return "QQ 音乐接口请求失败";
 }
 
+function isUsefulQqDisplayName(value: string | undefined) {
+  if (!value) {
+    return false;
+  }
+
+  return value.replace(/[.\-_\s·•。]+/g, "").length > 0;
+}
+
 function parseQqCookie(cookie: string) {
   const cookieObj: Record<string, string> = {};
 
@@ -924,9 +932,8 @@ function firstTruthyVip(input: unknown, visited = new Set<unknown>()): number | 
 }
 
 function toQqAccountStatus(cookieObj: Record<string, string>, detail: QqProfileDetail | null, message: string): QqMusicAccountStatus {
-  const displayName =
-    firstStringByKeys(detail, ["nick", "nickname", "hostname", "creatorName", "name"]) ??
-    (cookieObj.uin ? `QQ ${cookieObj.uin}` : null);
+  const rawDisplayName = firstStringByKeys(detail, ["nick", "nickname", "hostname", "creatorName", "name"]);
+  const displayName = isUsefulQqDisplayName(rawDisplayName) ? rawDisplayName! : cookieObj.uin ? `QQ ${cookieObj.uin}` : null;
   const avatarUrl = getQqImageUrl(firstStringByKeys(detail, ["headurl", "headUrl", "avatar", "avatarUrl", "pic", "logo"]));
   const vipType = firstTruthyVip(detail);
 

@@ -6446,6 +6446,7 @@ export default function App() {
   const qqProfileAllPlaylists = qqProfileDisplay ? [...qqProfileDisplay.createdPlaylists, ...qqProfileDisplay.collectedPlaylists] : [];
   const qqProfileCollectionsCount = (qqProfileDisplay?.collectedAlbums.length ?? 0) + (qqProfileDisplay?.collectedPlaylists.length ?? 0);
   const qqProfileFollowsCount = (qqProfileDisplay?.followSingers.length ?? 0) + (qqProfileDisplay?.followUsers.length ?? 0) + (qqProfileDisplay?.fans.length ?? 0);
+  const qqProfileVisibleIssues = qqProfileDisplay?.issues.filter((issue) => !["关注歌手", "关注用户", "粉丝"].includes(issue.section)) ?? [];
   const qqProfileTabs: Array<{ key: QqProfileView; label: string; count: number }> = [
     { key: "overview", label: "概览", count: 0 },
     { key: "playlists", label: "歌单", count: qqProfileAllPlaylists.length },
@@ -9433,11 +9434,11 @@ export default function App() {
                         <span>{activeSearchProviderMode === "qq" ? "当前音乐源" : "未设为当前源"}</span>
                       </div>
 
-                      {qqProfileDisplay.issues.length > 0 ? (
+                      {qqProfileVisibleIssues.length > 0 ? (
                         <div className="qq-profile-issues">
-                          <strong>部分资料未读取</strong>
-                          {qqProfileDisplay.issues.slice(0, 3).map((issue) => (
-                            <span key={`${issue.section}-${issue.message}`}>{issue.section}：{issue.message}</span>
+                          <strong>部分收藏资料暂不可用</strong>
+                          {qqProfileVisibleIssues.slice(0, 3).map((issue) => (
+                            <span key={`${issue.section}-${issue.message}`}>{issue.section} 暂时没有返回数据</span>
                           ))}
                         </div>
                       ) : null}
