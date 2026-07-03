@@ -1446,7 +1446,7 @@ export default function App() {
   const qqMusicAccountDetailLabel = hasQqMusicCookie
     ? loadingQqAccountStatus
       ? "正在同步账号信息"
-      : qqMusicAccountName || "已导入登录态"
+      : qqMusicAccountName ? "账号已同步" : "已导入登录态"
     : "未登录 · 当前仅可搜索";
   const activeSearchProviderMode = settings.providerMode === "demo" ? "netease" : settings.providerMode;
   const activeSearchProviderLabel = searchProviderOptions.find((option) => option.value === activeSearchProviderMode)?.label ?? "网易云";
@@ -7187,7 +7187,7 @@ export default function App() {
                     <span className="platform-account-mark netease" aria-hidden="true">网</span>
                     <div className="platform-account-copy">
                       <strong>网易云音乐</strong>
-                      <span>{accountIsLoggedIn ? `${accountDisplayName} · 网易云资料已同步` : "未登录 · 网易云播放和评论需登录"}</span>
+                      <span>{accountIsLoggedIn ? "账号已同步" : "未登录 · 播放和评论需登录"}</span>
                     </div>
                     <div className="platform-account-badges">
                       {activeSearchProviderMode === "netease" ? <span className="platform-account-current">当前源</span> : null}
