@@ -1313,6 +1313,7 @@ export default function App() {
   const [isPlayerExpanded, setIsPlayerExpanded] = useState(false);
   const [resultSource, setResultSource] = useState<ResultSource>("search");
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [qqProfileOpen, setQqProfileOpen] = useState(false);
   const [qrLoginOpen, setQrLoginOpen] = useState(false);
   const [neteaseLoginMode, setNeteaseLoginMode] = useState<NeteaseLoginMode>("qr");
   const [qrLoginKey, setQrLoginKey] = useState("");
@@ -3302,6 +3303,39 @@ export default function App() {
       fallbackName: profile.displayName,
       fallbackAvatarUrl: profile.avatarUrl
     });
+  }
+
+  function openQqProfile() {
+    if (!hasQqMusicCookie) {
+      openQqCookieLogin();
+      return;
+    }
+
+    setAccountMenuOpen(false);
+    setQqProfileOpen(true);
+  }
+
+  async function openQqPlaylistsFromProfile() {
+    setQqProfileOpen(false);
+    setAccountMenuOpen(false);
+    if (activeSearchProviderMode !== "qq") {
+      await handleSwitchProviderMode("qq");
+    }
+
+    setResults([]);
+    setActivePlaylist(null);
+    setActiveArtist(null);
+    setActiveAlbum(null);
+    setSelectedPlaylistId(null);
+    setResultSource("search");
+    setPlaylistSearchInput("");
+    setPlaylistSearchKeyword("");
+    setPlaylistSongsPage(1);
+    setPlaylistSongsHasMore(false);
+    setPlaylistSongsTotal(0);
+    setSelectedSongIds([]);
+    navigateTopLevel("playlists");
+    void loadUserPlaylists({ silentCookieCheck: true, providerMode: "qq" });
   }
 
   function openProfilePlaylist(playlist: UserProfile["playlists"][number]) {
@@ -7060,7 +7094,10 @@ export default function App() {
                     </div>
                   </div>
                   <p>{hasQqMusicCookie ? "用于 QQ 曲库搜索、试听与下载；高音质仍取决于账号权限和当前版权。" : "导入 y.qq.com Cookie 后，QQ 搜索结果才能尝试会员音源和高品质链接。"}</p>
-                  <div className="platform-account-actions">
+                  <div className="platform-account-actions triple">
+                    <button type="button" role="menuitem" disabled={!hasQqMusicCookie} onClick={openQqProfile}>
+                      个人信息
+                    </button>
                     <button type="button" role="menuitem" onClick={openQqCookieLogin}>
                       {hasQqMusicCookie ? "更新 Cookie" : "导入 Cookie"}
                     </button>
@@ -9193,6 +9230,65 @@ export default function App() {
                   )}
                 </>
               ) : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {qqProfileOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="QQ 音乐个人信息" onClick={() => setQqProfileOpen(false)}>
+          <section className="user-profile-card qq-profile-card" onClick={(event) => event.stopPropagation()}>
+            <div className="user-profile-hero qq-profile-hero">
+              <div className="user-profile-shade" />
+              <button type="button" className="modal-close user-profile-close" onClick={() => setQqProfileOpen(false)} aria-label="关闭 QQ 音乐个人信息">
+                ×
+              </button>
+              <div className="user-profile-identity">
+                <div className="user-profile-avatar qq-profile-avatar">
+                  {qqAccountStatus?.avatarUrl ? <img src={qqAccountStatus.avatarUrl} alt={qqMusicAccountName || "QQ 音乐"} /> : <span>Q</span>}
+                </div>
+                <div className="user-profile-title">
+                  <span>QQ 音乐用户</span>
+                  <h2>{qqMusicAccountName || "QQ 音乐"}</h2>
+                </div>
+              </div>
+            </div>
+
+            <div className="user-profile-body">
+              <p className="user-profile-signature">{qqAccountStatus?.message || "QQ 音乐账号信息已同步。"}</p>
+              <div className="user-profile-stats qq-profile-stats">
+                <div>
+                  <strong>{qqAccountStatus?.uin ?? "--"}</strong>
+                  <span>账号</span>
+                </div>
+                <div>
+                  <strong>{qqMusicPlatformStatusLabel}</strong>
+                  <span>会员</span>
+                </div>
+                <div>
+                  <strong>{hasQqMusicCookie ? "已导入" : "未导入"}</strong>
+                  <span>Cookie</span>
+                </div>
+                <div>
+                  <strong>QQ</strong>
+                  <span>曲库</span>
+                </div>
+              </div>
+
+              <div className="user-profile-meta">
+                <span>{qqAccountStatus?.vipType ? `VIP ${qqAccountStatus.vipType}` : "普通账号"}</span>
+                <span>{activeSearchProviderMode === "qq" ? "当前音乐源" : "未设为当前源"}</span>
+                {loadingQqAccountStatus ? <span>正在同步</span> : null}
+              </div>
+
+              <div className="qq-profile-actions">
+                <button type="button" className="secondary-button" onClick={() => void openQqPlaylistsFromProfile()}>
+                  我的歌单
+                </button>
+                <button type="button" className="secondary-button" onClick={openQqCookieLogin}>
+                  更新 Cookie
+                </button>
+              </div>
             </div>
           </section>
         </div>
