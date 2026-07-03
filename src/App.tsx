@@ -3454,6 +3454,11 @@ export default function App() {
     return downloadStatus === "vip" || downloadStatus === "copyright" || downloadStatus === "restricted" ? "Availability" : "Download Quality";
   }
 
+  function canReturnToDownloadMethodPicker(issue: DownloadIssueDialog) {
+    const downloadStatus = issue.song.availability?.download.status;
+    return downloadStatus !== "vip" && downloadStatus !== "copyright" && downloadStatus !== "restricted";
+  }
+
   function isDownloadProgressActive(progress: DownloadProgressDialog | null) {
     return progress?.status === "preparing" || progress?.status === "downloading";
   }
@@ -3782,6 +3787,15 @@ export default function App() {
 
     setDownloadIssue(null);
     openDownloadMethodPicker(issue.song, "standard");
+  }
+
+  function handleReturnToDownloadMethodFromIssue() {
+    const issue = downloadIssue;
+    if (!issue || !canReturnToDownloadMethodPicker(issue)) {
+      return;
+    }
+
+    openDownloadMethodPicker(issue.song, issue.attemptedLevel);
   }
 
   async function handleSaveTaskFile(task: DownloadTask) {
@@ -9499,14 +9513,19 @@ export default function App() {
             <p className="download-issue-message">{downloadIssue.message}</p>
 
             <div className="download-issue-actions">
-              <button type="button" className="secondary-button" onClick={() => setDownloadIssue(null)}>
-                关闭
-              </button>
+              {canReturnToDownloadMethodPicker(downloadIssue) ? (
+                <button type="button" className="primary-button" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={handleReturnToDownloadMethodFromIssue}>
+                  返回选择方案
+                </button>
+              ) : null}
               {isDowngradedQualityError(downloadIssue.message) && downloadIssue.attemptedLevel !== "standard" ? (
-                <button type="button" className="primary-button" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => void handleDownloadStandardFromIssue()}>
+                <button type="button" className={canReturnToDownloadMethodPicker(downloadIssue) ? "secondary-button" : "primary-button"} disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => void handleDownloadStandardFromIssue()}>
                   下载 128K
                 </button>
               ) : null}
+              <button type="button" className="secondary-button" onClick={() => setDownloadIssue(null)}>
+                关闭
+              </button>
             </div>
           </section>
         </div>

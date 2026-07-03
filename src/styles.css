@@ -1855,8 +1855,13 @@ input[type="range"] {
 
 .download-issue-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.download-issue-actions button {
+  min-width: 96px;
 }
 
 .download-method-options {
