@@ -330,6 +330,36 @@ function sanitizeFileName(input: string) {
     .trim();
 }
 
+function buildDownloadFileBaseName(title: string, artist: string) {
+  const baseName = [title, artist]
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .join(" - ");
+
+  return sanitizeFileName(baseName) || "TrackVault 下载";
+}
+
+async function getAvailableOutputPath(outputDir: string, baseName: string, extension: string) {
+  const safeExtension = sanitizeFileName(extension.replace(/^\./, "")) || "mp3";
+
+  for (let index = 0; index < 1000; index += 1) {
+    const suffix = index === 0 ? "" : ` (${index + 1})`;
+    const outputPath = path.join(outputDir, `${baseName}${suffix}.${safeExtension}`);
+
+    try {
+      await fsPromises.access(outputPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return outputPath;
+      }
+
+      throw error;
+    }
+  }
+
+  return path.join(outputDir, `${baseName}-${Date.now()}.${safeExtension}`);
+}
+
 function resolveQualityLevel(level: DownloadQualityLevel): SoundQualityType {
   return level as SoundQualityType;
 }
@@ -707,7 +737,7 @@ export async function resolveDirectDownload(song: Song, level: DownloadQualityLe
   const plan = await buildMediaCredentialPlan({ userCookieOverride });
   const resolvedSong = await resolveSongDownloadWithPlan(song, level, plan);
   const extension = getFileExtension(resolvedSong.url, null, resolvedSong.type);
-  const safeFileName = sanitizeFileName(`${song.title}-${song.artist}-${song.id}`);
+  const safeFileName = buildDownloadFileBaseName(song.title, song.artist);
 
   return {
     url: resolvedSong.url,
@@ -789,8 +819,8 @@ async function downloadSongFile(task: DownloadTask, song: Song) {
     resolvedSong.type
   );
   const contentType = response.headers.get("content-type");
-  const safeFileName = sanitizeFileName(`${task.title}-${task.artist}-${task.songId}`);
-  const outputPath = path.join(outputDir, `${safeFileName}.${extension}`);
+  const safeFileName = buildDownloadFileBaseName(task.title, task.artist);
+  const outputPath = await getAvailableOutputPath(outputDir, safeFileName, extension);
   const writeStream = fs.createWriteStream(outputPath);
 
   let receivedBytes = 0;

@@ -215,6 +215,9 @@ type DownloadProgressDialog = {
   title: string;
   detail: string;
   progress: number;
+  receivedBytes?: number;
+  fileSizeBytes?: number;
+  speedBytesPerSecond?: number;
   indeterminate: boolean;
   status: "preparing" | "downloading" | "done" | "failed";
 };
@@ -239,6 +242,8 @@ type BrowserDownloadTask = {
   detail: string;
   fileName?: string;
   fileSizeBytes?: number;
+  receivedBytes?: number;
+  speedBytesPerSecond?: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -667,6 +672,8 @@ function normalizeBrowserDownloadTask(rawTask: unknown): BrowserDownloadTask | n
     detail: status === "failed" && loadedStatus !== "failed" ? "页面刷新后下载中断，请重新下载。" : typeof task.detail === "string" ? task.detail : "",
     fileName: typeof task.fileName === "string" ? task.fileName : undefined,
     fileSizeBytes: Number.isFinite(task.fileSizeBytes) ? Number(task.fileSizeBytes) : undefined,
+    receivedBytes: Number.isFinite(task.receivedBytes) ? Number(task.receivedBytes) : undefined,
+    speedBytesPerSecond: Number.isFinite(task.speedBytesPerSecond) ? Number(task.speedBytesPerSecond) : undefined,
     createdAt: typeof task.createdAt === "string" ? task.createdAt : now,
     updatedAt: typeof task.updatedAt === "string" ? task.updatedAt : now
   };
@@ -748,11 +755,43 @@ function formatPlaybackTime(seconds: number) {
 }
 
 function formatFileSize(size?: number) {
-  if (!size || size <= 0) {
+  if (size === undefined || size < 0) {
     return "--";
   }
 
-  return `${(size / 1024 / 1024).toFixed(2)} MB`;
+  if (size >= 1024 * 1024) {
+    return `${(size / 1024 / 1024).toFixed(2)} MB`;
+  }
+
+  if (size >= 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+
+  return `${Math.round(size)} B`;
+}
+
+function formatTransferSpeed(speed?: number) {
+  if (!speed || speed <= 0) {
+    return "--";
+  }
+
+  return `${formatFileSize(speed)}/s`;
+}
+
+function formatDownloadSizeProgress(receivedBytes?: number, totalBytes?: number) {
+  if (receivedBytes !== undefined && totalBytes !== undefined) {
+    return `${formatFileSize(receivedBytes)} / ${formatFileSize(totalBytes)}`;
+  }
+
+  if (totalBytes !== undefined) {
+    return formatFileSize(totalBytes);
+  }
+
+  if (receivedBytes !== undefined) {
+    return formatFileSize(receivedBytes);
+  }
+
+  return "--";
 }
 
 function formatDownloadFileName(path?: string) {
@@ -3554,6 +3593,7 @@ export default function App() {
         title: `备用下载：${song.title}`,
         detail: fallbackDetail,
         progress: 0,
+        receivedBytes: 0,
         indeterminate: true,
         status: "preparing"
       });
@@ -3563,32 +3603,46 @@ export default function App() {
           patchBrowserDownloadTask(fallbackTaskId, { detail: status, status: "downloading" });
         },
         onReady: ({ filename, sizeBytes }) => {
+          setDownloadProgress((current) => current ? { ...current, fileSizeBytes: sizeBytes, detail: "服务器已返回文件，正在保存到本机。" } : current);
           patchBrowserDownloadTask(fallbackTaskId, { fileName: filename, fileSizeBytes: sizeBytes });
         },
-        onProgress: (progress) => {
+        onProgress: ({ progress, receivedBytes, totalBytes, speedBytesPerSecond }) => {
+          const taskProgressPatch: Partial<BrowserDownloadTask> = {
+            progress,
+            receivedBytes,
+            speedBytesPerSecond,
+            status: progress >= 100 ? "done" : "downloading",
+            detail: progress >= 100 ? "文件已准备完成，浏览器正在保存到本机。" : "正在传输备用下载文件。"
+          };
+          if (totalBytes) {
+            taskProgressPatch.fileSizeBytes = totalBytes;
+          }
+
           setDownloadProgress((current) => current ? {
             ...current,
             progress,
+            receivedBytes,
+            fileSizeBytes: totalBytes ?? current.fileSizeBytes,
+            speedBytesPerSecond,
             indeterminate: false,
             status: progress >= 100 ? "done" : "downloading",
             detail: progress >= 100 ? "文件已准备完成，浏览器正在保存到本机。" : "正在传输备用下载文件。"
           } : current);
-          patchBrowserDownloadTask(fallbackTaskId, {
-            progress,
-            status: progress >= 100 ? "done" : "downloading",
-            detail: progress >= 100 ? "文件已准备完成，浏览器正在保存到本机。" : "正在传输备用下载文件。"
-          });
+          patchBrowserDownloadTask(fallbackTaskId, taskProgressPatch);
         }
       });
       setDownloadProgress((current) => current ? {
         ...current,
         progress: 100,
+        receivedBytes: current.fileSizeBytes ?? current.receivedBytes,
+        speedBytesPerSecond: undefined,
         indeterminate: false,
         status: "done",
         detail: "已开始保存到本机，可以在浏览器下载列表中查看。"
       } : current);
       patchBrowserDownloadTask(fallbackTaskId, {
         progress: 100,
+        speedBytesPerSecond: undefined,
         status: "done",
         detail: "已开始保存到本机，可以在浏览器下载列表中查看。"
       });
@@ -3597,6 +3651,7 @@ export default function App() {
       const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : "备用下载失败";
       setDownloadProgress((current) => current ? {
         ...current,
+        speedBytesPerSecond: undefined,
         indeterminate: false,
         status: "failed",
         detail: fallbackMessage
@@ -3606,6 +3661,7 @@ export default function App() {
         title: `备用下载：${song.title}`,
         detail: fallbackMessage,
         progress: 0,
+        speedBytesPerSecond: undefined,
         indeterminate: false,
         status: "failed"
       });
@@ -8083,6 +8139,18 @@ export default function App() {
                           </div>
                         </div>
                         <div className="download-task-meta">
+                          {task.mode === "server" && (task.status === "preparing" || task.status === "downloading") ? (
+                            <>
+                              <span>
+                                <em>速度</em>
+                                <strong>{formatTransferSpeed(task.speedBytesPerSecond)}</strong>
+                              </span>
+                              <span>
+                                <em>大小</em>
+                                <strong>{formatDownloadSizeProgress(task.receivedBytes, task.fileSizeBytes)}</strong>
+                              </span>
+                            </>
+                          ) : null}
                           {task.status === "done" ? (
                             <>
                               <span>
@@ -9608,6 +9676,16 @@ export default function App() {
               </div>
               <div className="progress-track">
                 <div className="progress-fill" style={{ width: downloadProgress.indeterminate ? "42%" : `${downloadProgress.progress}%` }} />
+              </div>
+              <div className="download-progress-stats">
+                <span>
+                  <em>速度</em>
+                  <strong>{isDownloadProgressActive(downloadProgress) ? formatTransferSpeed(downloadProgress.speedBytesPerSecond) : "--"}</strong>
+                </span>
+                <span>
+                  <em>大小</em>
+                  <strong>{formatDownloadSizeProgress(downloadProgress.receivedBytes, downloadProgress.fileSizeBytes)}</strong>
+                </span>
               </div>
             </div>
 

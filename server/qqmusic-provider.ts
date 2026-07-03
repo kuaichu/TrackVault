@@ -1000,10 +1000,13 @@ export async function resolveQqSongStream(song: Song, level: DownloadQualityLeve
 
 export async function resolveQqDirectDownload(song: Song, level: DownloadQualityLevel) {
   const resolved = await resolveQqSongUrl(song, level);
-  const safeTitle = `${song.title}-${song.artist}-${song.id}`
+  const safeTitle = [song.title, song.artist]
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .join(" - ")
     .replace(/[\\/:*?"<>|]/g, "-")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim() || "TrackVault 下载";
 
   return {
     url: resolved.url,

@@ -106,6 +106,13 @@ export type DirectDownloadInfo = {
   time?: number | null;
 };
 
+export type ServerDownloadProgressInfo = {
+  progress: number;
+  receivedBytes: number;
+  totalBytes?: number;
+  speedBytesPerSecond?: number;
+};
+
 type DownloadCoverData = {
   mimeType: string;
   bytes: Uint8Array;
@@ -675,7 +682,7 @@ export async function startRawDirectSongDownload(song: Song, level: DownloadQual
 export async function startServerSongDownload(
   song: Song,
   level: DownloadQualityLevel,
-  callbacks: { onStatus?: (status: string) => void; onProgress?: (progress: number) => void; onReady?: (info: { filename: string; sizeBytes?: number }) => void } = {}
+  callbacks: { onStatus?: (status: string) => void; onProgress?: (info: ServerDownloadProgressInfo) => void; onReady?: (info: { filename: string; sizeBytes?: number }) => void } = {}
 ) {
   const response = await apiFetch(getServerDownloadUrl(song, level));
   if (!response.ok) {
@@ -691,7 +698,7 @@ export async function startServerSongDownload(
   if (!response.body || !contentLength) {
     const blob = await response.blob();
     callbacks.onReady?.({ filename, sizeBytes: blob.size });
-    callbacks.onProgress?.(100);
+    callbacks.onProgress?.({ progress: 100, receivedBytes: blob.size, totalBytes: blob.size });
     saveBlob(blob, filename);
     return;
   }
@@ -701,6 +708,7 @@ export async function startServerSongDownload(
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let receivedBytes = 0;
+  const startedAt = performance.now();
 
   while (true) {
     const { done, value } = await reader.read();
@@ -711,12 +719,24 @@ export async function startServerSongDownload(
     if (value) {
       chunks.push(value);
       receivedBytes += value.length;
-      callbacks.onProgress?.(Math.max(1, Math.min(99, Math.round((receivedBytes / contentLength) * 100))));
+      const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.001);
+      callbacks.onProgress?.({
+        progress: Math.max(1, Math.min(99, Math.round((receivedBytes / contentLength) * 100))),
+        receivedBytes,
+        totalBytes: contentLength,
+        speedBytesPerSecond: receivedBytes / elapsedSeconds
+      });
     }
   }
 
   const blob = new Blob(chunks, { type: response.headers.get("content-type") ?? "application/octet-stream" });
-  callbacks.onProgress?.(100);
+  const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.001);
+  callbacks.onProgress?.({
+    progress: 100,
+    receivedBytes,
+    totalBytes: contentLength,
+    speedBytesPerSecond: receivedBytes / elapsedSeconds
+  });
   saveBlob(blob, filename);
 }
 
