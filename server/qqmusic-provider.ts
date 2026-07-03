@@ -1069,7 +1069,7 @@ function firstTruthyVip(input: unknown, visited = new Set<unknown>()): number | 
 function toQqAccountStatus(cookieObj: Record<string, string>, detail: QqProfileDetail | null, message: string): QqMusicAccountStatus {
   const rawDisplayName = firstStringByKeys(detail, ["nick", "nickname", "hostname", "creatorName", "name"]);
   const displayName = isUsefulQqDisplayName(rawDisplayName) ? rawDisplayName! : cookieObj.uin ? `QQ ${cookieObj.uin}` : null;
-  const avatarUrl = getQqImageUrl(firstStringByKeys(detail, ["headurl", "headUrl", "avatar", "avatarUrl", "pic", "logo"]));
+  const avatarUrl = getQqImageUrl(firstStringByKeys(detail, ["headpic", "headPic", "headurl", "headUrl", "avatar", "avatarUrl", "pic", "logo"]));
   const vipType = firstTruthyVip(detail);
 
   return {
