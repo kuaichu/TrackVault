@@ -1431,7 +1431,8 @@ export default function App() {
       : accountDisplayName;
   const activeIdentityAvatarUrl = activeSearchProviderMode === "qq" ? qqAccountStatus?.avatarUrl : accountAvatarUrl;
   const activeIdentityFallback = activeSearchProviderMode === "qq" ? "Q" : activeSearchProviderMode === "aggregate" ? "T" : activeIdentityName.slice(0, 1);
-  const activeIdentitySubtitle = activeSearchProviderMode === "aggregate" ? "当前音乐源 · 聚合" : `当前音乐源 · ${activeSearchProviderLabel}`;
+  const neteaseSourceActive = activeSearchProviderMode === "netease" || activeSearchProviderMode === "aggregate";
+  const qqSourceActive = activeSearchProviderMode === "qq" || activeSearchProviderMode === "aggregate";
   const isQqDataMode = activeSearchProviderMode === "qq";
   const playlistProviderLabel = isQqDataMode ? "QQ 音乐" : "网易云";
   const hasPlaylistCredential = isQqDataMode ? hasQqMusicCookie : Boolean(settings.neteaseCookie.trim());
@@ -6976,14 +6977,13 @@ export default function App() {
               )}
               <div className="identity-copy">
                 <strong>{activeIdentityName}</strong>
-                <span>{activeIdentitySubtitle}</span>
               </div>
               <div className="identity-platforms" aria-label="平台账号状态">
-                <span className={accountIsLoggedIn ? "identity-platform-chip active" : "identity-platform-chip"}>
+                <span className={["identity-platform-chip", accountIsLoggedIn ? "active" : "", neteaseSourceActive ? "current-source" : ""].filter(Boolean).join(" ")}>
                   <b>网易</b>
                   <em>{neteasePlatformStatusLabel}</em>
                 </span>
-                <span className={hasQqMusicCookie ? "identity-platform-chip active" : "identity-platform-chip"}>
+                <span className={["identity-platform-chip", hasQqMusicCookie ? "active" : "", qqSourceActive ? "current-source" : ""].filter(Boolean).join(" ")}>
                   <b>QQ</b>
                   <em>{qqMusicSidebarStatusLabel}</em>
                 </span>
