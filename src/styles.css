@@ -9053,6 +9053,9 @@ button.quick-chip:active,
   min-height: 0;
   overflow: auto;
   padding: 18px;
+  display: grid;
+  align-content: start;
+  gap: 16px;
 }
 
 .transfer-grid {
@@ -9077,14 +9080,114 @@ button.quick-chip:active,
   margin: 0;
 }
 
+.transfer-main-layout {
+  display: grid;
+  gap: 14px;
+  max-width: 1240px;
+  width: 100%;
+}
+
+.transfer-main-card {
+  gap: 18px;
+}
+
+.transfer-flow-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 4px;
+}
+
+.transfer-flow-head > div {
+  min-width: 0;
+}
+
+.transfer-flow-head > strong {
+  flex: 0 0 auto;
+  padding: 7px 11px;
+  border: 1px solid rgba(255, 180, 93, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 180, 93, 0.08);
+  color: #ffd7a4;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.transfer-flow-section {
+  display: grid;
+  gap: 12px;
+  padding-top: 15px;
+  border-top: 1px solid rgba(255, 255, 255, 0.065);
+}
+
+.transfer-step-label {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+.transfer-step-label.compact {
+  align-items: start;
+}
+
+.transfer-step-label b {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(255, 180, 93, 0.12);
+  color: #ffd7a4;
+  font-size: 0.82rem;
+}
+
+.transfer-step-label div {
+  min-width: 0;
+}
+
+.transfer-step-label strong,
+.transfer-step-label small {
+  display: block;
+}
+
+.transfer-step-label strong {
+  color: var(--text-primary);
+  font-size: 0.98rem;
+}
+
+.transfer-step-label small {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.transfer-subtle-toggle {
+  justify-self: start;
+  border: 0;
+  background: transparent;
+  color: #ffcb8f;
+  padding: 0;
+  font-size: 0.84rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.transfer-subtle-toggle:hover {
+  color: #ffe0b5;
+}
+
+.transfer-manual-id {
+  max-width: 520px;
+}
+
 .transfer-song-picker,
 .transfer-target-panel {
   display: grid;
   gap: 12px;
-  padding: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 16px;
-  background: rgba(10, 15, 24, 0.42);
 }
 
 .transfer-song-picker-head,
@@ -9113,6 +9216,30 @@ button.quick-chip:active,
 
 .transfer-helper-text {
   margin: 0;
+}
+
+.transfer-empty-state {
+  display: grid;
+  gap: 4px;
+  padding: 16px;
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.transfer-empty-state strong,
+.transfer-empty-state span {
+  display: block;
+}
+
+.transfer-empty-state strong {
+  color: var(--text-primary);
+  font-size: 0.92rem;
+}
+
+.transfer-empty-state span {
+  color: var(--text-secondary);
+  font-size: 0.84rem;
 }
 
 .transfer-song-list {
@@ -9208,6 +9335,58 @@ button.quick-chip:active,
 
 .transfer-target-mode button.active {
   box-shadow: inset 0 0 0 1px rgba(255, 211, 111, 0.16);
+}
+
+.transfer-advanced-block {
+  display: grid;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.transfer-tools-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  max-width: 1240px;
+  width: 100%;
+}
+
+.transfer-tools-head > div:first-child {
+  min-width: 0;
+}
+
+.transfer-tools-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(96px, 1fr));
+  gap: 6px;
+  padding: 4px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.transfer-tools-tabs button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.transfer-tools-tabs button:hover,
+.transfer-tools-tabs button.active {
+  background: rgba(255, 255, 255, 0.095);
+  color: var(--text-primary);
+}
+
+.transfer-tool-card {
+  max-width: 1240px;
+  width: 100%;
+}
+
+.transfer-tool-card.hidden {
+  display: none;
 }
 
 .transfer-report-card {
@@ -9450,6 +9629,18 @@ button.quick-chip:active,
   .transfer-song-picker-head {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .transfer-flow-head,
+  .transfer-tools-head {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .transfer-flow-head > strong,
+  .transfer-tools-tabs {
+    justify-self: start;
   }
 }
 
