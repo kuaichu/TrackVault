@@ -393,6 +393,39 @@ input[type="range"] {
   color: #ffd7a4;
 }
 
+.identity-platform-chip.current-source:not(.primary-vip) {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.035)),
+    rgba(17, 27, 42, 0.58);
+  box-shadow:
+    inset 3px 0 0 rgba(255, 180, 93, 0.42),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.075);
+}
+
+.identity-platform-chip.current-source:not(.primary-vip) b {
+  color: rgba(238, 245, 255, 0.9);
+}
+
+.identity-platform-chip.current-source:not(.primary-vip) em {
+  color: rgba(218, 228, 242, 0.74);
+}
+
+.identity-platform-chip.primary-vip.current-source {
+  background:
+    linear-gradient(135deg, rgba(255, 205, 126, 0.36), rgba(255, 156, 75, 0.16)),
+    rgba(255, 169, 82, 0.18);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 219, 146, 0.5),
+    inset 3px 0 0 rgba(255, 227, 160, 0.68),
+    0 10px 24px rgba(255, 168, 76, 0.14);
+}
+
+.identity-platform-chip.primary-vip.current-source b,
+.identity-platform-chip.primary-vip.current-source em {
+  color: #ffe8bf;
+  font-weight: 800;
+}
+
 .identity-platform-chip.muted {
   background: rgba(255, 255, 255, 0.04);
   opacity: 0.84;
