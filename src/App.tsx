@@ -1252,6 +1252,7 @@ export default function App() {
   const [transferExportFormat, setTransferExportFormat] = useState<TransferExportFormat>("markdown");
   const [transferExportContent, setTransferExportContent] = useState("");
   const [transferNeteaseTargetMode, setTransferNeteaseTargetMode] = useState<"create" | "existing">("create");
+  const [transferExecutionMode, setTransferExecutionMode] = useState<"report" | "write">("write");
   const [transferTargetPlaylistId, setTransferTargetPlaylistId] = useState("");
   const [transferImportName, setTransferImportName] = useState("转换后的歌单");
   const [transferImportResult, setTransferImportResult] = useState<NeteaseTransferImportResult | null>(null);
@@ -2379,13 +2380,26 @@ export default function App() {
     setTransferTargetProvider(provider);
     setTransferImportResult(null);
     if (provider === "netease") {
+      setTransferExecutionMode("write");
       setTransferNeteaseTargetMode("create");
       if (transferNeteaseTargetPlaylists.length === 0 && !loadingTransferNeteaseTargetPlaylists) {
         void loadTransferNeteaseTargetPlaylists();
       }
     } else {
+      setTransferExecutionMode("report");
       setTransferTargetPlaylistId("");
     }
+  }
+
+  function focusTransferManualIdInput() {
+    setTransferManualIdOpen(true);
+    window.setTimeout(() => {
+      const input = document.getElementById("transfer-manual-playlist-id");
+      input?.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (input instanceof HTMLInputElement) {
+        input.focus();
+      }
+    }, 0);
   }
 
   function handleTransferPlaylistSelect(playlistId: string) {
@@ -2437,6 +2451,9 @@ export default function App() {
           setTransferImportResult(null);
           setTransferLoading(false);
           setMessage(`歌单互转完成：${job.result.summary.matched} 首匹配，${job.result.summary.manualReview} 首待确认，${job.result.summary.notFound} 首未找到。`);
+          if (transferExecutionMode === "write" && job.result.targetProvider === "netease" && job.result.summary.matched > 0) {
+            await importTransferJobToNetease(job.result);
+          }
           return;
         }
 
@@ -2478,6 +2495,11 @@ export default function App() {
 
     if ((sourceProvider === "text" || sourceProvider === "csv") && !transferTextInput.trim()) {
       setMessage("请先粘贴文字歌单或 CSV 内容。");
+      return;
+    }
+
+    if (targetProvider === "netease" && transferExecutionMode === "write" && transferNeteaseTargetMode === "existing" && !transferTargetPlaylistId) {
+      setMessage("请选择要写入的网易云目标歌单，或切回创建新歌单。");
       return;
     }
 
@@ -2530,11 +2552,7 @@ export default function App() {
     }
   }
 
-  async function handleImportTransferToNetease() {
-    if (!transferJob) {
-      return;
-    }
-
+  async function importTransferJobToNetease(job: PlaylistTransferJob) {
     setTransferImporting(true);
     setMessage(transferNeteaseTargetMode === "existing" ? "正在导入到网易云已有歌单" : "正在创建网易云目标歌单");
 
@@ -2545,8 +2563,9 @@ export default function App() {
         return;
       }
 
-      const result = await importPlaylistTransferToNetease(transferJob.id, {
-        name: transferImportName.trim() || `${transferJob.playlistName} 转换结果`,
+      const importName = transferImportName.trim();
+      const result = await importPlaylistTransferToNetease(job.id, {
+        name: !importName || importName === "转换后的歌单" ? `${job.playlistName} 转换结果` : importName,
         playlistId: transferNeteaseTargetMode === "existing" ? transferTargetPlaylistId : undefined
       });
       setTransferImportResult(result);
@@ -2561,6 +2580,14 @@ export default function App() {
     } finally {
       setTransferImporting(false);
     }
+  }
+
+  async function handleImportTransferToNetease() {
+    if (!transferJob) {
+      return;
+    }
+
+    await importTransferJobToNetease(transferJob);
   }
 
   function downloadExportedContent(exported: TransferExportResult) {
@@ -7793,6 +7820,7 @@ export default function App() {
                           <label className="transfer-manual-id">
                             <span>手动歌单 ID</span>
                             <input
+                              id="transfer-manual-playlist-id"
                               value={transferPlaylistId}
                               onChange={(event) => {
                                 setTransferPlaylistId(event.target.value);
@@ -7874,8 +7902,13 @@ export default function App() {
                         <div className="transfer-empty-state">
                           <strong>{loadingTransferSourceSongs ? "正在读取歌曲" : "还没有来源歌曲"}</strong>
                           <span>
-                            {loadingTransferSourceSongs ? "读取完成后会自动全选。" : "先在上方选择一个歌单，或展开手动 ID 输入。"}
+                            {loadingTransferSourceSongs ? "读取完成后会自动全选。" : "先在上方选择一个歌单；如果列表没有读到，可以手动输入公开歌单 ID。"}
                           </span>
+                          {!loadingTransferSourceSongs && transferSourceProvider === "qq" ? (
+                            <button type="button" onClick={focusTransferManualIdInput}>
+                              手动输入歌单 ID
+                            </button>
+                          ) : null}
                         </div>
                       )}
                     </div>
@@ -7898,12 +7931,30 @@ export default function App() {
                           <option value="text">仅导出文字歌单</option>
                         </select>
                       </label>
-                      <label>
+                      <div className="transfer-option-field">
                         <span>执行方式</span>
-                        <input value={transferTargetProvider === "netease" ? "生成报告后可直接写入网易云歌单" : "仅生成匹配报告/导出内容"} readOnly />
-                      </label>
+                        <div className="transfer-option-group">
+                          <button
+                            type="button"
+                            className={transferExecutionMode === "report" ? "active" : ""}
+                            onClick={() => setTransferExecutionMode("report")}
+                          >
+                            <strong>仅生成匹配报告</strong>
+                            <small>不写入任何歌单</small>
+                          </button>
+                          <button
+                            type="button"
+                            className={transferExecutionMode === "write" ? "active" : ""}
+                            disabled={transferTargetProvider !== "netease"}
+                            onClick={() => setTransferExecutionMode("write")}
+                          >
+                            <strong>匹配后写入网易云</strong>
+                            <small>{transferTargetProvider === "netease" ? "自动创建或导入目标歌单" : "仅网易云目标可用"}</small>
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                    {transferTargetProvider === "netease" ? (
+                    {transferTargetProvider === "netease" && transferExecutionMode === "write" ? (
                       <>
                         <div className="transfer-target-mode">
                           <button
@@ -7951,6 +8002,12 @@ export default function App() {
                         )}
                       </>
                     ) : null}
+                    {transferExecutionMode === "report" ? (
+                      <div className="transfer-empty-state compact">
+                        <strong>本次只生成匹配报告</strong>
+                        <span>不会创建歌单，也不会修改任何已有歌单。匹配完成后仍可在结果区手动导入。</span>
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="transfer-advanced-block">
@@ -7972,7 +8029,7 @@ export default function App() {
 
                   <div className="form-actions">
                     <button type="button" className="primary-button wide" disabled={transferLoading} onClick={() => void handleCreateTransferJob()}>
-                      {transferLoading ? "转换中" : "开始转换"}
+                      {transferLoading ? "转换中" : transferExecutionMode === "write" && transferTargetProvider === "netease" ? "开始转换并写入" : "开始转换"}
                     </button>
                   </div>
                   {transferRunJob ? (
@@ -8419,8 +8476,8 @@ export default function App() {
                             </select>
                           </label>
                         )}
-                        <button type="button" className="primary-button" disabled={transferImporting} onClick={() => void handleImportTransferToNetease()}>
-                          {transferImporting ? "导入中" : transferNeteaseTargetMode === "existing" ? "导入已有歌单" : "创建网易云歌单"}
+                        <button type="button" className="primary-button" disabled={transferImporting || Boolean(transferImportResult)} onClick={() => void handleImportTransferToNetease()}>
+                          {transferImporting ? "导入中" : transferImportResult ? "已写入" : transferNeteaseTargetMode === "existing" ? "导入已有歌单" : "创建网易云歌单"}
                         </button>
                         {transferImportResult ? (
                           <p>已导入 {transferImportResult.addedCount} 首，跳过 {transferImportResult.skippedCount} 首。歌单：{transferImportResult.playlistName ?? transferImportResult.playlistId}</p>

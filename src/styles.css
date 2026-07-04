@@ -9227,6 +9227,10 @@ button.quick-chip:active,
   background: rgba(255, 255, 255, 0.025);
 }
 
+.transfer-empty-state.compact {
+  padding: 13px 14px;
+}
+
 .transfer-empty-state strong,
 .transfer-empty-state span {
   display: block;
@@ -9240,6 +9244,24 @@ button.quick-chip:active,
 .transfer-empty-state span {
   color: var(--text-secondary);
   font-size: 0.84rem;
+}
+
+.transfer-empty-state button {
+  justify-self: start;
+  margin-top: 8px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 180, 93, 0.12);
+  color: #ffd7a4;
+  padding: 7px 11px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.transfer-empty-state button:hover {
+  background: rgba(255, 180, 93, 0.18);
+  color: #ffe6c4;
 }
 
 .transfer-song-list {
@@ -9316,25 +9338,75 @@ button.quick-chip:active,
   background: rgba(255, 255, 255, 0.045);
 }
 
+.transfer-option-field {
+  display: grid;
+  gap: 7px;
+}
+
+.transfer-option-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.transfer-option-group button,
 .transfer-target-mode button {
   min-height: 36px;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 11px;
   background: transparent;
   color: var(--text-secondary);
   font-weight: 800;
   cursor: pointer;
-  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
 
+.transfer-option-group button {
+  display: grid;
+  gap: 4px;
+  align-content: center;
+  min-height: 58px;
+  padding: 9px 11px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.transfer-option-group strong,
+.transfer-option-group small {
+  display: block;
+  min-width: 0;
+}
+
+.transfer-option-group strong {
+  color: inherit;
+  font-size: 0.9rem;
+}
+
+.transfer-option-group small {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.transfer-option-group button:hover:not(:disabled),
 .transfer-target-mode button:hover,
+.transfer-option-group button.active,
 .transfer-target-mode button.active {
-  background: rgba(255, 255, 255, 0.095);
+  border-color: rgba(255, 180, 93, 0.32);
+  background: rgba(255, 180, 93, 0.13);
   color: var(--text-primary);
 }
 
+.transfer-option-group button.active,
 .transfer-target-mode button.active {
-  box-shadow: inset 0 0 0 1px rgba(255, 211, 111, 0.16);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 211, 111, 0.12),
+    0 10px 22px rgba(255, 151, 88, 0.09);
+}
+
+.transfer-option-group button:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
 }
 
 .transfer-advanced-block {
@@ -9619,6 +9691,10 @@ button.quick-chip:active,
   }
 
   .transfer-row {
+    grid-template-columns: 1fr;
+  }
+
+  .transfer-option-group {
     grid-template-columns: 1fr;
   }
 
