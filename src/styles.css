@@ -9167,6 +9167,9 @@ button.quick-chip:active,
 
 .transfer-subtle-toggle {
   justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   border: 0;
   background: transparent;
   color: #ffcb8f;
@@ -9178,6 +9181,24 @@ button.quick-chip:active,
 
 .transfer-subtle-toggle:hover {
   color: #ffe0b5;
+}
+
+.transfer-advanced-toggle {
+  padding: 4px 0;
+}
+
+.transfer-chevron {
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transform-origin: center;
+  transition: transform 160ms ease;
+}
+
+.transfer-advanced-toggle.open .transfer-chevron {
+  transform: rotate(-135deg);
 }
 
 .transfer-manual-id {
@@ -9336,6 +9357,10 @@ button.quick-chip:active,
   padding: 4px;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.045);
+}
+
+.transfer-target-provider-field select {
+  min-height: 58px;
 }
 
 .transfer-option-field {

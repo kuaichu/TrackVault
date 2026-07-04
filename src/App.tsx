@@ -7813,7 +7813,17 @@ export default function App() {
                             {loadingTransferQqPlaylists ? "读取中" : "刷新 QQ 歌单"}
                           </button>
                         </div>
-                        <button type="button" className="transfer-subtle-toggle" onClick={() => setTransferManualIdOpen((open) => !open)}>
+                        <button
+                          type="button"
+                          className="transfer-subtle-toggle"
+                          onClick={() => {
+                            if (transferManualIdOpen) {
+                              setTransferManualIdOpen(false);
+                            } else {
+                              focusTransferManualIdInput();
+                            }
+                          }}
+                        >
                           {transferManualIdOpen ? "收起手动输入" : "找不到歌单？手动输入公开歌单 ID"}
                         </button>
                         {transferManualIdOpen ? (
@@ -7902,13 +7912,8 @@ export default function App() {
                         <div className="transfer-empty-state">
                           <strong>{loadingTransferSourceSongs ? "正在读取歌曲" : "还没有来源歌曲"}</strong>
                           <span>
-                            {loadingTransferSourceSongs ? "读取完成后会自动全选。" : "先在上方选择一个歌单；如果列表没有读到，可以手动输入公开歌单 ID。"}
+                            {loadingTransferSourceSongs ? "读取完成后会自动全选。" : "请先在步骤 1 选择歌单；如果列表没有读到，使用上方手动 ID 入口。"}
                           </span>
-                          {!loadingTransferSourceSongs && transferSourceProvider === "qq" ? (
-                            <button type="button" onClick={focusTransferManualIdInput}>
-                              手动输入歌单 ID
-                            </button>
-                          ) : null}
                         </div>
                       )}
                     </div>
@@ -7923,7 +7928,7 @@ export default function App() {
                       </div>
                     </div>
                     <div className="transfer-grid">
-                      <label>
+                      <label className="transfer-target-provider-field">
                         <span>目标平台</span>
                         <select value={transferTargetProvider} onChange={(event) => handleTransferTargetProviderChange(event.target.value as TransferTargetProvider)}>
                           <option value="netease">网易云</option>
@@ -8011,8 +8016,13 @@ export default function App() {
                   </div>
 
                   <div className="transfer-advanced-block">
-                    <button type="button" className="transfer-subtle-toggle" onClick={() => setTransferAdvancedOpen((open) => !open)}>
-                      {transferAdvancedOpen ? "收起高级选项" : "高级选项"}
+                    <button
+                      type="button"
+                      className={transferAdvancedOpen ? "transfer-subtle-toggle transfer-advanced-toggle open" : "transfer-subtle-toggle transfer-advanced-toggle"}
+                      onClick={() => setTransferAdvancedOpen((open) => !open)}
+                    >
+                      <span>{transferAdvancedOpen ? "收起高级选项" : "高级选项"}</span>
+                      <span className="transfer-chevron" aria-hidden="true" />
                     </button>
                     {transferAdvancedOpen ? (
                       <label className="transfer-check-row">
