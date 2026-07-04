@@ -10056,11 +10056,11 @@ body {
 
 .sidebar-nav-stack {
   display: grid;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   gap: 18px;
   min-height: 0;
   min-width: 0;
-  overflow-y: auto;
+  overflow: visible;
   padding-right: 0;
   margin-right: 0;
   scrollbar-width: none;
