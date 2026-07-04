@@ -139,6 +139,10 @@ function getQualityDisplayMeta(level: DownloadQualityLevel, fallbackLabel: strin
 }
 
 function getQualityCompactLabel(level: DownloadQualityLevel, fallbackLabel: string) {
+  if (level === "standard" || level === "exhigh" || level === "lossless" || level === "hires") {
+    return fallbackLabel;
+  }
+
   return getQualityDisplayMeta(level, fallbackLabel).compact || fallbackLabel;
 }
 
@@ -159,7 +163,7 @@ function renderQualityOptionContent(level: DownloadQualityLevel, label: string) 
       <span className="quality-option-badge" aria-hidden="true">{meta.badge}</span>
       <span className="quality-option-copy">
         <strong>{meta.title}</strong>
-        <small>{meta.detail}</small>
+        <small>{label}{meta.detail ? ` · ${meta.detail}` : ""}</small>
       </span>
     </>
   );
@@ -7802,11 +7806,11 @@ export default function App() {
                 <strong>{activeIdentityName}</strong>
               </div>
               <div className="identity-platforms" aria-label="平台账号状态">
-                <span className={["identity-platform-chip", accountIsLoggedIn ? "active" : "", neteaseSourceActive ? "current-source" : ""].filter(Boolean).join(" ")}>
+                <span className={["identity-platform-chip", accountIsLoggedIn ? "active" : "", accountVipEnabled ? "primary-vip" : "", neteaseSourceActive ? "current-source" : ""].filter(Boolean).join(" ")}>
                   <b>网易</b>
                   <em>{neteasePlatformStatusLabel}</em>
                 </span>
-                <span className={["identity-platform-chip", hasQqMusicCookie ? "active" : "", qqSourceActive ? "current-source" : ""].filter(Boolean).join(" ")}>
+                <span className={["identity-platform-chip", hasQqMusicCookie ? "active" : "", qqAccountVipEnabled ? "primary-vip" : "", qqSourceActive ? "current-source" : ""].filter(Boolean).join(" ")}>
                   <b>QQ</b>
                   <em>{qqMusicSidebarStatusLabel}</em>
                 </span>
