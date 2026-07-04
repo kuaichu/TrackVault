@@ -384,6 +384,7 @@ const LAST_VIEW_STORAGE_KEY = "net-music-down:last-view";
 const BROWSER_DOWNLOAD_TASK_LIMIT = 30;
 const DISCOVER_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const USER_PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
+const PERSONAL_RADIO_PREFETCH_REMAINING = 1;
 const DEFAULT_PLAYER_STATE: PersistedPlayerState = {
   currentTrack: null,
   playQueue: [],
@@ -402,6 +403,19 @@ const discoverFeedLabels: Record<DiscoverFeedKind, string> = {
   radar: "私人雷达",
   roaming: "私人漫游"
 };
+
+function getPersonalRadioKindFromSource(source: string): PersonalRadioKind | null {
+  if (source === "netease-personal-radar") {
+    return "radar";
+  }
+
+  if (source === "netease-personal-roaming") {
+    return "roaming";
+  }
+
+  return null;
+}
+
 const QR_LOGIN_DEFAULT_MESSAGE = "打开网易云音乐 App 扫码登录。";
 const CELLPHONE_LOGIN_DEFAULT_MESSAGE = "请输入手机号并发送验证码登录。";
 const COOKIE_LOGIN_DEFAULT_MESSAGE = "粘贴网页登录后的 MUSIC_U Cookie。";
@@ -1285,6 +1299,7 @@ export default function App() {
   const neteaseAuditJobIdRef = useRef("");
   const playlistCompareJobIdRef = useRef("");
   const viewPersistenceReadyRef = useRef(false);
+  const personalRadioPrefetchRef = useRef<PersonalRadioKind | null>(null);
   const userProfileCacheRef = useRef<Record<string, { profile: UserProfile; cachedAt: number }>>({});
   const playerThemeCacheRef = useRef<Record<string, PlayerTheme>>({});
   const [query, setQuery] = useState("");
@@ -5290,9 +5305,69 @@ export default function App() {
     });
   }
 
+  function appendPersonalRadioSongs(kind: PersonalRadioKind, queue: Song[], songs: Song[]) {
+    const existingIds = new Set(queue.map((song) => song.id));
+    const additions = songs.filter((song) => !existingIds.has(song.id));
+    if (additions.length === 0) {
+      return queue;
+    }
+
+    const nextQueue = [...queue, ...additions].slice(-120);
+    setPlayQueue((current) => {
+      const baseQueue = current.length > 0 ? current : queue;
+      const currentIds = new Set(baseQueue.map((song) => song.id));
+      const currentAdditions = songs.filter((song) => !currentIds.has(song.id));
+      return currentAdditions.length > 0 ? [...baseQueue, ...currentAdditions].slice(-120) : baseQueue;
+    });
+
+    if (mainTab === "search" && navKey === "discover" && resultSource === "discover" && discoverFeedKind === kind) {
+      setResults((current) => {
+        const currentIds = new Set(current.map((song) => song.id));
+        const currentAdditions = songs.filter((song) => !currentIds.has(song.id));
+        return currentAdditions.length > 0 ? [...current, ...currentAdditions].slice(-120) : current;
+      });
+    }
+
+    setQualitySelections((current) => {
+      const nextSelections = { ...current };
+      additions.forEach((song) => {
+        if (!nextSelections[song.id]) {
+          nextSelections[song.id] = getPreferredPlaybackQuality(song);
+        }
+      });
+      return nextSelections;
+    });
+    return nextQueue;
+  }
+
+  async function prefetchPersonalRadioQueueIfNeeded(queue: Song[]) {
+    const kind = currentTrack ? getPersonalRadioKindFromSource(currentTrack.source) : null;
+    if (!kind || playbackMode === "heartbeat" || personalRadioPrefetchRef.current) {
+      return queue;
+    }
+
+    const currentIndex = currentTrack ? queue.findIndex((song) => song.id === currentTrack.id) : -1;
+    const remainingCount = currentIndex >= 0 ? queue.length - currentIndex - 1 : queue.length;
+    if (remainingCount > PERSONAL_RADIO_PREFETCH_REMAINING) {
+      return queue;
+    }
+
+    personalRadioPrefetchRef.current = kind;
+    try {
+      const songs = await getPersonalRadioSongs(kind);
+      return appendPersonalRadioSongs(kind, queue, songs);
+    } catch (error) {
+      setMessage(error instanceof Error ? `${discoverFeedLabels[kind]}续播失败：${error.message}` : `${discoverFeedLabels[kind]}续播失败`);
+      return queue;
+    } finally {
+      personalRadioPrefetchRef.current = null;
+    }
+  }
+
   async function resolveNextPlaybackSong(queue: Song[]) {
     if (playbackMode !== "heartbeat" || !currentTrack) {
-      return getNextSongFromQueue(queue, {
+      const nextQueue = await prefetchPersonalRadioQueueIfNeeded(queue);
+      return getNextSongFromQueue(nextQueue, {
         excludeSongId: currentTrack?.id,
         mode: playbackMode
       });
