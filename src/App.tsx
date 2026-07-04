@@ -118,10 +118,10 @@ const settingsQualityOptions: Array<{ level: DownloadQualityLevel; label: string
 ];
 
 const playbackQualityOptions: Array<{ level: DownloadQualityLevel; label: string }> = [
-  { level: "standard", label: "128K" },
-  { level: "exhigh", label: "320K" },
+  { level: "hires", label: "Hi-Res" },
   { level: "lossless", label: "FLAC" },
-  { level: "hires", label: "Hi-Res" }
+  { level: "exhigh", label: "320K" },
+  { level: "standard", label: "128K" }
 ];
 
 const qualityDisplayMeta: Record<DownloadQualityLevel, { title: string; detail: string; badge: string; compact: string }> = {
@@ -1590,18 +1590,14 @@ export default function App() {
     return getQualityCompactLabel(selectedLevel, getSelectedLabel(song));
   }
 
-  function getPlaybackLevel(song: Song, level = getSelectedLevel(song)): DownloadQualityLevel {
-    return level;
+  function getPlaybackLevel(song: Song, level?: DownloadQualityLevel): DownloadQualityLevel {
+    return level ?? (qualitySelectionTouched[song.id] ? getSelectedLevel(song) : getPreferredPlaybackQuality(song));
   }
 
   function getPlaybackLabel(song: Song) {
-    const selectedLevel = getSelectedLevel(song);
-    const playbackLevel = getPlaybackLevel(song, selectedLevel);
-    const selectedLabel = getSelectedDisplayLabel(song);
+    const playbackLevel = getPlaybackLevel(song);
     const playbackRawLabel = song.availableQualities.find((quality) => quality.level === playbackLevel)?.label ?? getSelectedLabel(song);
-    const playbackLabel = getQualityCompactLabel(playbackLevel, playbackRawLabel);
-
-    return selectedLevel === playbackLevel ? selectedLabel : `${playbackLabel} 播放`;
+    return getQualityCompactLabel(playbackLevel, playbackRawLabel);
   }
 
   function getPreferredPlaybackQuality(song: Song) {
@@ -3406,8 +3402,8 @@ export default function App() {
       playerInteractionStartedRef.current = true;
     }
 
-    const requestedLevel = options.level ?? getSelectedLevel(song);
-    const nextUrl = getStreamUrl(song, getPlaybackLevel(song, requestedLevel), parseDurationSeconds(song.duration));
+    const requestedLevel = options.level ?? getPlaybackLevel(song);
+    const nextUrl = getStreamUrl(song, requestedLevel, parseDurationSeconds(song.duration));
     const currentUrl = audio.dataset.streamUrl ?? "";
     const shouldReload = currentUrl !== nextUrl;
 
@@ -4151,7 +4147,7 @@ export default function App() {
     }
   }
 
-  function openDownloadMethodPicker(song: Song, level = getSelectedLevel(song)) {
+  function openDownloadMethodPicker(song: Song, level = getDownloadLevel(song)) {
     setDownloadIssue(null);
     setDownloadMethodPicker({
       song,
@@ -4442,8 +4438,8 @@ export default function App() {
       setDownloadIssue({
         song,
         message: blockedText,
-        attemptedLevel: getSelectedLevel(song),
-        attemptedLabel: getSelectedLabel(song)
+        attemptedLevel: getDownloadLevel(song),
+        attemptedLabel: getDownloadLevelLabel(song, getDownloadLevel(song))
       });
       setMessage(blockedText);
       return;
@@ -7382,10 +7378,13 @@ export default function App() {
 
   function renderQualitySelect(
     song: Song,
-    options: { menuKey?: string; className?: string; triggerClassName?: string; ariaLabel?: string } = {}
+    options: { menuKey?: string; className?: string; triggerClassName?: string; ariaLabel?: string; selectedLevel?: DownloadQualityLevel } = {}
   ) {
     const menuKey = options.menuKey ?? song.id;
     const isOpen = openQualityMenuId === menuKey;
+    const displayLevel = options.selectedLevel ?? getSelectedLevel(song);
+    const displayRawLabel = song.availableQualities.find((quality) => quality.level === displayLevel)?.label ?? getSelectedLabel(song);
+    const displayLabel = getQualityCompactLabel(displayLevel, displayRawLabel);
 
     return (
       <div className={["quality-select", options.className].filter(Boolean).join(" ")} onClick={(event) => event.stopPropagation()}>
@@ -7412,7 +7411,7 @@ export default function App() {
             setOpenQualityMenuId(menuKey);
           }}
         >
-          <span>{getSelectedDisplayLabel(song)}</span>
+          <span>{displayLabel}</span>
           <span className={isOpen ? "quality-caret open" : "quality-caret"}>
             <ChevronIcon />
           </span>
@@ -7421,7 +7420,7 @@ export default function App() {
         {isOpen && qualityMenuStyle ? createPortal(
           <div className="quality-menu floating-quality-menu" style={qualityMenuStyle} onClick={(event) => event.stopPropagation()}>
             {song.availableQualities.map((quality) => {
-              const isActive = quality.level === getSelectedLevel(song);
+              const isActive = quality.level === displayLevel;
 
               return (
                 <button
@@ -7619,7 +7618,8 @@ export default function App() {
               menuKey: `${mode}:${currentTrack.id}`,
               className: "dock-quality-select",
               triggerClassName: "dock-quality-trigger",
-              ariaLabel: `选择当前播放音质，当前 ${currentQualityLabel}`
+              ariaLabel: `选择当前播放音质，当前 ${currentQualityLabel}`,
+              selectedLevel: getPlaybackLevel(currentTrack)
             })
           ) : (
             <div className="quality-select dock-quality-select">
@@ -9692,7 +9692,6 @@ export default function App() {
                             className={settings.defaultPlaybackQuality === option.level ? "quality-option active" : "quality-option"}
                             onClick={() => {
                               setSettings((current) => ({ ...current, defaultPlaybackQuality: option.level }));
-                              applyQualityDefaults(results, option.level);
                               setOpenSettingsQualityMenu(null);
                               setSettingsQualityMenuStyle(null);
                             }}
@@ -9739,6 +9738,7 @@ export default function App() {
                             className={settings.defaultDownloadQuality === option.level ? "quality-option active" : "quality-option"}
                             onClick={() => {
                               setSettings((current) => ({ ...current, defaultDownloadQuality: option.level }));
+                              applyQualityDefaults(results, option.level);
                               setOpenSettingsQualityMenu(null);
                               setSettingsQualityMenuStyle(null);
                             }}
