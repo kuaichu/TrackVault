@@ -297,6 +297,7 @@ type ViewSnapshot = {
 
 type ViewState = { mainTab: MainTab; navKey: NavKey; snapshot: ViewSnapshot };
 type NavigateOptions = { recordHistory?: boolean; resetHistory?: boolean };
+type PersistedViewState = { mainTab: MainTab; navKey: NavKey; discoverFeedKind?: DiscoverFeedKind; savedAt: number };
 
 const navText: Record<NavKey, { title: string; subtitle: string }> = {
   discover: { title: "发现音乐", subtitle: "推荐新歌与近期值得听的音乐" },
@@ -312,11 +313,74 @@ const navText: Record<NavKey, { title: string; subtitle: string }> = {
   album: { title: "专辑", subtitle: "查看专辑详情与曲目列表" }
 };
 
+const persistableNavKeys = new Set<NavKey>(["discover", "search", "daily", "playlists", "transfer", "cloud", "downloads", "history"]);
+
+function isPersistableView(mainTab: MainTab, navKey: NavKey) {
+  return mainTab === "account" || mainTab === "settings" || (mainTab === "search" && persistableNavKeys.has(navKey));
+}
+
+function normalizePersistedView(input: unknown): PersistedViewState | null {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+
+  const record = input as Partial<PersistedViewState>;
+  const mainTab = record.mainTab;
+  const navKey = record.navKey;
+  if ((mainTab !== "search" && mainTab !== "account" && mainTab !== "settings") || typeof navKey !== "string") {
+    return null;
+  }
+
+  if (!isPersistableView(mainTab, navKey as NavKey)) {
+    return null;
+  }
+
+  return {
+    mainTab,
+    navKey: navKey as NavKey,
+    discoverFeedKind:
+      record.discoverFeedKind === "recommend" ||
+      record.discoverFeedKind === "daily" ||
+      record.discoverFeedKind === "radar" ||
+      record.discoverFeedKind === "roaming"
+        ? record.discoverFeedKind
+        : undefined,
+    savedAt: typeof record.savedAt === "number" ? record.savedAt : 0
+  };
+}
+
+function loadLastViewState() {
+  try {
+    const rawState = window.localStorage.getItem(LAST_VIEW_STORAGE_KEY);
+    return normalizePersistedView(rawState ? JSON.parse(rawState) : null);
+  } catch {
+    return null;
+  }
+}
+
+function saveLastViewState(mainTab: MainTab, navKey: NavKey, discoverFeedKind: DiscoverFeedKind) {
+  if (!isPersistableView(mainTab, navKey)) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(LAST_VIEW_STORAGE_KEY, JSON.stringify({
+      mainTab,
+      navKey,
+      discoverFeedKind: navKey === "discover" ? discoverFeedKind : undefined,
+      savedAt: Date.now()
+    }));
+  } catch {
+    // Local storage can be unavailable in private browsing; ignore view persistence.
+  }
+}
+
 const SEARCH_HISTORY_STORAGE_KEY = "net-music-down:search-history";
 const DISCOVER_CACHE_STORAGE_KEY = "net-music-down:discover-cache";
 const PLAY_HISTORY_STORAGE_KEY = "net-music-down:play-history";
 const PLAYER_STATE_STORAGE_KEY = "net-music-down:player-state";
 const BROWSER_DOWNLOAD_TASKS_STORAGE_KEY = "net-music-down:browser-download-tasks";
+const LAST_VIEW_STORAGE_KEY = "net-music-down:last-view";
 const BROWSER_DOWNLOAD_TASK_LIMIT = 30;
 const DISCOVER_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const USER_PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -1220,6 +1284,7 @@ export default function App() {
   const transferRunJobIdRef = useRef("");
   const neteaseAuditJobIdRef = useRef("");
   const playlistCompareJobIdRef = useRef("");
+  const viewPersistenceReadyRef = useRef(false);
   const userProfileCacheRef = useRef<Record<string, { profile: UserProfile; cachedAt: number }>>({});
   const playerThemeCacheRef = useRef<Record<string, PlayerTheme>>({});
   const [query, setQuery] = useState("");
@@ -2145,6 +2210,115 @@ export default function App() {
     }
 
     void loadDiscoverSongs({ keepExisting: cachedDiscoverSongs.length > 0, providerMode: startupProviderMode });
+  }
+
+  function restoreLastViewState(lastView: PersistedViewState, nextSettings: AppSettings) {
+    if (lastView.mainTab === "account") {
+      navigateTopLevel("discover", "account");
+      return true;
+    }
+
+    if (lastView.mainTab === "settings") {
+      navigateTopLevel("discover", "settings");
+      return true;
+    }
+
+    if (lastView.mainTab !== "search") {
+      return false;
+    }
+
+    if (lastView.navKey === "search") {
+      openSearchPage();
+      return true;
+    }
+
+    if (lastView.navKey === "playlists") {
+      setResults([]);
+      setActivePlaylist(null);
+      setActiveArtist(null);
+      setActiveAlbum(null);
+      setSelectedPlaylistId(null);
+      setResultSource("search");
+      setPlaylistSearchInput("");
+      setPlaylistSearchKeyword("");
+      setPlaylistSongsPage(1);
+      setPlaylistSongsHasMore(false);
+      setPlaylistSongsTotal(0);
+      setSelectedSongIds([]);
+      navigateTopLevel("playlists");
+
+      const startupProviderMode: ActiveProviderMode = nextSettings.providerMode === "qq" ? "qq" : nextSettings.providerMode === "aggregate" ? "aggregate" : "netease";
+      const startupCookie = startupProviderMode === "qq" ? nextSettings.qqMusicCookie?.trim() : nextSettings.neteaseCookie.trim();
+      if (startupCookie) {
+        void loadUserPlaylists({ cookieOverride: startupCookie, silentCookieCheck: true, providerMode: startupProviderMode });
+      }
+      return true;
+    }
+
+    if (lastView.navKey === "downloads" || lastView.navKey === "history" || lastView.navKey === "transfer") {
+      navigateTopLevel(lastView.navKey);
+      return true;
+    }
+
+    if (lastView.navKey === "cloud") {
+      if (nextSettings.providerMode === "qq") {
+        navigateTopLevel("discover");
+        return true;
+      }
+      navigateTopLevel("cloud");
+      setActivePlaylist(null);
+      setActiveArtist(null);
+      setActiveAlbum(null);
+      setResultSource("cloud");
+      setResults([]);
+      setMessage("已恢复云盘音乐页面，可点击刷新重新读取。");
+      return true;
+    }
+
+    if (lastView.navKey === "daily") {
+      navigateTopLevel("discover");
+      setActivePlaylist(null);
+      setActiveArtist(null);
+      setActiveAlbum(null);
+      setResultSource("discover");
+      setDiscoverFeedKind("daily");
+      setResults([]);
+      setMessage("已恢复每日推荐页面，可点击刷新重新读取。");
+      return true;
+    }
+
+    if (lastView.navKey === "discover") {
+      const restoredDiscoverFeedKind = lastView.discoverFeedKind ?? "recommend";
+      navigateTopLevel("discover");
+      setResultSource("discover");
+      setDiscoverFeedKind(restoredDiscoverFeedKind);
+
+      if (restoredDiscoverFeedKind !== "recommend") {
+        setResults([]);
+        setMessage(`已恢复${discoverFeedLabels[restoredDiscoverFeedKind]}页面，可点击刷新重新读取。`);
+        return true;
+      }
+
+      if (!nextSettings.autoLoadDiscoverOnStart) {
+        setMessage("已恢复发现音乐，启动自动读取已关闭");
+        return true;
+      }
+
+      const startupProviderMode: ActiveProviderMode = nextSettings.providerMode === "qq" ? "qq" : nextSettings.providerMode === "aggregate" ? "aggregate" : "netease";
+      const cachedDiscoverSongs = loadCachedDiscoverSongs(startupProviderMode);
+      if (cachedDiscoverSongs.length > 0) {
+        setResults(cachedDiscoverSongs);
+        setPlayQueue(cachedDiscoverSongs);
+        setResultSource("discover");
+        setDiscoverFeedKind("recommend");
+        applyQualityDefaults(cachedDiscoverSongs, nextSettings.defaultPlaybackQuality);
+        setMessage(`已恢复发现音乐缓存 · ${cachedDiscoverSongs.length} 首，正在后台刷新`);
+      }
+      void loadDiscoverSongs({ keepExisting: cachedDiscoverSongs.length > 0, providerMode: startupProviderMode });
+      return true;
+    }
+
+    return false;
   }
 
   async function refreshTasks() {
@@ -5669,7 +5843,11 @@ export default function App() {
   useEffect(() => {
     void refreshSettings().then((nextSettings) => {
       const settingsForStartup = nextSettings ?? defaultSettings;
-      applyStartupPreferences(settingsForStartup);
+      const lastView = loadLastViewState();
+      if (!lastView || !restoreLastViewState(lastView, settingsForStartup)) {
+        applyStartupPreferences(settingsForStartup);
+      }
+      viewPersistenceReadyRef.current = true;
       const cookie = nextSettings?.neteaseCookie.trim();
       if (cookie) {
         void ensureNeteaseCookieHealthy({ silent: true, force: true, cookieOverride: cookie });
@@ -5687,6 +5865,14 @@ export default function App() {
 
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!viewPersistenceReadyRef.current) {
+      return;
+    }
+
+    saveLastViewState(mainTab, navKey, discoverFeedKind);
+  }, [mainTab, navKey, discoverFeedKind]);
 
   useEffect(() => {
     let cancelled = false;
