@@ -85,6 +85,7 @@ export type TransferImportRequest = {
   targetProvider: TransferTargetProvider;
   playlistName?: string;
   playlistId?: string;
+  sourceTrackIds?: string[];
   text?: string;
   checkAvailability?: boolean;
 };

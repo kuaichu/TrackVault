@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { getPlaylistSongs } from "../playlist-provider.js";
+import { getPlaylistSongs, getUserPlaylists } from "../playlist-provider.js";
 import { searchProvider } from "../provider.js";
 import { getSettings } from "../settings-store.js";
 import { assertDownloadAccess } from "../task-store.js";
@@ -127,6 +127,17 @@ export async function createNeteasePlaylistFromTrackIds(name: string, trackIds: 
     throw new Error("网易云歌单创建成功但未返回歌单 ID。");
   }
 
+  const addedCount = await addTrackIdsToNeteasePlaylist(playlistId, trackIds, cookie, `网易云已创建歌单 ${playlistId}，但添加歌曲失败`);
+
+  return {
+    playlistId,
+    playlistName: name,
+    playlistUrl: `https://music.163.com/#/playlist?id=${encodeURIComponent(playlistId)}`,
+    addedCount
+  };
+}
+
+async function addTrackIdsToNeteasePlaylist(playlistId: string, trackIds: string[], cookie: string, failurePrefix = "网易云拒绝添加歌曲") {
   const batchSize = 500;
   for (let index = 0; index < trackIds.length; index += batchSize) {
     const batch = trackIds.slice(index, index + batchSize);
@@ -139,14 +150,46 @@ export async function createNeteasePlaylistFromTrackIds(name: string, trackIds: 
     const addBody = addResponse.body as { code?: number; message?: string; msg?: string };
     if (typeof addBody.code === "number" && addBody.code !== 200) {
       const message = getNeteaseApiErrorMessage(addBody, `网易云拒绝添加歌曲：${addBody.code}`);
-      throw new Error(`网易云已创建歌单 ${playlistId}，但添加歌曲失败：${message}。请复制正常可播文字歌单导入。`);
+      throw new Error(`${failurePrefix}：${message}。请复制正常可播文字歌单导入。`);
     }
   }
 
+  return trackIds.length;
+}
+
+export async function addNeteaseTrackIdsToExistingPlaylist(playlistId: string, trackIds: string[]) {
+  const settings = await getSettings();
+  const cookie = settings.neteaseCookie.trim();
+  if (!cookie) {
+    throw new Error("导入网易云歌单需要有效 Cookie。");
+  }
+
+  if (trackIds.length === 0) {
+    throw new Error("没有可导入网易云的已匹配歌曲。");
+  }
+
+  const safePlaylistId = playlistId.trim();
+  if (!safePlaylistId) {
+    throw new Error("请选择要导入的网易云目标歌单。");
+  }
+
+  const playlists = await getUserPlaylists();
+  const targetPlaylist = playlists.find((playlist) => playlist.id === safePlaylistId);
+  if (!targetPlaylist) {
+    throw new Error("没有找到目标网易云歌单，请刷新歌单列表后重试。");
+  }
+
+  if (!targetPlaylist.owned) {
+    throw new Error("只能导入到自己创建的网易云歌单。");
+  }
+
+  const addedCount = await addTrackIdsToNeteasePlaylist(safePlaylistId, trackIds, cookie);
+
   return {
-    playlistId,
-    playlistUrl: `https://music.163.com/#/playlist?id=${encodeURIComponent(playlistId)}`,
-    addedCount: trackIds.length
+    playlistId: safePlaylistId,
+    playlistName: targetPlaylist.name,
+    playlistUrl: `https://music.163.com/#/playlist?id=${encodeURIComponent(safePlaylistId)}`,
+    addedCount
   };
 }
 

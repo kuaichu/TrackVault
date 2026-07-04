@@ -34,7 +34,7 @@ import { cancelNeteaseImportAuditJob, formatNeteaseImportAuditJobExport, getNete
 import { getPlaylistCompareJob, startPlaylistCompareJob } from "./playlist-transfer/playlist-compare-job.js";
 import { comparePlaylists, formatPlaylistCompareExport } from "./playlist-transfer/playlist-compare.js";
 import { getPlaylistTransferRunJob, startPlaylistTransferRunJob } from "./playlist-transfer/playlist-transfer-job.js";
-import { checkNeteaseProviderTrackAvailability, createNeteasePlaylistFromTrackIds, loadNeteasePlaylistAuditEntries, loadNeteasePlaylistTransferTracks, searchNeteaseProviderTracks, searchNeteaseProviderTracksByTitle } from "./playlist-transfer/netease-provider.js";
+import { addNeteaseTrackIdsToExistingPlaylist, checkNeteaseProviderTrackAvailability, createNeteasePlaylistFromTrackIds, loadNeteasePlaylistAuditEntries, loadNeteasePlaylistTransferTracks, searchNeteaseProviderTracks, searchNeteaseProviderTracksByTitle } from "./playlist-transfer/netease-provider.js";
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
 import { createPlaylistTransferJob, getNeteaseImportTrackIds } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
@@ -1163,8 +1163,11 @@ app.post("/api/playlist-transfer/jobs/:id/import/netease", async (request, respo
     const name = typeof request.body?.name === "string" && request.body.name.trim()
       ? request.body.name.trim()
       : `${job.playlistName} 转换结果`;
+    const targetPlaylistId = typeof request.body?.playlistId === "string" ? request.body.playlistId.trim() : "";
     const trackIds = getNeteaseImportTrackIds(job);
-    const result = await createNeteasePlaylistFromTrackIds(name, trackIds);
+    const result = targetPlaylistId
+      ? await addNeteaseTrackIdsToExistingPlaylist(targetPlaylistId, trackIds)
+      : await createNeteasePlaylistFromTrackIds(name, trackIds);
     response.json({
       ...result,
       skippedCount: job.summary.total - result.addedCount

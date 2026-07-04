@@ -595,6 +595,7 @@ export type TransferImportRequest = {
   targetProvider: TransferTargetProvider;
   playlistName?: string;
   playlistId?: string;
+  sourceTrackIds?: string[];
   text?: string;
   checkAvailability?: boolean;
 };
@@ -607,6 +608,7 @@ export type TransferExportResult = {
 
 export type NeteaseTransferImportResult = {
   playlistId: string;
+  playlistName?: string;
   playlistUrl?: string;
   addedCount: number;
   skippedCount: number;

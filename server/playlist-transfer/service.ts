@@ -64,19 +64,26 @@ function parseCsvPlaylist(input: string): TransferTrack[] {
 }
 
 async function loadInputTracks(input: CreatePlaylistTransferInput, deps: CreatePlaylistTransferDeps) {
+  let tracks: TransferTrack[];
+
   if (input.sourceProvider === "text") {
-    return parseTextPlaylist(input.text ?? "");
+    tracks = parseTextPlaylist(input.text ?? "");
+  } else if (input.sourceProvider === "csv") {
+    tracks = parseCsvPlaylist(input.text ?? "");
+  } else {
+    if (!deps.loadSourceTracks) {
+      throw new Error("当前来源平台没有配置歌单读取能力");
+    }
+
+    tracks = await deps.loadSourceTracks(input);
   }
 
-  if (input.sourceProvider === "csv") {
-    return parseCsvPlaylist(input.text ?? "");
+  const selectedIds = new Set((input.sourceTrackIds ?? []).map((id) => id.trim()).filter(Boolean));
+  if (selectedIds.size === 0) {
+    return tracks;
   }
 
-  if (!deps.loadSourceTracks) {
-    throw new Error("当前来源平台没有配置歌单读取能力");
-  }
-
-  return deps.loadSourceTracks(input);
+  return tracks.filter((track) => track.sourceTrackId && selectedIds.has(track.sourceTrackId));
 }
 
 function applyCandidateAvailability(result: TransferTrackResult): TransferTrackResult {

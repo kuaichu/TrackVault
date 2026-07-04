@@ -1231,15 +1231,25 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [switchingProviderMode, setSwitchingProviderMode] = useState(false);
   const [adminConfig, setAdminConfig] = useState<AdminConfigView>(defaultAdminConfig);
-  const [transferSourceProvider, setTransferSourceProvider] = useState<TransferSourceProvider>("netease");
-  const [transferTargetProvider, setTransferTargetProvider] = useState<TransferTargetProvider>("qq");
+  const [transferSourceProvider, setTransferSourceProvider] = useState<TransferSourceProvider>("qq");
+  const [transferTargetProvider, setTransferTargetProvider] = useState<TransferTargetProvider>("netease");
   const [transferPlaylistId, setTransferPlaylistId] = useState("");
   const [transferPlaylistName, setTransferPlaylistName] = useState("歌单互转任务");
   const [transferTextInput, setTransferTextInput] = useState("");
   const [transferCheckAvailability, setTransferCheckAvailability] = useState(false);
+  const [transferQqPlaylists, setTransferQqPlaylists] = useState<UserPlaylist[]>([]);
+  const [transferNeteaseTargetPlaylists, setTransferNeteaseTargetPlaylists] = useState<UserPlaylist[]>([]);
+  const [loadingTransferQqPlaylists, setLoadingTransferQqPlaylists] = useState(false);
+  const [loadingTransferNeteaseTargetPlaylists, setLoadingTransferNeteaseTargetPlaylists] = useState(false);
+  const [transferSourceSongs, setTransferSourceSongs] = useState<Song[]>([]);
+  const [transferSelectedSourceSongIds, setTransferSelectedSourceSongIds] = useState<string[]>([]);
+  const [loadingTransferSourceSongs, setLoadingTransferSourceSongs] = useState(false);
+  const [transferSourceSongsError, setTransferSourceSongsError] = useState("");
   const [transferJob, setTransferJob] = useState<PlaylistTransferJob | null>(null);
   const [transferExportFormat, setTransferExportFormat] = useState<TransferExportFormat>("markdown");
   const [transferExportContent, setTransferExportContent] = useState("");
+  const [transferNeteaseTargetMode, setTransferNeteaseTargetMode] = useState<"create" | "existing">("create");
+  const [transferTargetPlaylistId, setTransferTargetPlaylistId] = useState("");
   const [transferImportName, setTransferImportName] = useState("转换后的歌单");
   const [transferImportResult, setTransferImportResult] = useState<NeteaseTransferImportResult | null>(null);
   const [transferRunJob, setTransferRunJob] = useState<PlaylistTransferRunJob | null>(null);
@@ -2241,9 +2251,166 @@ export default function App() {
 
   function openTransferPage() {
     navigateTopLevel("transfer");
-    if (!isQqDataMode && playlists.length === 0 && !loadingPlaylists && settings.neteaseCookie.trim()) {
+    if (transferSourceProvider === "qq" && transferQqPlaylists.length === 0 && !loadingTransferQqPlaylists && hasQqMusicCookie) {
+      void loadTransferQqPlaylists({ preferFirst: true });
+    }
+    if (transferTargetProvider === "netease" && transferNeteaseTargetPlaylists.length === 0 && !loadingTransferNeteaseTargetPlaylists && settings.neteaseCookie.trim()) {
+      void loadTransferNeteaseTargetPlaylists();
+    }
+    if (transferSourceProvider === "netease" && playlists.length === 0 && !loadingPlaylists && settings.neteaseCookie.trim()) {
       void loadUserPlaylists();
     }
+  }
+
+  async function loadTransferQqPlaylists(options: { preferFirst?: boolean } = {}) {
+    if (!hasQqMusicCookie) {
+      setMessage("请先在账号中心导入 QQ 音乐 Cookie。");
+      return;
+    }
+
+    setLoadingTransferQqPlaylists(true);
+    setMessage("正在读取 QQ 音乐歌单");
+
+    try {
+      const data = await getPlaylists("qq");
+      setTransferQqPlaylists(data);
+      setMessage(`QQ 音乐共读取 ${data.length} 个歌单`);
+      if ((options.preferFirst || !transferPlaylistId) && data.length > 0) {
+        setTransferPlaylistId(data[0].id);
+        setTransferPlaylistName(`${data[0].name} 迁移到网易云`);
+        void loadTransferSourceSongs(data[0].id, "qq");
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "读取 QQ 音乐歌单失败");
+    } finally {
+      setLoadingTransferQqPlaylists(false);
+    }
+  }
+
+  async function loadTransferNeteaseTargetPlaylists() {
+    const cookieOk = await ensureNeteaseCookieHealthy({ silent: true });
+    if (!cookieOk) {
+      setTransferNeteaseTargetPlaylists([]);
+      setMessage("请先登录网易云账号，才能选择目标歌单。");
+      return;
+    }
+
+    setLoadingTransferNeteaseTargetPlaylists(true);
+
+    try {
+      const data = await getPlaylists("netease");
+      const ownedPlaylists = data.filter((playlist) => playlist.owned);
+      setTransferNeteaseTargetPlaylists(ownedPlaylists);
+      if (!transferTargetPlaylistId && ownedPlaylists.length > 0) {
+        setTransferTargetPlaylistId(ownedPlaylists[0].id);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "读取网易云目标歌单失败");
+    } finally {
+      setLoadingTransferNeteaseTargetPlaylists(false);
+    }
+  }
+
+  async function loadTransferSourceSongs(playlistId: string, provider: "netease" | "qq" = transferSourceProvider === "qq" ? "qq" : "netease") {
+    const safePlaylistId = playlistId.trim();
+    if (!safePlaylistId) {
+      setTransferSourceSongs([]);
+      setTransferSelectedSourceSongIds([]);
+      return;
+    }
+
+    if (provider === "qq" && !hasQqMusicCookie) {
+      setMessage("请先在账号中心导入 QQ 音乐 Cookie。");
+      return;
+    }
+
+    setLoadingTransferSourceSongs(true);
+    setTransferSourceSongsError("");
+
+    try {
+      const limit = 200;
+      let page = 1;
+      const collectedSongs: Song[] = [];
+      while (page <= 10) {
+        const pageData = await getPlaylistSongs(safePlaylistId, page, limit, "", "default", provider);
+        collectedSongs.push(...pageData.songs);
+        if (!pageData.hasMore) {
+          break;
+        }
+        page += 1;
+      }
+
+      setTransferSourceSongs(collectedSongs);
+      setTransferSelectedSourceSongIds(collectedSongs.map((song) => song.id));
+      setMessage(`已读取来源歌单 ${collectedSongs.length} 首，默认全选`);
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : "读取来源歌单歌曲失败";
+      setTransferSourceSongsError(messageText);
+      setMessage(messageText);
+      setTransferSourceSongs([]);
+      setTransferSelectedSourceSongIds([]);
+    } finally {
+      setLoadingTransferSourceSongs(false);
+    }
+  }
+
+  function handleTransferSourceProviderChange(provider: TransferSourceProvider) {
+    setTransferSourceProvider(provider);
+    setTransferPlaylistId("");
+    setTransferSourceSongs([]);
+    setTransferSelectedSourceSongIds([]);
+    setTransferSourceSongsError("");
+    setTransferJob(null);
+    setTransferExportContent("");
+    setTransferImportResult(null);
+
+    if (provider === "qq") {
+      void loadTransferQqPlaylists({ preferFirst: true });
+    } else if (provider === "netease" && playlists.length === 0 && !loadingPlaylists) {
+      void loadUserPlaylists({ providerMode: "netease", silentCookieCheck: true });
+    }
+  }
+
+  function handleTransferTargetProviderChange(provider: TransferTargetProvider) {
+    setTransferTargetProvider(provider);
+    setTransferImportResult(null);
+    if (provider === "netease") {
+      setTransferNeteaseTargetMode("create");
+      if (transferNeteaseTargetPlaylists.length === 0 && !loadingTransferNeteaseTargetPlaylists) {
+        void loadTransferNeteaseTargetPlaylists();
+      }
+    } else {
+      setTransferTargetPlaylistId("");
+    }
+  }
+
+  function handleTransferPlaylistSelect(playlistId: string) {
+    setTransferPlaylistId(playlistId);
+    setTransferSourceSongs([]);
+    setTransferSelectedSourceSongIds([]);
+    setTransferSourceSongsError("");
+    const playlist =
+      transferSourceProvider === "qq"
+        ? transferQqPlaylists.find((item) => item.id === playlistId)
+        : playlists.find((item) => item.id === playlistId);
+    if (playlist) {
+      setTransferPlaylistName(`${playlist.name} 迁移到${transferTargetProvider === "netease" ? "网易云" : "目标平台"}`);
+    }
+    if (playlistId && (transferSourceProvider === "qq" || transferSourceProvider === "netease")) {
+      void loadTransferSourceSongs(playlistId, transferSourceProvider === "qq" ? "qq" : "netease");
+    }
+  }
+
+  function toggleTransferSourceSong(songId: string) {
+    setTransferSelectedSourceSongIds((current) =>
+      current.includes(songId)
+        ? current.filter((id) => id !== songId)
+        : [...current, songId]
+    );
+  }
+
+  function setAllTransferSourceSongsSelected(selected: boolean) {
+    setTransferSelectedSourceSongIds(selected ? transferSourceSongs.map((song) => song.id) : []);
   }
 
   async function pollPlaylistTransferRunJob(jobId: string) {
@@ -2285,15 +2452,23 @@ export default function App() {
   async function handleCreateTransferJob() {
     const sourceProvider = transferSourceProvider;
     const targetProvider = transferTargetProvider;
-    const selectedPlaylist = playlists.find((playlist) => playlist.id === transferPlaylistId);
+    const selectedPlaylist =
+      sourceProvider === "netease"
+        ? playlists.find((playlist) => playlist.id === transferPlaylistId)
+        : transferQqPlaylists.find((playlist) => playlist.id === transferPlaylistId);
     const playlistId = sourceProvider === "netease" ? selectedPlaylist?.id : transferPlaylistId.trim();
     const playlistName =
       sourceProvider === "netease"
         ? selectedPlaylist?.name || transferPlaylistName.trim()
-        : transferPlaylistName.trim() || (sourceProvider === "qq" ? `QQ 歌单 ${playlistId}` : "文字歌单");
+        : transferPlaylistName.trim() || (sourceProvider === "qq" ? selectedPlaylist?.name || `QQ 歌单 ${playlistId}` : "文字歌单");
 
     if ((sourceProvider === "netease" || sourceProvider === "qq") && !playlistId) {
-      setMessage(sourceProvider === "netease" ? "请先选择一个网易云歌单。" : "请输入 QQ 音乐公开歌单 ID。");
+      setMessage(sourceProvider === "netease" ? "请先选择一个网易云歌单。" : "请先选择或输入 QQ 音乐歌单 ID。");
+      return;
+    }
+
+    if ((sourceProvider === "netease" || sourceProvider === "qq") && transferSourceSongs.length > 0 && transferSelectedSourceSongIds.length === 0) {
+      setMessage("请至少选择一首要迁移的歌曲。");
       return;
     }
 
@@ -2314,6 +2489,10 @@ export default function App() {
         targetProvider,
         playlistId,
         playlistName,
+        sourceTrackIds:
+          (sourceProvider === "netease" || sourceProvider === "qq") && transferSourceSongs.length > 0
+            ? transferSelectedSourceSongIds
+            : undefined,
         text: transferTextInput,
         checkAvailability: transferCheckAvailability
       });
@@ -2353,12 +2532,25 @@ export default function App() {
     }
 
     setTransferImporting(true);
-    setMessage("正在创建网易云目标歌单");
+    setMessage(transferNeteaseTargetMode === "existing" ? "正在导入到网易云已有歌单" : "正在创建网易云目标歌单");
 
     try {
-      const result = await importPlaylistTransferToNetease(transferJob.id, transferImportName.trim() || `${transferJob.playlistName} 转换结果`);
+      if (transferNeteaseTargetMode === "existing" && !transferTargetPlaylistId) {
+        setMessage("请先选择要导入的网易云目标歌单。");
+        setTransferImporting(false);
+        return;
+      }
+
+      const result = await importPlaylistTransferToNetease(transferJob.id, {
+        name: transferImportName.trim() || `${transferJob.playlistName} 转换结果`,
+        playlistId: transferNeteaseTargetMode === "existing" ? transferTargetPlaylistId : undefined
+      });
       setTransferImportResult(result);
-      setMessage(`已创建网易云歌单，导入 ${result.addedCount} 首，跳过 ${result.skippedCount} 首。`);
+      setMessage(
+        transferNeteaseTargetMode === "existing"
+          ? `已导入到「${result.playlistName ?? "网易云目标歌单"}」，新增 ${result.addedCount} 首，跳过 ${result.skippedCount} 首。`
+          : `已创建「${result.playlistName ?? "网易云歌单"}」，导入 ${result.addedCount} 首，跳过 ${result.skippedCount} 首。`
+      );
       void loadUserPlaylists();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "导入网易云歌单失败");
@@ -7526,16 +7718,16 @@ export default function App() {
                   <div className="transfer-grid">
                     <label>
                       <span>来源</span>
-                      <select value={transferSourceProvider} onChange={(event) => setTransferSourceProvider(event.target.value as TransferSourceProvider)}>
+                      <select value={transferSourceProvider} onChange={(event) => handleTransferSourceProviderChange(event.target.value as TransferSourceProvider)}>
                         <option value="netease">网易云歌单</option>
-                        <option value="qq">QQ 音乐公开歌单</option>
+                        <option value="qq">QQ 音乐歌单</option>
                         <option value="text">文字歌单</option>
                         <option value="csv">CSV</option>
                       </select>
                     </label>
                     <label>
                       <span>目标</span>
-                      <select value={transferTargetProvider} onChange={(event) => setTransferTargetProvider(event.target.value as TransferTargetProvider)}>
+                      <select value={transferTargetProvider} onChange={(event) => handleTransferTargetProviderChange(event.target.value as TransferTargetProvider)}>
                         <option value="qq">QQ 音乐匹配报告</option>
                         <option value="netease">网易云匹配报告</option>
                         <option value="text">仅导出文字歌单</option>
@@ -7547,7 +7739,7 @@ export default function App() {
                     <div className="transfer-grid">
                       <label>
                         <span>网易云来源歌单</span>
-                        <select value={transferPlaylistId} onChange={(event) => setTransferPlaylistId(event.target.value)}>
+                        <select value={transferPlaylistId} onChange={(event) => handleTransferPlaylistSelect(event.target.value)}>
                           <option value="">选择歌单</option>
                           {playlists.map((playlist) => (
                             <option key={playlist.id} value={playlist.id}>
@@ -7563,10 +7755,85 @@ export default function App() {
                   ) : null}
 
                   {transferSourceProvider === "qq" ? (
-                    <label>
-                      <span>QQ 音乐公开歌单 ID</span>
-                      <input value={transferPlaylistId} onChange={(event) => setTransferPlaylistId(event.target.value)} placeholder="例如：7550971547" />
-                    </label>
+                    <>
+                      <div className="transfer-grid">
+                        <label>
+                          <span>QQ 音乐来源歌单</span>
+                          <select value={transferPlaylistId} onChange={(event) => handleTransferPlaylistSelect(event.target.value)}>
+                            <option value="">选择 QQ 音乐歌单</option>
+                            {transferQqPlaylists.map((playlist) => (
+                              <option key={playlist.id} value={playlist.id}>
+                                {playlist.name} · {playlist.trackCount} 首
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <button type="button" className="secondary-button transfer-inline-button" disabled={loadingTransferQqPlaylists} onClick={() => void loadTransferQqPlaylists()}>
+                          {loadingTransferQqPlaylists ? "读取中" : "刷新 QQ 歌单"}
+                        </button>
+                      </div>
+                      <label>
+                        <span>手动歌单 ID</span>
+                        <input
+                          value={transferPlaylistId}
+                          onChange={(event) => {
+                            setTransferPlaylistId(event.target.value);
+                            setTransferSourceSongs([]);
+                            setTransferSelectedSourceSongIds([]);
+                          }}
+                          onBlur={() => {
+                            if (transferPlaylistId.trim()) {
+                              void loadTransferSourceSongs(transferPlaylistId, "qq");
+                            }
+                          }}
+                          placeholder="列表没有读到时可输入公开歌单 ID，例如 7550971547"
+                        />
+                      </label>
+                    </>
+                  ) : null}
+
+                  {(transferSourceProvider === "qq" || transferSourceProvider === "netease") ? (
+                    <div className="transfer-song-picker">
+                      <div className="transfer-song-picker-head">
+                        <div>
+                          <strong>来源歌曲</strong>
+                          <span>
+                            {loadingTransferSourceSongs
+                              ? "正在读取歌单歌曲"
+                              : transferSourceSongs.length > 0
+                                ? `已选择 ${transferSelectedSourceSongIds.length} / ${transferSourceSongs.length} 首`
+                                : "选择歌单后会显示歌曲，可按需剔除不迁移的歌"}
+                          </span>
+                        </div>
+                        <div className="transfer-song-picker-actions">
+                          <button type="button" className="secondary-button compact" disabled={transferSourceSongs.length === 0 || loadingTransferSourceSongs} onClick={() => setAllTransferSourceSongsSelected(true)}>
+                            全选
+                          </button>
+                          <button type="button" className="secondary-button compact" disabled={transferSourceSongs.length === 0 || loadingTransferSourceSongs} onClick={() => setAllTransferSourceSongsSelected(false)}>
+                            清空
+                          </button>
+                        </div>
+                      </div>
+                      {transferSourceSongsError ? <p className="transfer-helper-text">{transferSourceSongsError}</p> : null}
+                      {transferSourceSongs.length > 0 ? (
+                        <div className="transfer-song-list">
+                          {transferSourceSongs.map((song) => (
+                            <label key={song.id} className="transfer-song-row">
+                              <input
+                                type="checkbox"
+                                checked={transferSelectedSourceSongIds.includes(song.id)}
+                                onChange={() => toggleTransferSourceSong(song.id)}
+                              />
+                              {song.coverUrl ? <img src={song.coverUrl} alt="" /> : <span className="transfer-song-cover-fallback" />}
+                              <span>
+                                <strong>{song.title}</strong>
+                                <small>{song.artist}{song.album ? ` · ${song.album}` : ""}</small>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
                   ) : null}
 
                   {transferSourceProvider === "text" || transferSourceProvider === "csv" ? (
@@ -7584,6 +7851,55 @@ export default function App() {
                     <span>任务名称</span>
                     <input value={transferPlaylistName} onChange={(event) => setTransferPlaylistName(event.target.value)} placeholder="例如：网易云到 QQ 的收藏迁移" />
                   </label>
+
+                  {transferTargetProvider === "netease" ? (
+                    <div className="transfer-target-panel">
+                      <div className="transfer-target-mode">
+                        <button
+                          type="button"
+                          className={transferNeteaseTargetMode === "create" ? "active" : ""}
+                          onClick={() => setTransferNeteaseTargetMode("create")}
+                        >
+                          创建新歌单
+                        </button>
+                        <button
+                          type="button"
+                          className={transferNeteaseTargetMode === "existing" ? "active" : ""}
+                          onClick={() => {
+                            setTransferNeteaseTargetMode("existing");
+                            if (transferNeteaseTargetPlaylists.length === 0) {
+                              void loadTransferNeteaseTargetPlaylists();
+                            }
+                          }}
+                        >
+                          导入已有歌单
+                        </button>
+                      </div>
+                      {transferNeteaseTargetMode === "create" ? (
+                        <label>
+                          <span>新歌单名称</span>
+                          <input value={transferImportName} onChange={(event) => setTransferImportName(event.target.value)} />
+                        </label>
+                      ) : (
+                        <div className="transfer-grid">
+                          <label>
+                            <span>网易云目标歌单</span>
+                            <select value={transferTargetPlaylistId} onChange={(event) => setTransferTargetPlaylistId(event.target.value)}>
+                              <option value="">选择自己创建的歌单</option>
+                              {transferNeteaseTargetPlaylists.map((playlist) => (
+                                <option key={playlist.id} value={playlist.id}>
+                                  {playlist.name} · {playlist.trackCount} 首
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button type="button" className="secondary-button transfer-inline-button" disabled={loadingTransferNeteaseTargetPlaylists} onClick={() => void loadTransferNeteaseTargetPlaylists()}>
+                            {loadingTransferNeteaseTargetPlaylists ? "读取中" : "刷新目标歌单"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
 
                   <label className="transfer-check-row">
                     <input
@@ -8011,15 +8327,29 @@ export default function App() {
 
                     {transferJob.targetProvider === "netease" && transferJob.summary.matched > 0 ? (
                       <div className="transfer-import-panel">
-                        <label>
-                          <span>网易云目标歌单名</span>
-                          <input value={transferImportName} onChange={(event) => setTransferImportName(event.target.value)} />
-                        </label>
+                        {transferNeteaseTargetMode === "create" ? (
+                          <label>
+                            <span>网易云目标歌单名</span>
+                            <input value={transferImportName} onChange={(event) => setTransferImportName(event.target.value)} />
+                          </label>
+                        ) : (
+                          <label>
+                            <span>导入到已有歌单</span>
+                            <select value={transferTargetPlaylistId} onChange={(event) => setTransferTargetPlaylistId(event.target.value)}>
+                              <option value="">选择自己创建的歌单</option>
+                              {transferNeteaseTargetPlaylists.map((playlist) => (
+                                <option key={playlist.id} value={playlist.id}>
+                                  {playlist.name} · {playlist.trackCount} 首
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
                         <button type="button" className="primary-button" disabled={transferImporting} onClick={() => void handleImportTransferToNetease()}>
-                          {transferImporting ? "导入中" : "创建网易云歌单"}
+                          {transferImporting ? "导入中" : transferNeteaseTargetMode === "existing" ? "导入已有歌单" : "创建网易云歌单"}
                         </button>
                         {transferImportResult ? (
-                          <p>已导入 {transferImportResult.addedCount} 首，跳过 {transferImportResult.skippedCount} 首。歌单 ID：{transferImportResult.playlistId}</p>
+                          <p>已导入 {transferImportResult.addedCount} 首，跳过 {transferImportResult.skippedCount} 首。歌单：{transferImportResult.playlistName ?? transferImportResult.playlistId}</p>
                         ) : null}
                       </div>
                     ) : null}

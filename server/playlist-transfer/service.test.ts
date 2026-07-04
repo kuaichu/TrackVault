@@ -62,6 +62,38 @@ test("createPlaylistTransferJob marks duplicate imported songs", async () => {
   assert.equal(job.tracks[1].status, "duplicate");
 });
 
+test("createPlaylistTransferJob filters provider playlist tracks by selected source ids", async () => {
+  const job = await createPlaylistTransferJob(
+    {
+      ownerKey: "session:test",
+      sourceProvider: "qq",
+      targetProvider: "netease",
+      playlistName: "部分迁移",
+      playlistId: "qq:demo",
+      sourceTrackIds: ["qq-song-2"]
+    },
+    {
+      loadSourceTracks: async () => [
+        { source: "qq", sourceTrackId: "qq-song-1", title: "第一首", artists: ["歌手A"] },
+        { source: "qq", sourceTrackId: "qq-song-2", title: "第二首", artists: ["歌手B"] }
+      ],
+      searchTargetTracks: async (track) => [
+        {
+          provider: "netease",
+          id: `netease-${track.sourceTrackId}`,
+          title: track.title,
+          artists: track.artists
+        }
+      ],
+      saveJob: async (nextJob) => nextJob
+    }
+  );
+
+  assert.equal(job.summary.total, 1);
+  assert.equal(job.tracks[0].sourceTrack.sourceTrackId, "qq-song-2");
+  assert.equal(job.tracks[0].selectedCandidate?.targetTrackId, "netease-qq-song-2");
+});
+
 test("createPlaylistTransferJob reports progress while matching songs", async () => {
   const progress: Array<{ phase: string; processed: number; total: number; currentTitle?: string }> = [];
 

@@ -30,6 +30,10 @@ const QQ_HEADERS = {
   "User-Agent": "Mozilla/5.0"
 };
 
+function getRawQqPlaylistId(playlistId: string) {
+  return playlistId.trim().replace(/^qq:/i, "");
+}
+
 function decodeJsonPrefix(input: string) {
   const trimmed = input.trim();
   const callbackMatch = trimmed.match(/^[^(]+\((.*)\)$/s);
@@ -117,11 +121,16 @@ export async function searchQqProviderTracks(track: TransferTrack): Promise<Prov
 
 export async function loadQqPlaylistTransferTracks(playlistId: string): Promise<TransferTrack[]> {
   const url = new URL("https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg");
+  const rawPlaylistId = getRawQqPlaylistId(playlistId);
+  if (!rawPlaylistId) {
+    throw new Error("缺少 QQ 音乐歌单 ID。");
+  }
+
   url.searchParams.set("type", "1");
   url.searchParams.set("json", "1");
   url.searchParams.set("utf8", "1");
   url.searchParams.set("onlysong", "0");
-  url.searchParams.set("disstid", playlistId);
+  url.searchParams.set("disstid", rawPlaylistId);
   url.searchParams.set("format", "json");
 
   const response = await fetch(url, { headers: QQ_HEADERS });

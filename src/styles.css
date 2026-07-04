@@ -9077,6 +9077,139 @@ button.quick-chip:active,
   margin: 0;
 }
 
+.transfer-song-picker,
+.transfer-target-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  background: rgba(10, 15, 24, 0.42);
+}
+
+.transfer-song-picker-head,
+.transfer-song-picker-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.transfer-song-picker-head strong,
+.transfer-song-picker-head span {
+  display: block;
+}
+
+.transfer-song-picker-head strong {
+  color: var(--text-primary);
+  font-size: 0.96rem;
+}
+
+.transfer-song-picker-head span,
+.transfer-helper-text {
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.transfer-helper-text {
+  margin: 0;
+}
+
+.transfer-song-list {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.transfer-song-row {
+  display: grid;
+  grid-template-columns: 18px 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.045);
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.transfer-song-row:hover {
+  background: rgba(255, 255, 255, 0.065);
+  border-color: rgba(255, 255, 255, 0.09);
+  transform: translateY(-1px);
+}
+
+.transfer-song-row input {
+  margin: 0;
+}
+
+.transfer-song-row img,
+.transfer-song-cover-fallback {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  object-fit: cover;
+}
+
+.transfer-song-row span {
+  min-width: 0;
+  margin: 0;
+}
+
+.transfer-song-row strong,
+.transfer-song-row small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transfer-song-row strong {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.transfer-song-row small {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.transfer-target-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 4px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.transfer-target-mode button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.transfer-target-mode button:hover,
+.transfer-target-mode button.active {
+  background: rgba(255, 255, 255, 0.095);
+  color: var(--text-primary);
+}
+
+.transfer-target-mode button.active {
+  box-shadow: inset 0 0 0 1px rgba(255, 211, 111, 0.16);
+}
+
 .transfer-report-card {
   gap: 16px;
 }
@@ -9312,6 +9445,11 @@ button.quick-chip:active,
 
   .transfer-status {
     justify-self: start;
+  }
+
+  .transfer-song-picker-head {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

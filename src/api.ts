@@ -1573,13 +1573,13 @@ export async function exportPlaylistTransferJob(jobId: string, format: TransferE
   return (await response.json()) as TransferExportResult;
 }
 
-export async function importPlaylistTransferToNetease(jobId: string, name: string): Promise<NeteaseTransferImportResult> {
+export async function importPlaylistTransferToNetease(jobId: string, payload: { name?: string; playlistId?: string }): Promise<NeteaseTransferImportResult> {
   const response = await apiFetch(`/api/playlist-transfer/jobs/${encodeURIComponent(jobId)}/import/netease`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ name })
+    body: JSON.stringify(payload)
   });
 
   if (!response.ok) {
