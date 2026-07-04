@@ -1785,11 +1785,11 @@ export default function App() {
     return "ok";
   }
 
-  function createQualitySelectionMap(songs: Song[], level = settings.defaultPlaybackQuality) {
+  function createQualitySelectionMap(songs: Song[], level = settings.defaultDownloadQuality) {
     return Object.fromEntries(songs.map((song) => [song.id, getPreferredQualityForLevel(song, level)]));
   }
 
-  function applyQualityDefaults(songs: Song[], level = settings.defaultPlaybackQuality) {
+  function applyQualityDefaults(songs: Song[], level = settings.defaultDownloadQuality) {
     setQualitySelections(createQualitySelectionMap(songs, level));
     setQualitySelectionTouched({});
     setSelectedSongIds([]);
@@ -2224,7 +2224,7 @@ export default function App() {
       setPlayQueue(cachedDiscoverSongs);
       setResultSource("discover");
       setDiscoverFeedKind("recommend");
-      applyQualityDefaults(cachedDiscoverSongs, nextSettings.defaultPlaybackQuality);
+      applyQualityDefaults(cachedDiscoverSongs, nextSettings.defaultDownloadQuality);
       setMessage(`已先加载缓存推荐 · ${cachedDiscoverSongs.length} 首，正在后台刷新`);
     }
 
@@ -2330,7 +2330,7 @@ export default function App() {
         setPlayQueue(cachedDiscoverSongs);
         setResultSource("discover");
         setDiscoverFeedKind("recommend");
-        applyQualityDefaults(cachedDiscoverSongs, nextSettings.defaultPlaybackQuality);
+        applyQualityDefaults(cachedDiscoverSongs, nextSettings.defaultDownloadQuality);
         setMessage(`已恢复发现音乐缓存 · ${cachedDiscoverSongs.length} 首，正在后台刷新`);
       }
       void loadDiscoverSongs({ keepExisting: cachedDiscoverSongs.length > 0, providerMode: startupProviderMode });
@@ -5336,7 +5336,7 @@ export default function App() {
       const nextSelections = { ...current };
       additions.forEach((song) => {
         if (!nextSelections[song.id]) {
-          nextSelections[song.id] = getPreferredPlaybackQuality(song);
+          nextSelections[song.id] = getPreferredDownloadQuality(song);
         }
       });
       return nextSelections;
