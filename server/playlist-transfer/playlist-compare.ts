@@ -63,6 +63,11 @@ export type PlaylistCompareRequest = {
   rightText?: string;
 };
 
+export type PlaylistCompareExportOptions = {
+  itemIndexes?: number[];
+  preferredProvider?: "netease" | "qq";
+};
+
 function normalizeStrict(value: string | undefined) {
   return (value ?? "")
     .toLocaleLowerCase()
@@ -290,7 +295,12 @@ function statusLabel(status: PlaylistCompareStatus) {
   }
 }
 
-function getExportTrack(item: PlaylistCompareItem) {
+function getExportTrack(item: PlaylistCompareItem, preferredProvider?: "netease" | "qq") {
+  const preferredTrack = [item.leftTrack, item.rightTrack].find((track) => track?.source === preferredProvider);
+  if (preferredTrack) {
+    return preferredTrack;
+  }
+
   if (item.status === "right_only") {
     return item.rightTrack;
   }
@@ -298,12 +308,24 @@ function getExportTrack(item: PlaylistCompareItem) {
   return item.leftTrack ?? item.rightTrack;
 }
 
+function selectCompareItems(
+  result: PlaylistCompareResult,
+  statuses: PlaylistCompareStatus[],
+  itemIndexes: number[] | undefined
+) {
+  const selectedIndexes = itemIndexes ? new Set(itemIndexes) : null;
+  return result.items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item, index }) => statuses.includes(item.status) && (!selectedIndexes || selectedIndexes.has(index)));
+}
+
 function csvValue(value: string | number | undefined) {
   const text = String(value ?? "");
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-function formatMarkdown(result: PlaylistCompareResult, statuses: PlaylistCompareStatus[]) {
+function formatMarkdown(result: PlaylistCompareResult, statuses: PlaylistCompareStatus[], options: PlaylistCompareExportOptions) {
+  const selectedItems = selectCompareItems(result, statuses, options.itemIndexes);
   const lines = [
     `# ${result.left.playlistName} vs ${result.right.playlistName} 歌单对比`,
     "",
@@ -320,16 +342,18 @@ function formatMarkdown(result: PlaylistCompareResult, statuses: PlaylistCompare
   ];
 
   for (const status of statuses) {
-    const matches = result.items.filter((item) => item.status === status);
+    const matches = selectedItems.filter(({ item }) => item.status === status);
     lines.push(`## ${statusLabel(status)}`);
     if (matches.length === 0) {
       lines.push("无", "");
       continue;
     }
 
-    matches.forEach((item, index) => {
-      const right = item.rightTrack ? ` -> ${trackText(item.rightTrack)}` : "";
-      lines.push(`${index + 1}. ${trackText(getExportTrack(item))}${right}（${item.reasons.join("、")}）`);
+    matches.forEach(({ item }, index) => {
+      const exportTrack = getExportTrack(item, options.preferredProvider);
+      const pairedTrack = exportTrack === item.leftTrack ? item.rightTrack : item.leftTrack;
+      const pair = pairedTrack ? ` -> ${trackText(pairedTrack)}` : "";
+      lines.push(`${index + 1}. ${trackText(exportTrack)}${pair}（${item.reasons.join("、")}）`);
     });
     lines.push("");
   }
@@ -337,17 +361,18 @@ function formatMarkdown(result: PlaylistCompareResult, statuses: PlaylistCompare
   return `${lines.join("\n").trim()}\n`;
 }
 
-function formatText(result: PlaylistCompareResult, statuses: PlaylistCompareStatus[]) {
+function formatText(result: PlaylistCompareResult, statuses: PlaylistCompareStatus[], options: PlaylistCompareExportOptions) {
+  const selectedItems = selectCompareItems(result, statuses, options.itemIndexes);
   const lines: string[] = [];
   for (const status of statuses) {
-    const matches = result.items.filter((item) => item.status === status);
+    const matches = selectedItems.filter(({ item }) => item.status === status);
     if (matches.length === 0) {
       continue;
     }
 
     lines.push(`# ${statusLabel(status)}`);
-    matches.forEach((item) => {
-      lines.push(trackText(getExportTrack(item)));
+    matches.forEach(({ item }) => {
+      lines.push(trackText(getExportTrack(item, options.preferredProvider)));
     });
     lines.push("");
   }
@@ -355,10 +380,10 @@ function formatText(result: PlaylistCompareResult, statuses: PlaylistCompareStat
   return `${lines.join("\n").trim()}\n`;
 }
 
-function formatCsv(result: PlaylistCompareResult, statuses: PlaylistCompareStatus[]) {
+function formatCsv(result: PlaylistCompareResult, statuses: PlaylistCompareStatus[], options: PlaylistCompareExportOptions) {
   const rows = [["status", "left_title", "left_artists", "left_album", "right_title", "right_artists", "right_album", "score", "reasons"]];
 
-  for (const item of result.items.filter((entry) => statuses.includes(entry.status))) {
+  for (const { item } of selectCompareItems(result, statuses, options.itemIndexes)) {
     rows.push([
       statusLabel(item.status),
       item.leftTrack?.title ?? "",
@@ -378,11 +403,14 @@ function formatCsv(result: PlaylistCompareResult, statuses: PlaylistCompareStatu
 export function formatPlaylistCompareExport(
   result: PlaylistCompareResult,
   format: TransferExportFormat,
-  statuses: PlaylistCompareStatus[]
+  statuses: PlaylistCompareStatus[],
+  options: PlaylistCompareExportOptions = {}
 ): TransferExportResult {
   const defaultStatuses: PlaylistCompareStatus[] = ["exact", "same_title_different_artist", "similar_title", "left_only", "right_only"];
   const safeStatuses = statuses.length > 0 ? statuses : defaultStatuses;
-  const baseName = `${result.left.playlistName}-vs-${result.right.playlistName}-compare`;
+  const providerSuffix = options.preferredProvider ? `-${options.preferredProvider}` : "";
+  const baseName = `${result.left.playlistName}-vs-${result.right.playlistName}-compare${providerSuffix}`;
+  const selectedItems = selectCompareItems(result, safeStatuses, options.itemIndexes);
 
   if (format === "json") {
     return {
@@ -390,7 +418,8 @@ export function formatPlaylistCompareExport(
       contentType: "application/json; charset=utf-8",
       content: JSON.stringify({
         ...result,
-        items: result.items.filter((item) => safeStatuses.includes(item.status))
+        items: selectedItems.map(({ item }) => item),
+        preferredProvider: options.preferredProvider
       }, null, 2)
     };
   }
@@ -399,7 +428,7 @@ export function formatPlaylistCompareExport(
     return {
       filename: `${baseName}.csv`,
       contentType: "text/csv; charset=utf-8",
-      content: formatCsv(result, safeStatuses)
+      content: formatCsv(result, safeStatuses, options)
     };
   }
 
@@ -407,13 +436,13 @@ export function formatPlaylistCompareExport(
     return {
       filename: `${baseName}.txt`,
       contentType: "text/plain; charset=utf-8",
-      content: formatText(result, safeStatuses)
+      content: formatText(result, safeStatuses, options)
     };
   }
 
   return {
     filename: `${baseName}.md`,
     contentType: "text/markdown; charset=utf-8",
-    content: formatMarkdown(result, safeStatuses)
+    content: formatMarkdown(result, safeStatuses, options)
   };
 }

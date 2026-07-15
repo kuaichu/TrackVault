@@ -19,6 +19,7 @@ import {
   getPlaylistTransferRunJob,
   exportPlaylistTransferJob,
   importPlaylistTransferToNetease,
+  importPlaylistTransferToQq,
   getSongLiked,
   getSession,
   getPlayHistory,
@@ -71,7 +72,7 @@ import {
   replyToSongComment,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferJob, PlaylistTransferRunJob, QqMusicAccountStatus, QqMusicUserProfile, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, SongInsight, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
+import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferImportResult, PlaylistTransferJob, PlaylistTransferRunJob, QqMusicAccountStatus, QqMusicUserProfile, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, SongInsight, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferTrack, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
@@ -79,6 +80,8 @@ const COMMENT_PAGE_SIZE = 20;
 const COMMENT_REPLY_PAGE_SIZE = 20;
 const USER_SOCIAL_PAGE_SIZE = 30;
 const USER_EVENTS_PAGE_SIZE = 20;
+const PLAYLIST_COMPARE_STATUSES: PlaylistCompareStatus[] = ["exact", "same_title_different_artist", "similar_title", "left_only", "right_only"];
+const DEFAULT_PLAYLIST_COMPARE_STATUSES: PlaylistCompareStatus[] = ["same_title_different_artist", "similar_title", "left_only", "right_only"];
 const neteaseEmojiMap: Record<string, string> = {
   "[爱心]": "\u2764\uFE0F",
   "[心碎]": "\uD83D\uDC94",
@@ -1323,6 +1326,7 @@ export default function App() {
   const [transferCheckAvailability, setTransferCheckAvailability] = useState(false);
   const [transferQqPlaylists, setTransferQqPlaylists] = useState<UserPlaylist[]>([]);
   const [transferNeteaseTargetPlaylists, setTransferNeteaseTargetPlaylists] = useState<UserPlaylist[]>([]);
+  const [compareNeteasePlaylists, setCompareNeteasePlaylists] = useState<UserPlaylist[]>([]);
   const [loadingTransferQqPlaylists, setLoadingTransferQqPlaylists] = useState(false);
   const [loadingTransferNeteaseTargetPlaylists, setLoadingTransferNeteaseTargetPlaylists] = useState(false);
   const [transferSourceSongs, setTransferSourceSongs] = useState<Song[]>([]);
@@ -1357,7 +1361,7 @@ export default function App() {
   const [neteaseAuditPlayablePlaylistName, setNeteaseAuditPlayablePlaylistName] = useState("");
   const [neteaseAuditPlayableImporting, setNeteaseAuditPlayableImporting] = useState(false);
   const [neteaseAuditPlayableImportResult, setNeteaseAuditPlayableImportResult] = useState<NeteaseTransferImportResult | null>(null);
-  const [compareLeftProvider, setCompareLeftProvider] = useState<"netease" | "qq">("netease");
+  const [compareLeftProvider, setCompareLeftProvider] = useState<"netease" | "qq">("qq");
   const [compareRightProvider, setCompareRightProvider] = useState<"netease" | "qq">("netease");
   const [compareLeftPlaylistId, setCompareLeftPlaylistId] = useState("");
   const [compareRightPlaylistId, setCompareRightPlaylistId] = useState("");
@@ -1366,8 +1370,13 @@ export default function App() {
   const [playlistCompareLoading, setPlaylistCompareLoading] = useState(false);
   const [playlistCompareExporting, setPlaylistCompareExporting] = useState(false);
   const [playlistCompareExportFormat, setPlaylistCompareExportFormat] = useState<TransferExportFormat>("text");
-  const [playlistCompareExportStatuses, setPlaylistCompareExportStatuses] = useState<PlaylistCompareStatus[]>(["same_title_different_artist", "similar_title", "left_only", "right_only"]);
+  const [playlistCompareSelectedIndexes, setPlaylistCompareSelectedIndexes] = useState<number[]>([]);
+  const [playlistCompareExportProvider, setPlaylistCompareExportProvider] = useState<"netease" | "qq">("netease");
   const [playlistCompareExportContent, setPlaylistCompareExportContent] = useState("");
+  const [playlistCompareCreateProvider, setPlaylistCompareCreateProvider] = useState<"netease" | "qq">("netease");
+  const [playlistCompareCreateName, setPlaylistCompareCreateName] = useState("");
+  const [playlistCompareCreating, setPlaylistCompareCreating] = useState(false);
+  const [playlistCompareCreateResult, setPlaylistCompareCreateResult] = useState<PlaylistTransferImportResult | null>(null);
   const [adminConfigTokenInput, setAdminConfigTokenInput] = useState("");
   const [session, setSession] = useState<AuthSession>({ loggedIn: false, profile: null });
   const [searching, setSearching] = useState(false);
@@ -2455,7 +2464,7 @@ export default function App() {
     }
   }
 
-  async function loadTransferQqPlaylists(options: { preferFirst?: boolean } = {}) {
+  async function loadTransferQqPlaylists(options: { preferFirst?: boolean; selectTransferPlaylist?: boolean } = {}) {
     if (!hasQqMusicCookie) {
       setMessage("请先在账号中心导入 QQ 音乐 Cookie。");
       return;
@@ -2468,7 +2477,7 @@ export default function App() {
       const data = await getPlaylists("qq");
       setTransferQqPlaylists(data);
       setMessage(`QQ 音乐共读取 ${data.length} 个歌单`);
-      if ((options.preferFirst || !transferPlaylistId) && data.length > 0) {
+      if (options.selectTransferPlaylist !== false && (options.preferFirst || !transferPlaylistId) && data.length > 0) {
         setTransferPlaylistId(data[0].id);
         setTransferPlaylistName(`${data[0].name} 迁移到网易云`);
         void loadTransferSourceSongs(data[0].id, "qq");
@@ -2484,6 +2493,7 @@ export default function App() {
     const cookieOk = await ensureNeteaseCookieHealthy({ silent: true });
     if (!cookieOk) {
       setTransferNeteaseTargetPlaylists([]);
+      setCompareNeteasePlaylists([]);
       setMessage("请先登录网易云账号，才能选择目标歌单。");
       return;
     }
@@ -2493,6 +2503,7 @@ export default function App() {
     try {
       const data = await getPlaylists("netease");
       const ownedPlaylists = data.filter((playlist) => playlist.owned);
+      setCompareNeteasePlaylists(data);
       setTransferNeteaseTargetPlaylists(ownedPlaylists);
       if (!transferTargetPlaylistId && ownedPlaylists.length > 0) {
         setTransferTargetPlaylistId(ownedPlaylists[0].id);
@@ -2620,11 +2631,11 @@ export default function App() {
     setTransferSelectedSourceSongIds(selected ? transferSourceSongs.map((song) => song.id) : []);
   }
 
-  async function pollPlaylistTransferRunJob(jobId: string) {
+  async function pollPlaylistTransferRunJob(jobId: string, autoImport = transferExecutionMode === "write"): Promise<PlaylistTransferJob | null> {
     while (transferRunJobIdRef.current === jobId) {
       await new Promise((resolve) => setTimeout(resolve, 800));
       if (transferRunJobIdRef.current !== jobId) {
-        return;
+        return null;
       }
 
       try {
@@ -2640,23 +2651,25 @@ export default function App() {
           setTransferImportResult(null);
           setTransferLoading(false);
           setMessage(`歌单互转完成：${job.result.summary.matched} 首匹配，${job.result.summary.manualReview} 首待确认，${job.result.summary.notFound} 首未找到。`);
-          if (transferExecutionMode === "write" && job.result.targetProvider === "netease" && job.result.summary.matched > 0) {
+          if (autoImport && job.result.targetProvider === "netease" && job.result.summary.matched > 0) {
             await importTransferJobToNetease(job.result);
           }
-          return;
+          return job.result;
         }
 
         if (job.status === "failed") {
           setTransferLoading(false);
           setMessage(job.error ?? "创建歌单互转任务失败");
-          return;
+          return null;
         }
       } catch (error) {
         setTransferLoading(false);
         setMessage(error instanceof Error ? error.message : "获取歌单互转进度失败");
-        return;
+        return null;
       }
     }
+
+    return null;
   }
 
   async function handleCreateTransferJob() {
@@ -2715,7 +2728,7 @@ export default function App() {
       setTransferRunJob(job);
       setTransferImportResult(null);
       setMessage(`已提交歌单互转任务：${playlistName}`);
-      void pollPlaylistTransferRunJob(job.id);
+      void pollPlaylistTransferRunJob(job.id, transferExecutionMode === "write");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "创建歌单互转任务失败");
       setTransferLoading(false);
@@ -2741,31 +2754,55 @@ export default function App() {
     }
   }
 
-  async function importTransferJobToNetease(job: PlaylistTransferJob) {
+  async function importTransferJobToNetease(job: PlaylistTransferJob, newPlaylistName?: string): Promise<PlaylistTransferImportResult | null> {
+    const forceCreate = Boolean(newPlaylistName?.trim());
+    const createNewPlaylist = forceCreate || transferNeteaseTargetMode === "create";
     setTransferImporting(true);
-    setMessage(transferNeteaseTargetMode === "existing" ? "正在导入到网易云已有歌单" : "正在创建网易云目标歌单");
+    setMessage(createNewPlaylist ? "正在创建网易云目标歌单" : "正在导入到网易云已有歌单");
 
     try {
-      if (transferNeteaseTargetMode === "existing" && !transferTargetPlaylistId) {
+      if (!createNewPlaylist && !transferTargetPlaylistId) {
         setMessage("请先选择要导入的网易云目标歌单。");
-        setTransferImporting(false);
-        return;
+        return null;
       }
 
-      const importName = transferImportName.trim();
+      const importName = newPlaylistName?.trim() || transferImportName.trim();
       const result = await importPlaylistTransferToNetease(job.id, {
         name: !importName || importName === "转换后的歌单" ? `${job.playlistName} 转换结果` : importName,
-        playlistId: transferNeteaseTargetMode === "existing" ? transferTargetPlaylistId : undefined
+        playlistId: createNewPlaylist ? undefined : transferTargetPlaylistId
       });
       setTransferImportResult(result);
       setMessage(
-        transferNeteaseTargetMode === "existing"
-          ? `已导入到「${result.playlistName ?? "网易云目标歌单"}」，新增 ${result.addedCount} 首，跳过 ${result.skippedCount} 首。`
-          : `已创建「${result.playlistName ?? "网易云歌单"}」，导入 ${result.addedCount} 首，跳过 ${result.skippedCount} 首。`
+        createNewPlaylist
+          ? `已创建「${result.playlistName ?? "网易云歌单"}」，导入 ${result.addedCount} 首，跳过 ${result.skippedCount} 首。`
+          : `已导入到「${result.playlistName ?? "网易云目标歌单"}」，新增 ${result.addedCount} 首，跳过 ${result.skippedCount} 首。`
       );
       void loadUserPlaylists();
+      return result;
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "导入网易云歌单失败");
+      return null;
+    } finally {
+      setTransferImporting(false);
+    }
+  }
+
+  async function importTransferJobToQq(job: PlaylistTransferJob, newPlaylistName?: string): Promise<PlaylistTransferImportResult | null> {
+    setTransferImporting(true);
+    setMessage("正在创建 QQ 音乐目标歌单");
+
+    try {
+      const importName = newPlaylistName?.trim() || transferImportName.trim();
+      const result = await importPlaylistTransferToQq(job.id, {
+        name: !importName || importName === "转换后的歌单" ? `${job.playlistName} 转换结果` : importName
+      });
+      setTransferImportResult(result);
+      setMessage(`已创建「${result.playlistName ?? "QQ 音乐歌单"}」，导入 ${result.addedCount} 首，跳过 ${result.skippedCount} 首。`);
+      void loadTransferQqPlaylists({ selectTransferPlaylist: false });
+      return result;
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "导入 QQ 音乐歌单失败");
+      return null;
     } finally {
       setTransferImporting(false);
     }
@@ -2777,6 +2814,14 @@ export default function App() {
     }
 
     await importTransferJobToNetease(transferJob);
+  }
+
+  async function handleImportTransferToQq() {
+    if (!transferJob) {
+      return;
+    }
+
+    await importTransferJobToQq(transferJob);
   }
 
   function downloadExportedContent(exported: TransferExportResult) {
@@ -2926,14 +2971,75 @@ export default function App() {
     }
   }
 
-  function togglePlaylistCompareExportStatus(status: PlaylistCompareStatus) {
-    setPlaylistCompareExportStatuses((current) => {
-      if (current.includes(status)) {
-        return current.filter((item) => item !== status);
-      }
+  function openPlaylistCompareTool() {
+    setTransferToolTab("compare");
+    if (transferQqPlaylists.length === 0 && !loadingTransferQqPlaylists && hasQqMusicCookie) {
+      void loadTransferQqPlaylists({ selectTransferPlaylist: false });
+    }
+    if (compareNeteasePlaylists.length === 0 && !loadingTransferNeteaseTargetPlaylists && settings.neteaseCookie.trim()) {
+      void loadTransferNeteaseTargetPlaylists();
+    }
+  }
 
-      return [...current, status];
+  function handlePlaylistCompareProviderChange(side: "left" | "right", provider: "netease" | "qq") {
+    if (side === "left") {
+      setCompareLeftProvider(provider);
+      setCompareLeftPlaylistId("");
+    } else {
+      setCompareRightProvider(provider);
+      setCompareRightPlaylistId("");
+    }
+
+    setPlaylistCompareResult(null);
+    setPlaylistCompareSelectedIndexes([]);
+    setPlaylistCompareExportContent("");
+    setPlaylistCompareCreateResult(null);
+
+    if (provider === "qq" && transferQqPlaylists.length === 0 && !loadingTransferQqPlaylists) {
+      void loadTransferQqPlaylists({ selectTransferPlaylist: false });
+    } else if (provider === "netease" && compareNeteasePlaylists.length === 0 && !loadingTransferNeteaseTargetPlaylists) {
+      void loadTransferNeteaseTargetPlaylists();
+    }
+  }
+
+  function getPlaylistCompareTrack(item: PlaylistCompareResult["items"][number], preferredProvider: "netease" | "qq") {
+    return [item.leftTrack, item.rightTrack].find((track) => track?.source === preferredProvider)
+      ?? item.leftTrack
+      ?? item.rightTrack;
+  }
+
+  function togglePlaylistCompareItem(index: number) {
+    setPlaylistCompareCreateResult(null);
+    setPlaylistCompareSelectedIndexes((current) =>
+      current.includes(index)
+        ? current.filter((item) => item !== index)
+        : [...current, index].sort((left, right) => left - right)
+    );
+  }
+
+  function togglePlaylistCompareExportStatus(status: PlaylistCompareStatus) {
+    if (!playlistCompareResult) {
+      return;
+    }
+
+    const categoryIndexes = playlistCompareResult.items
+      .map((item, index) => item.status === status ? index : -1)
+      .filter((index) => index >= 0);
+
+    setPlaylistCompareCreateResult(null);
+    setPlaylistCompareSelectedIndexes((current) => {
+      const selected = new Set(current);
+      const allSelected = categoryIndexes.length > 0 && categoryIndexes.every((index) => selected.has(index));
+      categoryIndexes.forEach((index) => allSelected ? selected.delete(index) : selected.add(index));
+      return [...selected].sort((left, right) => left - right);
     });
+  }
+
+  function setAllPlaylistCompareItemsSelected(selected: boolean) {
+    setPlaylistCompareCreateResult(null);
+    setPlaylistCompareSelectedIndexes(selected && playlistCompareResult
+      ? playlistCompareResult.items.map((_, index) => index)
+      : []);
   }
 
   async function pollPlaylistCompareJob(jobId: string) {
@@ -2952,6 +3058,11 @@ export default function App() {
         setPlaylistCompareJob(job);
         if (job.status === "completed" && job.result) {
           setPlaylistCompareResult(job.result);
+          setPlaylistCompareCreateName(`${job.result.left.playlistName} 与 ${job.result.right.playlistName} 所选歌曲`);
+          setPlaylistCompareCreateResult(null);
+          setPlaylistCompareSelectedIndexes(job.result.items
+            .map((item, index) => DEFAULT_PLAYLIST_COMPARE_STATUSES.includes(item.status) ? index : -1)
+            .filter((index) => index >= 0));
           setPlaylistCompareLoading(false);
           setMessage(
             `对比完成：完全一样 ${job.result.summary.exact} 首，歌名同但歌手不同 ${job.result.summary.sameTitleDifferentArtist} 首，歌名相似 ${job.result.summary.similarTitle} 首。`
@@ -2980,12 +3091,14 @@ export default function App() {
       }
     }
 
-    const leftPlaylist = playlists.find((playlist) => playlist.id === compareLeftPlaylistId);
-    const rightPlaylist = playlists.find((playlist) => playlist.id === compareRightPlaylistId);
-    const leftPlaylistId = compareLeftProvider === "netease" ? leftPlaylist?.id ?? "" : compareLeftPlaylistId.trim();
-    const rightPlaylistId = compareRightProvider === "netease" ? rightPlaylist?.id ?? "" : compareRightPlaylistId.trim();
-    const leftPlaylistName = compareLeftProvider === "netease" ? leftPlaylist?.name : `QQ 歌单 ${leftPlaylistId}`;
-    const rightPlaylistName = compareRightProvider === "netease" ? rightPlaylist?.name : `QQ 歌单 ${rightPlaylistId}`;
+    const leftPlaylist = (compareLeftProvider === "netease" ? compareNeteasePlaylists : transferQqPlaylists)
+      .find((playlist) => playlist.id === compareLeftPlaylistId);
+    const rightPlaylist = (compareRightProvider === "netease" ? compareNeteasePlaylists : transferQqPlaylists)
+      .find((playlist) => playlist.id === compareRightPlaylistId);
+    const leftPlaylistId = compareLeftPlaylistId.trim();
+    const rightPlaylistId = compareRightPlaylistId.trim();
+    const leftPlaylistName = leftPlaylist?.name ?? `${compareLeftProvider === "netease" ? "网易云" : "QQ"} 歌单 ${leftPlaylistId}`;
+    const rightPlaylistName = rightPlaylist?.name ?? `${compareRightProvider === "netease" ? "网易云" : "QQ"} 歌单 ${rightPlaylistId}`;
 
     if (!leftPlaylistId || !rightPlaylistId) {
       setMessage("请先填写或选择左右两个歌单。");
@@ -2995,7 +3108,9 @@ export default function App() {
     setPlaylistCompareLoading(true);
     setPlaylistCompareResult(null);
     setPlaylistCompareJob(null);
+    setPlaylistCompareSelectedIndexes([]);
     setPlaylistCompareExportContent("");
+    setPlaylistCompareCreateResult(null);
     setMessage("正在对比两个歌单");
 
     try {
@@ -3022,10 +3137,14 @@ export default function App() {
       return;
     }
 
-    if (playlistCompareExportStatuses.length === 0) {
-      setMessage("请至少选择一个要导出的分类。");
+    if (playlistCompareSelectedIndexes.length === 0) {
+      setMessage("请至少选择一首要导出的歌曲。");
       return;
     }
+
+    const statuses = [...new Set(playlistCompareSelectedIndexes
+      .map((index) => playlistCompareResult.items[index]?.status)
+      .filter((status): status is PlaylistCompareStatus => Boolean(status)))];
 
     setPlaylistCompareExporting(true);
     setMessage("正在导出歌单对比结果");
@@ -3034,14 +3153,96 @@ export default function App() {
       const exported = await exportPlaylistCompare({
         result: playlistCompareResult,
         format: playlistCompareExportFormat,
-        statuses: playlistCompareExportStatuses
+        statuses,
+        itemIndexes: playlistCompareSelectedIndexes,
+        preferredProvider: playlistCompareExportProvider
       });
       setPlaylistCompareExportContent(exported.content);
-      setMessage(`已生成导出内容：${exported.filename}`);
+      downloadExportedContent(exported);
+      setMessage(`已生成并下载：${exported.filename}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "导出歌单对比结果失败");
     } finally {
       setPlaylistCompareExporting(false);
+    }
+  }
+
+  async function handleCreatePlaylistFromCompare() {
+    if (!playlistCompareResult || playlistCompareSelectedIndexes.length === 0) {
+      setMessage("请至少选择一首要生成新歌单的歌曲。");
+      return;
+    }
+
+    const targetProvider = playlistCompareCreateProvider;
+    if (targetProvider === "netease") {
+      const cookieOk = await ensureNeteaseCookieHealthy();
+      if (!cookieOk) {
+        return;
+      }
+    } else if (!hasQqMusicCookie) {
+      setMessage("请先登录 QQ 音乐账号，再创建 QQ 音乐歌单。");
+      openQqCookieLogin();
+      return;
+    }
+
+    const selectedIndexes = new Set(playlistCompareSelectedIndexes);
+    const selectedTracks = playlistCompareResult.items
+      .filter((_, index) => selectedIndexes.has(index))
+      .map((item) => getPlaylistCompareTrack(item, targetProvider))
+      .filter((track): track is TransferTrack => Boolean(track));
+
+    if (selectedTracks.length === 0) {
+      setMessage("所选结果里没有可用于迁移的歌曲信息。");
+      return;
+    }
+
+    const playlistName = playlistCompareCreateName.trim()
+      || `${playlistCompareResult.left.playlistName} 与 ${playlistCompareResult.right.playlistName} 所选歌曲`;
+    setTransferSourceProvider("text");
+    setTransferTargetProvider(targetProvider);
+    setTransferPlaylistName(playlistName);
+    setTransferExecutionMode("report");
+    setTransferNeteaseTargetMode("create");
+    setTransferImportName(playlistName);
+    setTransferLoading(true);
+    setPlaylistCompareCreating(true);
+    setPlaylistCompareCreateResult(null);
+    setTransferJob(null);
+    setTransferRunJob(null);
+    setTransferImportResult(null);
+    setTransferExportContent("");
+    setMessage(`正在为所选歌曲匹配${targetProvider === "netease" ? "网易云" : "QQ 音乐"}版本`);
+
+    try {
+      const job = await startPlaylistTransferRunJob({
+        sourceProvider: "text",
+        targetProvider,
+        playlistName,
+        sourceTracks: selectedTracks,
+        checkAvailability: targetProvider === "netease"
+      });
+      transferRunJobIdRef.current = job.id;
+      setTransferRunJob(job);
+      setMessage(`已提交${targetProvider === "netease" ? "网易云" : "QQ 音乐"}匹配任务：${selectedTracks.length} 首。`);
+      const completedJob = await pollPlaylistTransferRunJob(job.id, false);
+      if (!completedJob) {
+        return;
+      }
+
+      if (completedJob.summary.matched === 0) {
+        setMessage("没有自动匹配成功的歌曲，未创建空歌单；请查看下方匹配报告。");
+        return;
+      }
+
+      const result = targetProvider === "netease"
+        ? await importTransferJobToNetease(completedJob, playlistName)
+        : await importTransferJobToQq(completedJob, playlistName);
+      setPlaylistCompareCreateResult(result);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "创建目标平台歌单失败");
+      setTransferLoading(false);
+    } finally {
+      setPlaylistCompareCreating(false);
     }
   }
 
@@ -8343,7 +8544,7 @@ export default function App() {
                     <button type="button" className={transferToolTab === "audit" ? "active" : ""} onClick={() => setTransferToolTab("audit")}>
                       导入清理
                     </button>
-                    <button type="button" className={transferToolTab === "compare" ? "active" : ""} onClick={() => setTransferToolTab("compare")}>
+                    <button type="button" className={transferToolTab === "compare" ? "active" : ""} onClick={openPlaylistCompareTool}>
                       歌单对比
                     </button>
                   </div>
@@ -8536,14 +8737,14 @@ export default function App() {
                   <div className="transfer-grid">
                     <label>
                       <span>左侧来源</span>
-                      <select value={compareLeftProvider} onChange={(event) => setCompareLeftProvider(event.target.value as "netease" | "qq")}>
+                      <select value={compareLeftProvider} onChange={(event) => handlePlaylistCompareProviderChange("left", event.target.value as "netease" | "qq")}>
                         <option value="netease">网易云歌单</option>
                         <option value="qq">QQ 音乐公开歌单</option>
                       </select>
                     </label>
                     <label>
                       <span>右侧来源</span>
-                      <select value={compareRightProvider} onChange={(event) => setCompareRightProvider(event.target.value as "netease" | "qq")}>
+                      <select value={compareRightProvider} onChange={(event) => handlePlaylistCompareProviderChange("right", event.target.value as "netease" | "qq")}>
                         <option value="netease">网易云歌单</option>
                         <option value="qq">QQ 音乐公开歌单</option>
                       </select>
@@ -8555,14 +8756,21 @@ export default function App() {
                       {compareLeftProvider === "netease" ? (
                         <select value={compareLeftPlaylistId} onChange={(event) => setCompareLeftPlaylistId(event.target.value)}>
                           <option value="">选择歌单</option>
-                          {playlists.map((playlist) => (
+                          {compareNeteasePlaylists.map((playlist) => (
                             <option key={playlist.id} value={playlist.id}>
                               {playlist.name} · {playlist.trackCount} 首
                             </option>
                           ))}
                         </select>
                       ) : (
-                        <input value={compareLeftPlaylistId} onChange={(event) => setCompareLeftPlaylistId(event.target.value)} placeholder="QQ 音乐公开歌单 ID" />
+                        <>
+                          <input list="compare-left-qq-playlists" value={compareLeftPlaylistId} onChange={(event) => setCompareLeftPlaylistId(event.target.value)} placeholder="选择我的 QQ 歌单或输入公开歌单 ID" />
+                          <datalist id="compare-left-qq-playlists">
+                            {transferQqPlaylists.map((playlist) => (
+                              <option key={playlist.id} value={playlist.id}>{playlist.name} · {playlist.trackCount} 首</option>
+                            ))}
+                          </datalist>
+                        </>
                       )}
                     </label>
                     <label>
@@ -8570,24 +8778,36 @@ export default function App() {
                       {compareRightProvider === "netease" ? (
                         <select value={compareRightPlaylistId} onChange={(event) => setCompareRightPlaylistId(event.target.value)}>
                           <option value="">选择歌单</option>
-                          {playlists.map((playlist) => (
+                          {compareNeteasePlaylists.map((playlist) => (
                             <option key={playlist.id} value={playlist.id}>
                               {playlist.name} · {playlist.trackCount} 首
                             </option>
                           ))}
                         </select>
                       ) : (
-                        <input value={compareRightPlaylistId} onChange={(event) => setCompareRightPlaylistId(event.target.value)} placeholder="QQ 音乐公开歌单 ID" />
+                        <>
+                          <input list="compare-right-qq-playlists" value={compareRightPlaylistId} onChange={(event) => setCompareRightPlaylistId(event.target.value)} placeholder="选择我的 QQ 歌单或输入公开歌单 ID" />
+                          <datalist id="compare-right-qq-playlists">
+                            {transferQqPlaylists.map((playlist) => (
+                              <option key={playlist.id} value={playlist.id}>{playlist.name} · {playlist.trackCount} 首</option>
+                            ))}
+                          </datalist>
+                        </>
                       )}
                     </label>
                   </div>
                   <div className="form-actions">
                     {(compareLeftProvider === "netease" || compareRightProvider === "netease") ? (
-                      <button type="button" className="secondary-button" disabled={loadingPlaylists} onClick={() => void loadUserPlaylists()}>
-                        {loadingPlaylists ? "读取中" : "刷新网易云歌单"}
+                      <button type="button" className="secondary-button" disabled={loadingTransferNeteaseTargetPlaylists} onClick={() => void loadTransferNeteaseTargetPlaylists()}>
+                        {loadingTransferNeteaseTargetPlaylists ? "读取中" : "刷新网易云歌单"}
                       </button>
                     ) : null}
-                    <button type="button" className="primary-button" disabled={playlistCompareLoading} onClick={() => void handleCreatePlaylistCompare()}>
+                    {(compareLeftProvider === "qq" || compareRightProvider === "qq") ? (
+                      <button type="button" className="secondary-button" disabled={loadingTransferQqPlaylists} onClick={() => void loadTransferQqPlaylists({ selectTransferPlaylist: false })}>
+                        {loadingTransferQqPlaylists ? "读取中" : "刷新 QQ 歌单"}
+                      </button>
+                    ) : null}
+                    <button type="button" className="primary-button" disabled={playlistCompareLoading || playlistCompareCreating} onClick={() => void handleCreatePlaylistCompare()}>
                       {playlistCompareLoading ? "对比中" : "开始对比"}
                     </button>
                   </div>
@@ -8634,9 +8854,28 @@ export default function App() {
                       </div>
                     </div>
 
+                    <div className="compare-selection-head">
+                      <strong>已选 {playlistCompareSelectedIndexes.length} / {playlistCompareResult.items.length} 首</strong>
+                      <div className="form-actions">
+                        <button type="button" className="secondary-button" onClick={() => setAllPlaylistCompareItemsSelected(true)}>全选</button>
+                        <button type="button" className="secondary-button" disabled={playlistCompareSelectedIndexes.length === 0} onClick={() => setAllPlaylistCompareItemsSelected(false)}>清空</button>
+                      </div>
+                    </div>
+
                     <div className="transfer-table">
-                      {playlistCompareResult.items.slice(0, 100).map((item, index) => (
-                        <article key={`${item.status}-${index}-${item.leftTrack?.sourceTrackId ?? item.rightTrack?.sourceTrackId ?? index}`} className="transfer-row">
+                      {playlistCompareResult.items.map((item, index) => (
+                        <article
+                          key={`${item.status}-${index}-${item.leftTrack?.sourceTrackId ?? item.rightTrack?.sourceTrackId ?? index}`}
+                          className={`transfer-row compare-row${playlistCompareSelectedIndexes.includes(index) ? " selected" : ""}`}
+                        >
+                          <label className="compare-row-select" title="选择这首歌曲">
+                            <input
+                              type="checkbox"
+                              checked={playlistCompareSelectedIndexes.includes(index)}
+                              onChange={() => togglePlaylistCompareItem(index)}
+                              aria-label={`选择 ${item.leftTrack?.title ?? item.rightTrack?.title ?? "歌曲"}`}
+                            />
+                          </label>
                           <div>
                             <strong>{item.leftTrack?.title ?? getPlaylistCompareStatusLabel(item.status)}</strong>
                             <span>{item.leftTrack?.artists.join(" / ") || "左侧无对应歌曲"}</span>
@@ -8651,29 +8890,106 @@ export default function App() {
                     </div>
 
                     <div className="compare-export-statuses">
-                      {(["exact", "same_title_different_artist", "similar_title", "left_only", "right_only"] as PlaylistCompareStatus[]).map((status) => (
-                        <label key={status} className="transfer-check-row">
-                          <input
-                            type="checkbox"
-                            checked={playlistCompareExportStatuses.includes(status)}
-                            onChange={() => togglePlaylistCompareExportStatus(status)}
-                          />
-                          <span>{getPlaylistCompareStatusLabel(status)}</span>
-                        </label>
-                      ))}
+                      {PLAYLIST_COMPARE_STATUSES.map((status) => {
+                        const categoryIndexes = playlistCompareResult.items
+                          .map((item, index) => item.status === status ? index : -1)
+                          .filter((index) => index >= 0);
+                        const categorySelected = categoryIndexes.length > 0
+                          && categoryIndexes.every((index) => playlistCompareSelectedIndexes.includes(index));
+
+                        return (
+                          <label key={status} className="transfer-check-row">
+                            <input
+                              type="checkbox"
+                              checked={categorySelected}
+                              disabled={categoryIndexes.length === 0}
+                              onChange={() => togglePlaylistCompareExportStatus(status)}
+                            />
+                            <span>{getPlaylistCompareStatusLabel(status)} · {categoryIndexes.length}</span>
+                          </label>
+                        );
+                      })}
                     </div>
 
                     <div className="form-actions transfer-export-actions">
+                      <select value={playlistCompareExportProvider} onChange={(event) => setPlaylistCompareExportProvider(event.target.value as "netease" | "qq")}>
+                        <option value="netease">优先网易云版本</option>
+                        <option value="qq">优先 QQ 版本</option>
+                      </select>
                       <select value={playlistCompareExportFormat} onChange={(event) => setPlaylistCompareExportFormat(event.target.value as TransferExportFormat)}>
                         <option value="text">纯文本歌单</option>
                         <option value="markdown">Markdown 报告</option>
                         <option value="csv">CSV</option>
                         <option value="json">JSON</option>
                       </select>
-                      <button type="button" className="secondary-button" disabled={playlistCompareExporting} onClick={() => void handleExportPlaylistCompare()}>
-                        {playlistCompareExporting ? "导出中" : "导出所选分类"}
+                      <button type="button" className="secondary-button" disabled={playlistCompareExporting || playlistCompareSelectedIndexes.length === 0} onClick={() => void handleExportPlaylistCompare()}>
+                        {playlistCompareExporting ? "导出中" : "下载所选歌曲"}
                       </button>
                     </div>
+
+                    <div className="compare-create-controls">
+                      <label>
+                        <span>新歌单平台</span>
+                        <select
+                          value={playlistCompareCreateProvider}
+                          disabled={playlistCompareCreating}
+                          onChange={(event) => {
+                            setPlaylistCompareCreateProvider(event.target.value as "netease" | "qq");
+                            setPlaylistCompareCreateResult(null);
+                          }}
+                        >
+                          <option value="netease">网易云音乐</option>
+                          <option value="qq">QQ 音乐</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span>新歌单名称</span>
+                        <input
+                          value={playlistCompareCreateName}
+                          disabled={playlistCompareCreating}
+                          onChange={(event) => setPlaylistCompareCreateName(event.target.value)}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="primary-button"
+                        disabled={playlistCompareCreating || transferLoading || playlistCompareSelectedIndexes.length === 0}
+                        onClick={() => void handleCreatePlaylistFromCompare()}
+                      >
+                        {playlistCompareCreating
+                          ? transferImporting ? "创建中" : "匹配中"
+                          : playlistCompareCreateProvider === "netease" ? "创建网易云新歌单" : "创建 QQ 新歌单"}
+                      </button>
+                    </div>
+
+                    {playlistCompareCreating && transferRunJob ? (
+                      <div className="compare-create-progress">
+                        <div className="audit-progress-head">
+                          <strong>{transferImporting ? "正在写入新歌单" : getTransferRunJobStatusLabel(transferRunJob)}</strong>
+                          <span>{transferRunProgressPercent}%</span>
+                        </div>
+                        <div className="audit-progress-track" aria-label="所选歌曲生成新歌单进度">
+                          <span style={{ width: `${transferRunProgressPercent}%` }} />
+                        </div>
+                        <div className="audit-progress-meta">
+                          <span>已处理 {transferRunJob.progress.processed}/{transferRunJob.progress.total}</span>
+                          <span>已匹配 {transferRunJob.progress.matched}</span>
+                          <span>待确认 {transferRunJob.progress.manualReview}</span>
+                          <span>未找到 {transferRunJob.progress.notFound}</span>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {playlistCompareCreateResult ? (
+                      <p className="compare-create-result">
+                        已创建「{playlistCompareCreateResult.playlistName ?? playlistCompareCreateResult.playlistId}」，成功加入 {playlistCompareCreateResult.addedCount} 首，跳过 {playlistCompareCreateResult.skippedCount} 首。
+                        {playlistCompareCreateResult.playlistUrl ? (
+                          <> <a href={playlistCompareCreateResult.playlistUrl} target="_blank" rel="noreferrer">打开歌单</a></>
+                        ) : null}
+                      </p>
+                    ) : null}
+
+                    <p className="compare-export-note">创建时会使用目标平台已有版本，并自动匹配目标平台缺失的所选歌曲；未匹配和需确认的歌曲保留在下方报告中。</p>
 
                     {playlistCompareExportContent ? (
                       <textarea className="transfer-export-output" value={playlistCompareExportContent} readOnly />
@@ -8753,6 +9069,21 @@ export default function App() {
                         )}
                         <button type="button" className="primary-button" disabled={transferImporting || Boolean(transferImportResult)} onClick={() => void handleImportTransferToNetease()}>
                           {transferImporting ? "导入中" : transferImportResult ? "已写入" : transferNeteaseTargetMode === "existing" ? "导入已有歌单" : "创建网易云歌单"}
+                        </button>
+                        {transferImportResult ? (
+                          <p>已导入 {transferImportResult.addedCount} 首，跳过 {transferImportResult.skippedCount} 首。歌单：{transferImportResult.playlistName ?? transferImportResult.playlistId}</p>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {transferJob.targetProvider === "qq" && transferJob.summary.matched > 0 ? (
+                      <div className="transfer-import-panel">
+                        <label>
+                          <span>QQ 音乐目标歌单名</span>
+                          <input value={transferImportName} onChange={(event) => setTransferImportName(event.target.value)} />
+                        </label>
+                        <button type="button" className="primary-button" disabled={transferImporting || Boolean(transferImportResult)} onClick={() => void handleImportTransferToQq()}>
+                          {transferImporting ? "创建中" : transferImportResult ? "已写入" : "创建 QQ 音乐歌单"}
                         </button>
                         {transferImportResult ? (
                           <p>已导入 {transferImportResult.addedCount} 首，跳过 {transferImportResult.skippedCount} 首。歌单：{transferImportResult.playlistName ?? transferImportResult.playlistId}</p>

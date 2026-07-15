@@ -20,7 +20,7 @@ import { searchProvider, type SearchProviderMode } from "./provider.js";
 import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getPersonalRadioSongs } from "./personal-radio-provider.js";
-import { checkQqMusicCookie, getQqDiscoverSongs, getQqMusicAccountStatus, getQqMusicUserProfile, getQqPlaylistSongs, getQqSongCommentReplies, getQqSongComments, getQqSongLyrics, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream, setQqSongCommentLiked } from "./qqmusic-provider.js";
+import { checkQqMusicCookie, createQqPlaylistFromTrackMids, getQqDiscoverSongs, getQqMusicAccountStatus, getQqMusicUserProfile, getQqPlaylistSongs, getQqSongCommentReplies, getQqSongComments, getQqSongLyrics, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream, setQqSongCommentLiked } from "./qqmusic-provider.js";
 import { checkQqMusicQrLogin, startQqMusicQrLogin } from "./qqmusic-auth.js";
 import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./settings-store.js";
 import { getNeteaseSongInsight } from "./song-insight-provider.js";
@@ -36,7 +36,7 @@ import { comparePlaylists, formatPlaylistCompareExport } from "./playlist-transf
 import { getPlaylistTransferRunJob, startPlaylistTransferRunJob } from "./playlist-transfer/playlist-transfer-job.js";
 import { addNeteaseTrackIdsToExistingPlaylist, checkNeteaseProviderTrackAvailability, createNeteasePlaylistFromTrackIds, loadNeteasePlaylistAuditEntries, loadNeteasePlaylistTransferTracks, searchNeteaseProviderTracks, searchNeteaseProviderTracksByTitle } from "./playlist-transfer/netease-provider.js";
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
-import { createPlaylistTransferJob, getNeteaseImportTrackIds } from "./playlist-transfer/service.js";
+import { createPlaylistTransferJob, getNeteaseImportTrackIds, getQqImportTrackMids } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
 import type { AdminConfigUpdate, AppSettings, DownloadQualityLevel, DownloadRequest, PersonalRadioKind, Song } from "./types.js";
 import type { PlaylistCompareResult, PlaylistCompareStatus } from "./playlist-transfer/playlist-compare.js";
@@ -64,7 +64,7 @@ function resolvePlaylistProvider(request: express.Request, settings: AppSettings
 }
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 app.use((request, response, next) => {
   const headerSessionId = typeof request.headers["x-client-session-id"] === "string" ? request.headers["x-client-session-id"] : "";
   const querySessionId = typeof request.query.sid === "string" ? request.query.sid : "";
@@ -987,6 +987,17 @@ app.post("/api/download", async (request, response) => {
 });
 
 async function searchTransferTargetTracks(track: TransferTrack, targetProvider: TransferTargetProvider) {
+  if ((targetProvider === "netease" || targetProvider === "qq") && track.source === targetProvider && track.sourceTrackId) {
+    return [{
+      provider: targetProvider,
+      id: track.sourceTrackId,
+      title: track.title,
+      artists: track.artists,
+      album: track.album,
+      durationSeconds: track.durationSeconds
+    }];
+  }
+
   if (targetProvider === "netease") {
     return searchNeteaseProviderTracks(track);
   }
@@ -1037,6 +1048,14 @@ function normalizeCompareStatuses(input: unknown): PlaylistCompareStatus[] {
   }
 
   return input.filter((item): item is PlaylistCompareStatus => allowed.includes(item as PlaylistCompareStatus));
+}
+
+function normalizeCompareItemIndexes(input: unknown, itemCount: number) {
+  if (!Array.isArray(input)) {
+    return undefined;
+  }
+
+  return [...new Set(input.filter((item): item is number => Number.isInteger(item) && item >= 0 && item < itemCount))];
 }
 
 async function withAuditTimeout<T>(operation: Promise<T>, timeoutMs: number, fallback: T) {
@@ -1175,6 +1194,36 @@ app.post("/api/playlist-transfer/jobs/:id/import/netease", async (request, respo
   } catch (error) {
     response.status(400).json({
       message: error instanceof Error ? error.message : "导入网易云歌单失败"
+    });
+  }
+});
+
+app.post("/api/playlist-transfer/jobs/:id/import/qq", async (request, response) => {
+  const ownerKey = await getCurrentUserKey();
+  const job = await getPlaylistTransferJob(ownerKey, request.params.id);
+  if (!job) {
+    response.status(404).json({ message: "歌单互转任务不存在" });
+    return;
+  }
+
+  if (job.targetProvider !== "qq") {
+    response.status(400).json({ message: "只有目标为 QQ 音乐的互转任务才能直接导入 QQ 歌单。" });
+    return;
+  }
+
+  try {
+    const name = typeof request.body?.name === "string" && request.body.name.trim()
+      ? request.body.name.trim()
+      : `${job.playlistName} 转换结果`;
+    const trackMids = getQqImportTrackMids(job);
+    const result = await createQqPlaylistFromTrackMids(name, trackMids);
+    response.json({
+      ...result,
+      skippedCount: job.summary.total - result.addedCount
+    });
+  } catch (error) {
+    response.status(400).json({
+      message: error instanceof Error ? error.message : "导入 QQ 音乐歌单失败"
     });
   }
 });
@@ -1412,7 +1461,17 @@ app.post("/api/playlist-transfer/compare/export", async (request, response) => {
     return;
   }
 
-  response.json(formatPlaylistCompareExport(result, format as "markdown" | "text" | "csv" | "json", statuses));
+  const itemIndexes = normalizeCompareItemIndexes(request.body?.itemIndexes, result.items.length);
+  const preferredProvider = request.body?.preferredProvider === "netease" || request.body?.preferredProvider === "qq"
+    ? request.body.preferredProvider
+    : undefined;
+
+  response.json(formatPlaylistCompareExport(
+    result,
+    format as "markdown" | "text" | "csv" | "json",
+    statuses,
+    { itemIndexes, preferredProvider }
+  ));
 });
 
 app.get("/assets/*", (_request, response) => {

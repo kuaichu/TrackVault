@@ -596,6 +596,7 @@ export type TransferImportRequest = {
   playlistName?: string;
   playlistId?: string;
   sourceTrackIds?: string[];
+  sourceTracks?: TransferTrack[];
   text?: string;
   checkAvailability?: boolean;
 };
@@ -606,13 +607,16 @@ export type TransferExportResult = {
   content: string;
 };
 
-export type NeteaseTransferImportResult = {
+export type PlaylistTransferImportResult = {
   playlistId: string;
   playlistName?: string;
   playlistUrl?: string;
   addedCount: number;
   skippedCount: number;
 };
+
+export type NeteaseTransferImportResult = PlaylistTransferImportResult;
+export type QqTransferImportResult = PlaylistTransferImportResult;
 
 export type NeteaseImportAuditStatus = "replaceable" | "needs_review" | "unusable";
 
@@ -736,6 +740,8 @@ export type PlaylistCompareExportRequest = {
   result: PlaylistCompareResult;
   format: TransferExportFormat;
   statuses: PlaylistCompareStatus[];
+  itemIndexes?: number[];
+  preferredProvider?: "netease" | "qq";
 };
 
 export type PlaylistCompareJobStatus = "queued" | "loading" | "running" | "completed" | "failed";

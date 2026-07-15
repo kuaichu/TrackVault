@@ -9573,6 +9573,17 @@ button.quick-chip:active,
   overflow: auto;
 }
 
+.compare-selection-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.compare-selection-head > strong {
+  color: var(--text-primary);
+}
+
 .transfer-row {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) 104px;
@@ -9582,6 +9593,29 @@ button.quick-chip:active,
   border-radius: 14px;
   background: rgba(10, 15, 24, 0.52);
   border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.compare-row {
+  grid-template-columns: 24px minmax(0, 1.2fr) minmax(0, 1.2fr) 104px;
+}
+
+.compare-row.selected {
+  border-color: rgba(120, 216, 255, 0.32);
+  background: rgba(120, 216, 255, 0.08);
+}
+
+.compare-row-select {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 32px;
+  cursor: pointer;
+}
+
+.compare-row-select input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
 }
 
 .transfer-row div {
@@ -9718,6 +9752,60 @@ button.quick-chip:active,
   gap: 10px 16px;
 }
 
+.compare-export-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.compare-create-controls {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(240px, 1.5fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.compare-create-controls label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.compare-create-controls label > span {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.compare-create-controls input,
+.compare-create-controls select {
+  width: 100%;
+  min-width: 0;
+}
+
+.compare-create-controls > button {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.compare-create-progress {
+  display: grid;
+  gap: 10px;
+}
+
+.compare-create-result {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.compare-create-result a {
+  color: #78d8ff;
+  font-weight: 700;
+}
+
 .transfer-import-panel {
   display: grid;
   grid-template-columns: minmax(240px, 1fr) auto;
@@ -9750,7 +9838,8 @@ button.quick-chip:active,
   .transfer-grid,
   .transfer-report-head,
   .netease-audit-output-grid,
-  .transfer-import-panel {
+  .transfer-import-panel,
+  .compare-create-controls {
     grid-template-columns: 1fr;
     flex-direction: column;
     align-items: stretch;
@@ -9764,6 +9853,25 @@ button.quick-chip:active,
 
   .transfer-row {
     grid-template-columns: 1fr;
+  }
+
+  .compare-row {
+    grid-template-columns: 24px minmax(0, 1fr);
+  }
+
+  .compare-row-select {
+    grid-row: 1 / span 3;
+    align-self: start;
+  }
+
+  .compare-row > div,
+  .compare-row > .transfer-status {
+    grid-column: 2;
+  }
+
+  .compare-selection-head {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .transfer-option-group {

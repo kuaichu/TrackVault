@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPlaylistTransferJob, getNeteaseImportTrackIds } from "./service.js";
+import { createPlaylistTransferJob, getNeteaseImportTrackIds, getQqImportTrackMids } from "./service.js";
 import type { ProviderTrack } from "./types.js";
 
 test("createPlaylistTransferJob parses text input and summarizes matched songs", async () => {
@@ -92,6 +92,34 @@ test("createPlaylistTransferJob filters provider playlist tracks by selected sou
   assert.equal(job.summary.total, 1);
   assert.equal(job.tracks[0].sourceTrack.sourceTrackId, "qq-song-2");
   assert.equal(job.tracks[0].selectedCandidate?.targetTrackId, "netease-qq-song-2");
+});
+
+test("createPlaylistTransferJob accepts selected comparison tracks directly", async () => {
+  const job = await createPlaylistTransferJob(
+    {
+      ownerKey: "session:test",
+      sourceProvider: "text",
+      targetProvider: "qq",
+      playlistName: "对比所选歌曲",
+      sourceTracks: [
+        { source: "qq", sourceTrackId: "qq-mid-1", title: "第一首", artists: ["歌手A"] },
+        { source: "netease", sourceTrackId: "netease-id-2", title: "第二首", artists: ["歌手B"] }
+      ]
+    },
+    {
+      searchTargetTracks: async (track) => [{
+        provider: "qq",
+        id: track.source === "qq" ? track.sourceTrackId! : "qq-mid-2",
+        title: track.title,
+        artists: track.artists
+      }],
+      saveJob: async (nextJob) => nextJob
+    }
+  );
+
+  assert.equal(job.summary.total, 2);
+  assert.equal(job.summary.matched, 2);
+  assert.deepEqual(getQqImportTrackMids(job), ["qq-mid-1", "qq-mid-2"]);
 });
 
 test("createPlaylistTransferJob reports progress while matching songs", async () => {

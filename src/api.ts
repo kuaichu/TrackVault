@@ -30,6 +30,7 @@ import type {
   PlaylistSongsPage,
   PlaylistTrackAddResult,
   PlaylistTrackRemoveResult,
+  PlaylistTransferImportResult,
   PlaylistTransferJob,
   PlaylistTransferRunJob,
   Song,
@@ -1588,6 +1589,23 @@ export async function importPlaylistTransferToNetease(jobId: string, payload: { 
   }
 
   return (await response.json()) as NeteaseTransferImportResult;
+}
+
+export async function importPlaylistTransferToQq(jobId: string, payload: { name?: string }): Promise<PlaylistTransferImportResult> {
+  const response = await apiFetch(`/api/playlist-transfer/jobs/${encodeURIComponent(jobId)}/import/qq`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "导入 QQ 音乐歌单失败");
+  }
+
+  return (await response.json()) as PlaylistTransferImportResult;
 }
 
 export async function createNeteaseImportAudit(payload: NeteaseImportAuditRequest): Promise<NeteaseImportAudit> {

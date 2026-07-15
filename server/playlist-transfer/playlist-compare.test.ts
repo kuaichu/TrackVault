@@ -47,6 +47,31 @@ test("formatPlaylistCompareExport creates a text playlist for selected compariso
   assert.doesNotMatch(output.content, /晴天 - 周杰伦/);
 });
 
+test("formatPlaylistCompareExport exports only selected rows and prefers the requested provider version", () => {
+  const result = comparePlaylists({
+    left: { provider: "netease", playlistId: "left", playlistName: "左歌单", tracks: leftTracks },
+    right: { provider: "qq", playlistId: "right", playlistName: "右歌单", tracks: rightTracks }
+  });
+
+  const qqOutput = formatPlaylistCompareExport(
+    result,
+    "text",
+    ["same_title_different_artist"],
+    { itemIndexes: [1], preferredProvider: "qq" }
+  );
+  const neteaseOutput = formatPlaylistCompareExport(
+    result,
+    "text",
+    ["same_title_different_artist"],
+    { itemIndexes: [1], preferredProvider: "netease" }
+  );
+
+  assert.match(qqOutput.content, /演员 - 林宥嘉 - 翻唱/);
+  assert.doesNotMatch(qqOutput.content, /演员 - 薛之谦/);
+  assert.match(neteaseOutput.content, /演员 - 薛之谦 - 初学者/);
+  assert.doesNotMatch(neteaseOutput.content, /晴天 - 周杰伦/);
+});
+
 test("comparePlaylists reports progress while comparing left tracks", () => {
   const progress: Array<{ phase: string; processed: number; total: number; currentTitle?: string }> = [];
 

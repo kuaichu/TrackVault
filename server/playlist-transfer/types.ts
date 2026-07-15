@@ -86,6 +86,7 @@ export type TransferImportRequest = {
   playlistName?: string;
   playlistId?: string;
   sourceTrackIds?: string[];
+  sourceTracks?: TransferTrack[];
   text?: string;
   checkAvailability?: boolean;
 };

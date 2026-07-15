@@ -66,7 +66,9 @@ function parseCsvPlaylist(input: string): TransferTrack[] {
 async function loadInputTracks(input: CreatePlaylistTransferInput, deps: CreatePlaylistTransferDeps) {
   let tracks: TransferTrack[];
 
-  if (input.sourceProvider === "text") {
+  if (input.sourceTracks?.length) {
+    tracks = input.sourceTracks;
+  } else if (input.sourceProvider === "text") {
     tracks = parseTextPlaylist(input.text ?? "");
   } else if (input.sourceProvider === "csv") {
     tracks = parseCsvPlaylist(input.text ?? "");
@@ -189,13 +191,13 @@ export async function createPlaylistTransferJob(input: CreatePlaylistTransferInp
   return savedJob;
 }
 
-export function getNeteaseImportTrackIds(job: PlaylistTransferJob) {
+function getImportTrackIds(job: PlaylistTransferJob, provider: "netease" | "qq") {
   const ids: string[] = [];
   const seen = new Set<string>();
 
   for (const result of job.tracks) {
     const candidate = result.selectedCandidate;
-    if (result.status !== "matched" || candidate?.provider !== "netease" || !candidate.targetTrackId) {
+    if (result.status !== "matched" || candidate?.provider !== provider || !candidate.targetTrackId) {
       continue;
     }
 
@@ -208,4 +210,12 @@ export function getNeteaseImportTrackIds(job: PlaylistTransferJob) {
   }
 
   return ids;
+}
+
+export function getNeteaseImportTrackIds(job: PlaylistTransferJob) {
+  return getImportTrackIds(job, "netease");
+}
+
+export function getQqImportTrackMids(job: PlaylistTransferJob) {
+  return getImportTrackIds(job, "qq");
 }

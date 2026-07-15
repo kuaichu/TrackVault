@@ -596,6 +596,72 @@ async function getRequiredQqCookie() {
   return cookieObj;
 }
 
+type QqPlaylistApiCall = (path: string, query?: Record<string, string | number>) => Promise<unknown>;
+
+async function callQqPlaylistApi<T>(apiCall: QqPlaylistApiCall, path: string, query: Record<string, string | number>, action: string) {
+  let timeout: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      apiCall(path, query) as Promise<T>,
+      new Promise<T>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(`${action}超时，请检查 QQ 音乐登录状态后重试。`)), 20000);
+      })
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+export async function createQqPlaylistUsingApi(name: string, trackMids: string[], apiCall: QqPlaylistApiCall) {
+  const playlistName = name.trim();
+  if (!playlistName) {
+    throw new Error("请输入 QQ 音乐新歌单名称。");
+  }
+
+  const uniqueTrackMids = [...new Set(trackMids.map((mid) => mid.trim()).filter(Boolean))];
+  if (uniqueTrackMids.length === 0) {
+    throw new Error("没有可导入 QQ 音乐的已匹配歌曲。");
+  }
+
+  let created: { dirid?: string | number };
+  try {
+    created = await callQqPlaylistApi(apiCall, "songlist/create", { name: playlistName }, "创建 QQ 音乐歌单");
+  } catch (error) {
+    throw new Error(`创建 QQ 音乐歌单失败：${getQqErrorMessage(error)}`);
+  }
+
+  const playlistId = String(created?.dirid ?? "");
+  if (!playlistId) {
+    throw new Error("QQ 音乐歌单创建成功但未返回歌单 ID。");
+  }
+
+  const batchSize = 50;
+  for (let index = 0; index < uniqueTrackMids.length; index += batchSize) {
+    const batch = uniqueTrackMids.slice(index, index + batchSize);
+    try {
+      await callQqPlaylistApi(apiCall, "songlist/add", {
+        dirid: playlistId,
+        mid: batch.join(",")
+      }, "添加歌曲到 QQ 音乐歌单");
+    } catch (error) {
+      throw new Error(`QQ 音乐歌单已创建（ID ${playlistId}），但从第 ${index + 1} 首开始添加失败：${getQqErrorMessage(error)}`);
+    }
+  }
+
+  return {
+    playlistId,
+    playlistName,
+    addedCount: uniqueTrackMids.length
+  };
+}
+
+export async function createQqPlaylistFromTrackMids(name: string, trackMids: string[]) {
+  await getRequiredQqCookie();
+  return createQqPlaylistUsingApi(name, trackMids, (path, query) => qqMusic.api(path, query));
+}
+
 function getQqPlaylistId(playlist: QqUserSonglistItem | QqSonglistDetail) {
   const record = playlist as Record<string, unknown>;
   return normalizeQqText(record.dissid ?? record.disstid ?? record.tid ?? record.id ?? record.dirid, "");
