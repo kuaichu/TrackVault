@@ -1,11 +1,11 @@
 import type {
+  AccountState,
   AlbumProfile,
   AdminConfigUpdate,
   AdminConfigView,
   ArtistProfile,
   AppSettings,
   AppSettingsUpdate,
-  AuthSession,
   NeteaseCaptchaSendResult,
   NeteaseCellphoneLoginResult,
   DownloadQualityLevel,
@@ -1280,12 +1280,12 @@ export async function checkQqMusicCookie(cookie: string): Promise<QqMusicCookieC
   return (await response.json()) as QqMusicCookieCheckResult;
 }
 
-export async function getSession(): Promise<AuthSession> {
+export async function getSession(): Promise<AccountState> {
   const response = await apiFetch("/api/account");
   if (!response.ok) {
     throw new Error("获取账号信息失败");
   }
-  return (await response.json()) as AuthSession;
+  return (await response.json()) as AccountState;
 }
 
 export async function getQqMusicAccountStatus(): Promise<QqMusicAccountStatus> {
@@ -1331,7 +1331,7 @@ export async function checkQqMusicQrLogin(key: string): Promise<QqMusicQrCheckRe
   return (await response.json()) as QqMusicQrCheckResult;
 }
 
-export async function loginAccount(payload: { accountName: string; vipEnabled: boolean; note: string }): Promise<AuthSession> {
+export async function loginAccount(payload: { accountName: string; vipEnabled: boolean; note: string }): Promise<AccountState> {
   const response = await apiFetch("/api/account/login", {
     method: "POST",
     headers: {
@@ -1344,10 +1344,10 @@ export async function loginAccount(payload: { accountName: string; vipEnabled: b
     throw new Error("登录失败");
   }
 
-  return (await response.json()) as AuthSession;
+  return (await response.json()) as AccountState;
 }
 
-export async function logoutAccount(): Promise<AuthSession> {
+export async function logoutAccount(): Promise<AccountState> {
   const response = await apiFetch("/api/account/logout", {
     method: "POST"
   });
@@ -1356,7 +1356,7 @@ export async function logoutAccount(): Promise<AuthSession> {
     throw new Error("退出登录失败");
   }
 
-  return (await response.json()) as AuthSession;
+  return (await response.json()) as AccountState;
 }
 
 export async function logoutQqMusicAccount(): Promise<QqMusicAccountStatus> {
@@ -1429,8 +1429,12 @@ export async function loginWithNeteaseCellphone(phone: string, captcha: string, 
   return (await response.json()) as NeteaseCellphoneLoginResult;
 }
 
-export async function getSearchHistory(): Promise<string[]> {
-  const response = await apiFetch("/api/history/search");
+function getDataScopeHeaders(dataScopeId: string) {
+  return { "x-data-scope-id": dataScopeId };
+}
+
+export async function getSearchHistory(dataScopeId: string): Promise<string[]> {
+  const response = await apiFetch("/api/history/search", { headers: getDataScopeHeaders(dataScopeId) });
   if (!response.ok) {
     throw new Error("获取搜索记录失败");
   }
@@ -1439,11 +1443,12 @@ export async function getSearchHistory(): Promise<string[]> {
   return data.items;
 }
 
-export async function saveSearchHistory(items: string[]): Promise<string[]> {
+export async function saveSearchHistory(items: string[], dataScopeId: string): Promise<string[]> {
   const response = await apiFetch("/api/history/search", {
     method: "PUT",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      ...getDataScopeHeaders(dataScopeId)
     },
     body: JSON.stringify({ items })
   });
@@ -1456,9 +1461,10 @@ export async function saveSearchHistory(items: string[]): Promise<string[]> {
   return data.items;
 }
 
-export async function removeSearchHistory(keyword: string): Promise<string[]> {
+export async function removeSearchHistory(keyword: string, dataScopeId: string): Promise<string[]> {
   const response = await apiFetch(`/api/history/search?keyword=${encodeURIComponent(keyword)}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: getDataScopeHeaders(dataScopeId)
   });
 
   if (!response.ok) {
@@ -1469,8 +1475,8 @@ export async function removeSearchHistory(keyword: string): Promise<string[]> {
   return data.items;
 }
 
-export async function getPlayHistory(): Promise<Song[]> {
-  const response = await apiFetch("/api/history/play");
+export async function getPlayHistory(dataScopeId: string): Promise<Song[]> {
+  const response = await apiFetch("/api/history/play", { headers: getDataScopeHeaders(dataScopeId) });
   if (!response.ok) {
     throw new Error("获取播放历史失败");
   }
@@ -1479,11 +1485,12 @@ export async function getPlayHistory(): Promise<Song[]> {
   return data.items;
 }
 
-export async function savePlayHistory(items: Song[]): Promise<Song[]> {
+export async function savePlayHistory(items: Song[], dataScopeId: string): Promise<Song[]> {
   const response = await apiFetch("/api/history/play", {
     method: "PUT",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      ...getDataScopeHeaders(dataScopeId)
     },
     body: JSON.stringify({ items })
   });
@@ -1496,8 +1503,8 @@ export async function savePlayHistory(items: Song[]): Promise<Song[]> {
   return data.items;
 }
 
-export async function getPlayerState(): Promise<PersistedPlayerState> {
-  const response = await apiFetch("/api/player-state");
+export async function getPlayerState(dataScopeId: string): Promise<PersistedPlayerState> {
+  const response = await apiFetch("/api/player-state", { headers: getDataScopeHeaders(dataScopeId) });
   if (!response.ok) {
     throw new Error("获取播放器状态失败");
   }
@@ -1505,11 +1512,12 @@ export async function getPlayerState(): Promise<PersistedPlayerState> {
   return (await response.json()) as PersistedPlayerState;
 }
 
-export async function savePlayerState(state: PersistedPlayerState): Promise<PersistedPlayerState> {
+export async function savePlayerState(state: PersistedPlayerState, dataScopeId: string): Promise<PersistedPlayerState> {
   const response = await apiFetch("/api/player-state", {
     method: "PUT",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      ...getDataScopeHeaders(dataScopeId)
     },
     body: JSON.stringify(state)
   });

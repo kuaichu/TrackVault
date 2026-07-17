@@ -7,10 +7,12 @@ import { pipeline } from "node:stream/promises";
 import type { SoundQualityType } from "NeteaseCloudMusicApi";
 import { getCurrentUserKey } from "./account-store.js";
 import { getDatabase, isSqliteAvailable, readJsonStore, updateJsonStore } from "./database.js";
-import { buildMediaCredentialPlan, extractClientSessionIdFromUserKey } from "./media-security.js";
+import { getDownloadAuthRequirement } from "./download-auth-policy.js";
+import { buildMediaCredentialPlan, extractClientSessionIdFromUserKey, MediaAccessError } from "./media-security.js";
 import { addAudioMetadataToDownload, getAudioMetadataTarget } from "./download-metadata.js";
 import { isQqMusicSong, probeQqSongAudio, resolveQqDirectDownload } from "./qqmusic-provider.js";
-import { getSettings } from "./settings-store.js";
+import { runWithRequestContext } from "./request-context.js";
+import { getSettings, getSettingsForClientSessionId } from "./settings-store.js";
 import type { DownloadQualityLevel, DownloadTask, NeteaseCookieCheckResult, Song, SongAudioProbe, SongAudioProbeMode } from "./types.js";
 
 const require = createRequire(import.meta.url);
@@ -28,6 +30,14 @@ const runningTaskIds = new Set<string>();
 const DEFAULT_RETRY_LIMIT = 2;
 let scheduling = false;
 let persistTimer: NodeJS.Timeout | null = null;
+
+function requireSupportedDownloadSource(song: Song) {
+  const requirement = getDownloadAuthRequirement(song);
+  if (requirement === "unsupported") {
+    throw new MediaAccessError(400, `不支持的歌曲来源：${song.source || "(empty)"}`);
+  }
+  return requirement;
+}
 let initialized = false;
 
 type SongUrlItem = {
@@ -712,6 +722,11 @@ export async function resolveSongStream(
 }
 
 export async function assertDownloadAccess(song: Song, level: DownloadQualityLevel, userCookieOverride?: string) {
+  if (requireSupportedDownloadSource(song) === "qqmusic") {
+    await resolveQqDirectDownload(song, level);
+    return;
+  }
+
   const plan = await buildMediaCredentialPlan({ userCookieOverride });
   await resolveSongDownloadWithPlan(song, level, plan);
 }
@@ -731,7 +746,7 @@ export async function probeSongAudio(song: Song, level: DownloadQualityLevel, mo
 }
 
 export async function resolveDirectDownload(song: Song, level: DownloadQualityLevel, userCookieOverride?: string): Promise<DirectDownloadResolution> {
-  if (isQqMusicSong(song)) {
+  if (requireSupportedDownloadSource(song) === "qqmusic") {
     return resolveQqDirectDownload(song, level);
   }
 
@@ -798,13 +813,18 @@ export async function checkNeteaseCookie(cookie: string): Promise<NeteaseCookieC
 }
 
 async function downloadSongFile(task: DownloadTask, song: Song) {
-  const settings = await getSettings();
-  const outputDir = path.resolve(process.cwd(), settings.downloadDirectory);
-  const selectedLevel = task.requestedLevel ?? "standard";
   const taskOwner = taskOwners.get(task.id) ?? "guest:default";
   const ownerSessionId = extractClientSessionIdFromUserKey(taskOwner);
-  const plan = await buildMediaCredentialPlan({ clientSessionId: ownerSessionId });
-  const resolvedSong = await resolveSongDownloadWithPlan(song, selectedLevel, plan);
+  const settings = await getSettingsForClientSessionId(ownerSessionId);
+  const outputDir = path.resolve(process.cwd(), settings.downloadDirectory);
+  const selectedLevel = task.requestedLevel ?? "standard";
+  const requirement = requireSupportedDownloadSource(song);
+  const resolvedSong = requirement === "qqmusic"
+    ? await runWithRequestContext(ownerSessionId, () => resolveQqDirectDownload(song, selectedLevel))
+    : await (async () => {
+        const plan = await buildMediaCredentialPlan({ clientSessionId: ownerSessionId });
+        return resolveSongDownloadWithPlan(song, selectedLevel, plan);
+      })();
   const response = await fetch(resolvedSong.url);
 
   if (!response.ok || !response.body) {

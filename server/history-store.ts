@@ -1,4 +1,4 @@
-import { getCurrentUserKey } from "./account-store.js";
+import { getDataScopeId } from "./data-scope.js";
 import { getDatabase, isSqliteAvailable, readJsonStore, updateJsonStore } from "./database.js";
 import type { Song } from "./types.js";
 
@@ -22,8 +22,8 @@ function normalizeSong(song: Song): Song {
   };
 }
 
-export async function getSearchHistory() {
-  const userKey = await getCurrentUserKey();
+export async function getSearchHistory(dataScopeId?: string) {
+  const userKey = dataScopeId ?? await getDataScopeId();
 
   if (!isSqliteAvailable()) {
     const store = readJsonStore();
@@ -42,8 +42,8 @@ export async function getSearchHistory() {
   return statement.all(userKey, SEARCH_HISTORY_LIMIT).map((row) => String((row as { keyword: string }).keyword));
 }
 
-export async function saveSearchHistory(items: string[]) {
-  const userKey = await getCurrentUserKey();
+export async function saveSearchHistory(items: string[], dataScopeId?: string) {
+  const userKey = dataScopeId ?? await getDataScopeId();
   const nextItems = [...new Set(items.map((item) => item.trim()).filter(Boolean))].slice(0, SEARCH_HISTORY_LIMIT);
 
   if (!isSqliteAvailable()) {
@@ -76,8 +76,8 @@ export async function saveSearchHistory(items: string[]) {
   return nextItems;
 }
 
-export async function removeSearchHistory(keyword: string) {
-  const userKey = await getCurrentUserKey();
+export async function removeSearchHistory(keyword: string, dataScopeId?: string) {
+  const userKey = dataScopeId ?? await getDataScopeId();
 
   if (!isSqliteAvailable()) {
     const nextItems = (readJsonStore().search_history?.[userKey] ?? []).filter((item) => item !== keyword.trim());
@@ -95,11 +95,11 @@ export async function removeSearchHistory(keyword: string) {
   `);
 
   deleteStatement.run(userKey, keyword.trim());
-  return getSearchHistory();
+  return getSearchHistory(userKey);
 }
 
-export async function getPlayHistory() {
-  const userKey = await getCurrentUserKey();
+export async function getPlayHistory(dataScopeId?: string) {
+  const userKey = dataScopeId ?? await getDataScopeId();
 
   if (!isSqliteAvailable()) {
     const store = readJsonStore();
@@ -120,8 +120,8 @@ export async function getPlayHistory() {
     .map((row) => JSON.parse(String((row as { song_json: string }).song_json)) as Song);
 }
 
-export async function savePlayHistory(items: Song[]) {
-  const userKey = await getCurrentUserKey();
+export async function savePlayHistory(items: Song[], dataScopeId?: string) {
+  const userKey = dataScopeId ?? await getDataScopeId();
   const uniqueSongs = new Map<string, Song>();
 
   for (const song of items) {

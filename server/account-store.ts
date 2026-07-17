@@ -93,8 +93,8 @@ async function getNeteaseSession(): Promise<AuthSession | null> {
   const accountId = body.data?.account?.id ?? body.account?.id ?? body.data?.profile?.userId ?? body.profile?.userId;
   const nickname = body.data?.profile?.nickname ?? body.profile?.nickname;
 
-  if (!accountId && !nickname) {
-    return null;
+  if (!accountId) {
+    throw new Error("网易云登录态未返回稳定账号 ID");
   }
 
   const vipType = body.data?.profile?.vipType ?? body.profile?.vipType ?? body.data?.account?.vipType ?? body.account?.vipType ?? body.data?.vipType ?? body.vipType ?? 0;
@@ -105,7 +105,7 @@ async function getNeteaseSession(): Promise<AuthSession | null> {
   return {
     loggedIn: true,
     profile: {
-      id: String(accountId ?? displayName),
+      id: String(accountId),
       displayName,
       level: isVip(vipType) ? 10 : 0,
       vipEnabled: isVip(vipType),
@@ -146,8 +146,12 @@ export async function getSession(): Promise<AuthSession> {
     if (neteaseSession) {
       return neteaseSession;
     }
-  } catch {
-    // Fall back to the local session if the Cookie is absent or expired.
+  } catch (error) {
+    const settings = await getSettings();
+    if (settings.neteaseCookie.trim()) {
+      throw error;
+    }
+    // Without a Netease credential, the explicit local demo session remains valid.
   }
 
   try {

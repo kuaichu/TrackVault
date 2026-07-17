@@ -1,6 +1,19 @@
 import { type CSSProperties, FormEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  decideScopedHydration,
+  getPlayerStateFingerprint,
+  getScopedStorageKey,
+  ScopedWriteQueue,
+  shouldApplyScopedResult,
+  shouldMigrateLegacyData,
+  shouldPersistScopedState
+} from "../server/account-persistence";
+import {
+  canDownloadSong,
+  getMissingDownloadProviders
+} from "../server/download-auth-policy";
+import {
   addSongToPlaylist,
   checkNeteaseCookie,
   checkQqMusicCookie,
@@ -73,7 +86,7 @@ import {
   replyToSongComment,
   searchSongs
 } from "./api";
-import type { AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, AuthSession, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferImportResult, PlaylistTransferJob, PlaylistTransferRunJob, QqMusicAccountStatus, QqMusicUserProfile, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, SongInsight, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferTrack, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
+import type { AccountState, AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferImportResult, PlaylistTransferJob, PlaylistTransferRunJob, QqMusicAccountStatus, QqMusicUserProfile, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, SongInsight, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferTrack, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
@@ -387,6 +400,7 @@ const SEARCH_HISTORY_STORAGE_KEY = "net-music-down:search-history";
 const DISCOVER_CACHE_STORAGE_KEY = "net-music-down:discover-cache";
 const PLAY_HISTORY_STORAGE_KEY = "net-music-down:play-history";
 const PLAYER_STATE_STORAGE_KEY = "net-music-down:player-state";
+const ACCOUNT_SCOPE_MIGRATION_STORAGE_KEY = "net-music-down:account-scope-migration:v1";
 const BROWSER_DOWNLOAD_TASKS_STORAGE_KEY = "net-music-down:browser-download-tasks";
 const LAST_VIEW_STORAGE_KEY = "net-music-down:last-view";
 const BROWSER_DOWNLOAD_TASK_LIMIT = 30;
@@ -615,9 +629,9 @@ function pickAtmosphereColor(image: HTMLImageElement): RgbColor {
   };
 }
 
-function loadSearchHistory() {
+function loadSearchHistory(dataScopeId: string) {
   try {
-    const rawHistory = window.localStorage.getItem(SEARCH_HISTORY_STORAGE_KEY);
+    const rawHistory = window.localStorage.getItem(getScopedStorageKey(SEARCH_HISTORY_STORAGE_KEY, dataScopeId));
     if (!rawHistory) {
       return [];
     }
@@ -685,9 +699,9 @@ function saveCachedDiscoverSongs(songs: Song[], providerMode: ActiveProviderMode
   }
 }
 
-function loadPlayHistory() {
+function loadPlayHistory(dataScopeId: string) {
   try {
-    const rawHistory = window.localStorage.getItem(PLAY_HISTORY_STORAGE_KEY);
+    const rawHistory = window.localStorage.getItem(getScopedStorageKey(PLAY_HISTORY_STORAGE_KEY, dataScopeId));
     if (!rawHistory) {
       return [];
     }
@@ -705,9 +719,9 @@ function loadPlayHistory() {
   }
 }
 
-function loadPlayerState(): PersistedPlayerState {
+function loadPlayerState(dataScopeId: string): PersistedPlayerState {
   try {
-    const rawState = window.localStorage.getItem(PLAYER_STATE_STORAGE_KEY);
+    const rawState = window.localStorage.getItem(getScopedStorageKey(PLAYER_STATE_STORAGE_KEY, dataScopeId));
     if (!rawState) {
       return DEFAULT_PLAYER_STATE;
     }
@@ -739,11 +753,42 @@ function normalizePlaybackMode(mode: unknown): PlaybackMode {
   return mode === "shuffle" || mode === "repeat-one" || mode === "heartbeat" ? mode : "sequential";
 }
 
-function savePlayerStateLocal(state: PersistedPlayerState) {
+function savePlayerStateLocal(state: PersistedPlayerState, dataScopeId: string) {
   try {
-    window.localStorage.setItem(PLAYER_STATE_STORAGE_KEY, JSON.stringify(state));
+    window.localStorage.setItem(getScopedStorageKey(PLAYER_STATE_STORAGE_KEY, dataScopeId), JSON.stringify(state));
   } catch {
     // Best-effort only.
+  }
+}
+
+function saveHistoryLocal<T>(baseKey: string, items: T[], dataScopeId: string) {
+  try {
+    window.localStorage.setItem(getScopedStorageKey(baseKey, dataScopeId), JSON.stringify(items));
+  } catch {
+    // Best-effort only.
+  }
+}
+
+function migrateLegacyStorageToGuestScope(dataScopeId: string) {
+  try {
+    const migrationMarker = window.localStorage.getItem(ACCOUNT_SCOPE_MIGRATION_STORAGE_KEY);
+    const legacyEntries = [SEARCH_HISTORY_STORAGE_KEY, PLAY_HISTORY_STORAGE_KEY, PLAYER_STATE_STORAGE_KEY]
+      .map((baseKey) => ({ baseKey, value: window.localStorage.getItem(baseKey) }))
+      .filter((entry): entry is { baseKey: string; value: string } => entry.value !== null);
+
+    if (!shouldMigrateLegacyData({ dataScopeId, migrationMarker, hasLegacyData: legacyEntries.length > 0 })) {
+      return;
+    }
+
+    window.localStorage.setItem(ACCOUNT_SCOPE_MIGRATION_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      targetScope: "legacy-unassigned",
+      observedScope: dataScopeId,
+      preservedKeys: legacyEntries.map((entry) => entry.baseKey),
+      completedAt: new Date().toISOString()
+    }));
+  } catch {
+    // Leave the legacy copy untouched if migration cannot be completed safely.
   }
 }
 
@@ -1264,7 +1309,7 @@ function renderCommentContent(content: string) {
 }
 
 export default function App() {
-  const initialPlayerState = loadPlayerState();
+  const initialPlayerState = DEFAULT_PLAYER_STATE;
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lyricPanelRef = useRef<HTMLDivElement | null>(null);
   const resultBodyRef = useRef<HTMLDivElement | null>(null);
@@ -1284,6 +1329,13 @@ export default function App() {
   const audioFadeTokenRef = useRef(0);
   const searchRequestIdRef = useRef(0);
   const listRequestIdRef = useRef(0);
+  const accountStateRequestIdRef = useRef(0);
+  const dataScopeIdRef = useRef<string | null>(null);
+  const historyMutationVersionRef = useRef(0);
+  const scopedWriteQueueRef = useRef<ScopedWriteQueue | null>(null);
+  if (!scopedWriteQueueRef.current) {
+    scopedWriteQueueRef.current = new ScopedWriteQueue();
+  }
   const cookieHealthRef = useRef<{ checkedAt: number; result: NeteaseCookieCheckResult | null }>({
     checkedAt: 0,
     result: null
@@ -1292,6 +1344,8 @@ export default function App() {
   const pausedPlayerStateSyncTimerRef = useRef<number | null>(null);
   const playerStateHydratedRef = useRef(false);
   const playerInteractionStartedRef = useRef(false);
+  const playerMutationVersionRef = useRef(0);
+  const playerStateFingerprintRef = useRef("");
   const playlistSortTriggerRef = useRef<HTMLButtonElement | null>(null);
   const qualityMenuAnchorRef = useRef<HTMLButtonElement | null>(null);
   const qualityMenuOptionCountRef = useRef(0);
@@ -1311,7 +1365,7 @@ export default function App() {
   const playerThemeCacheRef = useRef<Record<string, PlayerTheme>>({});
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Song[]>([]);
-  const [searchHistory, setSearchHistory] = useState<string[]>(loadSearchHistory);
+  const [searchHistory, setSearchHistory] = useState<string[]>([]);
   const [playlists, setPlaylists] = useState<UserPlaylist[]>([]);
   const [tasks, setTasks] = useState<DownloadTask[]>([]);
   const [browserDownloadTasks, setBrowserDownloadTasks] = useState<BrowserDownloadTask[]>(loadBrowserDownloadTasks);
@@ -1380,7 +1434,7 @@ export default function App() {
   const [adminAuthToken, setAdminAuthToken] = useState("");
   const [adminConfigLoaded, setAdminConfigLoaded] = useState(false);
   const [systemDefaultTokenInput, setSystemDefaultTokenInput] = useState("");
-  const [session, setSession] = useState<AuthSession>({ loggedIn: false, profile: null });
+  const [session, setSession] = useState<AccountState>({ loggedIn: false, profile: null, dataScopeId: "" });
   const [searching, setSearching] = useState(false);
   const [activeSearchChip, setActiveSearchChip] = useState("");
   const [loadingPlaylists, setLoadingPlaylists] = useState(false);
@@ -1428,7 +1482,7 @@ export default function App() {
   const [playbackSourcePlaylistId, setPlaybackSourcePlaylistId] = useState<string | null>(null);
   const [playerTheme, setPlayerTheme] = useState<PlayerTheme>(defaultPlayerTheme);
   const [playQueue, setPlayQueue] = useState<Song[]>(initialPlayerState.playQueue);
-  const [playHistory, setPlayHistory] = useState<Song[]>(loadPlayHistory);
+  const [playHistory, setPlayHistory] = useState<Song[]>([]);
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("queue");
   const [rightPanelCollapsed, setRightPanelCollapsed] = useState(false);
   const [isPlayerExpanded, setIsPlayerExpanded] = useState(false);
@@ -1538,21 +1592,30 @@ export default function App() {
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgressDialog | null>(null);
   const [downloadProgressMinimized, setDownloadProgressMinimized] = useState(false);
   const [playerStateReady, setPlayerStateReady] = useState(false);
+  const dataScopeId = session.dataScopeId || null;
+  dataScopeIdRef.current = dataScopeId;
+  playerStateFingerprintRef.current = getPlayerStateFingerprint({
+    currentTrack,
+    playQueue,
+    playbackSeconds,
+    volume,
+    playbackMode
+  });
   const accountProfile = session.profile;
   const accountDisplayName = accountProfile?.displayName ?? settings.accountName;
   const accountAvatarUrl = accountProfile?.avatarUrl;
   const accountVipEnabled = accountProfile?.vipEnabled ?? settings.vipEnabled;
   const accountBadgeLabel = accountVipEnabled ? "黑胶 VIP" : "普通";
   const accountStatusLabel = session.loggedIn || accountProfile?.provider === "netease" ? accountBadgeLabel : "未登录";
-  const accountIsLoggedIn = session.loggedIn || accountProfile?.provider === "netease";
-  const neteaseMembershipExpireLabel = accountIsLoggedIn
+  const neteaseAccountIsLoggedIn = session.loggedIn && accountProfile?.provider === "netease";
+  const neteaseMembershipExpireLabel = neteaseAccountIsLoggedIn
     ? accountVipEnabled
       ? accountProfile?.vipExpireText
         ? `${accountProfile.vipExpireText} 到期`
         : "到期时间未返回"
       : "当前为普通账号"
     : "登录后显示";
-  const neteasePlatformStatusLabel = accountIsLoggedIn ? accountBadgeLabel : "未登录";
+  const neteasePlatformStatusLabel = neteaseAccountIsLoggedIn ? accountBadgeLabel : "未登录";
   const hasNeteaseCookie = settings.hasNeteaseCookie;
   const hasQqMusicCookie = Boolean(settings.hasQqMusicCookie || qqAccountStatus?.ok);
   const qqAccountVipEnabled = Boolean(qqAccountStatus?.vipEnabled);
@@ -1585,9 +1648,51 @@ export default function App() {
   const isQqDataMode = activeSearchProviderMode === "qq";
   const playlistProviderLabel = isQqDataMode ? "QQ 音乐" : "网易云";
   const hasPlaylistCredential = isQqDataMode ? hasQqMusicCookie : hasNeteaseCookie;
-  const hasNeteaseDownloadAuth = accountIsLoggedIn || isQqDataMode;
-  const playbackLocked = !accountIsLoggedIn && !isQqDataMode;
+  const hasNeteaseDownloadCredential = neteaseAccountIsLoggedIn;
+  const hasQqMusicDownloadCredential = hasQqMusicCookie;
+  const downloadAuthState = { hasNeteaseDownloadCredential, hasQqMusicDownloadCredential };
+  const playbackLocked = !neteaseAccountIsLoggedIn && !isQqDataMode;
   const hasPlaybackQueue = playQueue.length > 0 || results.length > 0;
+
+  function songHasDownloadCredential(song: Song | null) {
+    return Boolean(song && canDownloadSong(song, downloadAuthState).allowed);
+  }
+
+  function enqueueScopedWrite(dataScope: string, resource: "search-history" | "play-history" | "player-state", write: () => Promise<unknown>) {
+    void scopedWriteQueueRef.current?.enqueue(`${dataScope}:${resource}`, async () => {
+      if (!shouldApplyScopedResult(dataScope, dataScopeIdRef.current)) {
+        return;
+      }
+      await write();
+    }).catch(() => undefined);
+  }
+
+  function markPlayerInteraction() {
+    playerInteractionStartedRef.current = true;
+    playerMutationVersionRef.current += 1;
+  }
+
+  function batchHasDownloadCredentials(songs: Song[]) {
+    const summary = getMissingDownloadProviders(songs, downloadAuthState);
+    return summary.missingProviders.length === 0 && summary.unsupportedSources.length === 0;
+  }
+
+  function getDownloadCredentialTitle(song: Song | null) {
+    if (!song) {
+      return "暂无可下载歌曲";
+    }
+
+    const result = canDownloadSong(song, downloadAuthState);
+    if (result.allowed) {
+      return "";
+    }
+
+    if (result.requirement === "unsupported") {
+      return `不支持的歌曲来源：${result.unsupportedSource}`;
+    }
+
+    return result.missingProvider === "qqmusic" ? "请先登录 QQ 音乐账号" : "请先登录网易云账号";
+  }
 
   function getSelectedLevel(song: Song) {
     return qualitySelections[song.id] ?? getPreferredPlaybackQuality(song);
@@ -1676,12 +1781,16 @@ export default function App() {
       case "netease-album":
         return { title: "专辑页", detail: "来自专辑曲目，版本以当前专辑条目为准。", badge: "专" };
       default:
-        return { title: "网易云曲库", detail: "来自网易云搜索或歌单条目，实际音质需解析后确认。", badge: "网" };
+        return song.source === "netease" || song.source.startsWith("netease-")
+          ? { title: "网易云曲库", detail: "来自网易云搜索或歌单条目，实际音质需解析后确认。", badge: "网" }
+          : { title: "未知歌曲来源", detail: `TrackVault 不支持来源 ${song.source || "(empty)"} 的下载。`, badge: "?" };
     }
   }
 
   function getSongProviderLabel(song: Song) {
-    return song.source === "qqmusic" ? "QQ 音乐" : "网易云";
+    if (song.source === "qqmusic") return "QQ 音乐";
+    if (song.source === "netease" || song.source.startsWith("netease-")) return "网易云";
+    return "未知来源";
   }
 
   function getSongQualityLine(song: Song) {
@@ -1813,10 +1922,16 @@ export default function App() {
   }
 
   function addToPlayHistory(song: Song) {
+    const capturedScope = dataScopeId;
+    if (!capturedScope) {
+      return;
+    }
+
+    historyMutationVersionRef.current += 1;
     setPlayHistory((current) => {
       const nextHistory = [song, ...current.filter((item) => item.id !== song.id)].slice(0, 30);
-      window.localStorage.setItem(PLAY_HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
-      void savePlayHistory(nextHistory);
+      saveHistoryLocal(PLAY_HISTORY_STORAGE_KEY, nextHistory, capturedScope);
+      enqueueScopedWrite(capturedScope, "play-history", () => savePlayHistory(nextHistory, capturedScope));
       return nextHistory;
     });
   }
@@ -1941,20 +2056,32 @@ export default function App() {
   }
 
   function addSearchHistory(keyword: string) {
+    const capturedScope = dataScopeId;
+    if (!capturedScope) {
+      return;
+    }
+
+    historyMutationVersionRef.current += 1;
     setSearchHistory((current) => {
       const nextHistory = [keyword, ...current.filter((item) => item !== keyword)].slice(0, 10);
-      window.localStorage.setItem(SEARCH_HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
-      void saveSearchHistory(nextHistory);
+      saveHistoryLocal(SEARCH_HISTORY_STORAGE_KEY, nextHistory, capturedScope);
+      enqueueScopedWrite(capturedScope, "search-history", () => saveSearchHistory(nextHistory, capturedScope));
       return nextHistory;
     });
   }
 
   function removeSearchHistory(keyword: string) {
+    const capturedScope = dataScopeId;
+    if (!capturedScope) {
+      return;
+    }
+
+    historyMutationVersionRef.current += 1;
     setSearchHistory((current) => {
       const nextHistory = current.filter((item) => item !== keyword);
-      window.localStorage.setItem(SEARCH_HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
-      void removeSearchHistoryRemote(keyword).catch(() => {
-        void saveSearchHistory(nextHistory);
+      saveHistoryLocal(SEARCH_HISTORY_STORAGE_KEY, nextHistory, capturedScope);
+      enqueueScopedWrite(capturedScope, "search-history", async () => {
+        await removeSearchHistoryRemote(keyword, capturedScope).catch(() => saveSearchHistory(nextHistory, capturedScope));
       });
       return nextHistory;
     });
@@ -3427,11 +3554,23 @@ export default function App() {
     }
   }
 
+  function commitAccountState(nextSession: AccountState) {
+    accountStateRequestIdRef.current += 1;
+    setSession(nextSession);
+  }
+
   async function refreshSession() {
+    const requestId = accountStateRequestIdRef.current + 1;
+    accountStateRequestIdRef.current = requestId;
     try {
-      setSession(await getSession());
+      const nextSession = await getSession();
+      if (requestId === accountStateRequestIdRef.current) {
+        setSession(nextSession);
+      }
+      return nextSession;
     } catch {
       // Keep current session if fetch fails.
+      return null;
     }
   }
 
@@ -3622,7 +3761,7 @@ export default function App() {
     }
 
     if (autoplay) {
-      playerInteractionStartedRef.current = true;
+      markPlayerInteraction();
     }
 
     const requestedLevel = options.level ?? getPlaybackLevel(song);
@@ -3680,7 +3819,7 @@ export default function App() {
   }
 
   function requirePlaybackAuth(song?: Song | null) {
-    if (accountIsLoggedIn || isQqDataMode || song?.source === "qqmusic" || currentTrack?.source === "qqmusic") {
+    if (neteaseAccountIsLoggedIn || isQqDataMode || song?.source === "qqmusic" || currentTrack?.source === "qqmusic") {
       return true;
     }
 
@@ -3827,7 +3966,7 @@ export default function App() {
   }
 
   async function handleToggleCommentLike(comment: SongComment) {
-    if (!accountIsLoggedIn) {
+    if (!neteaseAccountIsLoggedIn) {
       setMessage("登录网易云后才能点赞评论。");
       return;
     }
@@ -3863,7 +4002,7 @@ export default function App() {
   }
 
   async function handleSubmitCommentReply(comment: SongComment) {
-    if (!accountIsLoggedIn) {
+    if (!neteaseAccountIsLoggedIn) {
       setMessage("登录网易云后才能回复评论。");
       return;
     }
@@ -4210,7 +4349,7 @@ export default function App() {
   }
 
   async function toggleSocialUserFollow(user: UserSocialUser) {
-    if (!accountIsLoggedIn) {
+    if (!neteaseAccountIsLoggedIn) {
       setMessage("需要先登录网易云账号，才能关注或取消关注用户。");
       return;
     }
@@ -4246,7 +4385,7 @@ export default function App() {
 
   function handleSelectSong(song: Song) {
     setMessage(
-      accountIsLoggedIn || isQqDataMode || song.source === "qqmusic"
+      neteaseAccountIsLoggedIn || isQqDataMode || song.source === "qqmusic"
         ? `已选中：${song.title}。双击歌曲或点击试听开始播放。`
         : `已选中：${song.title}。登录网易云账号后可播放。`
     );
@@ -4650,9 +4789,20 @@ export default function App() {
   }
 
   async function handleDownload(song: Song) {
-    if (!accountIsLoggedIn) {
-      setMessage("下载需要先登录账号，已为你打开登录窗口。");
-      await handleStartQrLogin();
+    const authResult = canDownloadSong(song, downloadAuthState);
+    if (!authResult.allowed) {
+      if (authResult.requirement === "unsupported") {
+        setMessage(`无法下载 ${song.title}：不支持的歌曲来源 ${authResult.unsupportedSource}。`);
+        return;
+      }
+
+      if (authResult.missingProvider === "qqmusic") {
+        setMessage("下载 QQ 音乐歌曲需要 QQ 音乐登录态，已为你打开 QQ 登录入口。");
+        openQqCookieLogin();
+      } else {
+        setMessage("下载网易云歌曲需要网易云登录态，已为你打开网易云登录入口。");
+        await handleStartQrLogin();
+      }
       return;
     }
 
@@ -4716,9 +4866,22 @@ export default function App() {
       return;
     }
 
-    if (!accountIsLoggedIn) {
-      setMessage("批量下载需要先登录账号，已为你打开登录窗口。");
-      await handleStartQrLogin();
+    const authSummary = getMissingDownloadProviders(songs, downloadAuthState);
+    if (authSummary.unsupportedSources.length > 0) {
+      setMessage(`批量下载已取消：包含不支持的歌曲来源 ${authSummary.unsupportedSources.join("、")}。`);
+      return;
+    }
+
+    if (authSummary.missingProviders.length > 0) {
+      const missingLabels = authSummary.missingProviders.map((provider) => provider === "qqmusic" ? "QQ 音乐" : "网易云");
+      setMessage(`批量下载已取消：缺少${missingLabels.join("和")}登录态，尚未启动任何文件。`);
+      if (authSummary.missingProviders.length > 1) {
+        setAccountMenuOpen(true);
+      } else if (authSummary.missingProviders[0] === "qqmusic") {
+        openQqCookieLogin();
+      } else {
+        await handleStartQrLogin();
+      }
       return;
     }
 
@@ -4886,7 +5049,7 @@ export default function App() {
 
     try {
       const nextSession = await loginAccount(loginForm);
-      setSession(nextSession);
+      commitAccountState(nextSession);
       const profile = nextSession.profile;
       if (profile) {
         setSettings((current) => ({
@@ -4905,7 +5068,7 @@ export default function App() {
 
   async function handleLogout() {
     try {
-      setSession(await logoutAccount());
+      commitAccountState(await logoutAccount());
       const saved = await refreshSettings();
       if (saved) {
         setSettings(saved);
@@ -4920,7 +5083,7 @@ export default function App() {
 
   async function handleClearCookie() {
     try {
-      setSession(await logoutAccount());
+      commitAccountState(await logoutAccount());
       const saved = await refreshSettings();
       if (saved) {
         setSettings(saved);
@@ -4970,13 +5133,8 @@ export default function App() {
     await startQrLoginFlow();
   }
 
-  async function handleNeteaseLoginSuccess(nextSession?: AuthSession | null, successMessage = "网易云登录成功，Cookie 已自动写入设置。") {
-    if (nextSession) {
-      setSession(nextSession);
-    } else {
-      await refreshSession();
-    }
-
+  async function handleNeteaseLoginSuccess(successMessage = "网易云登录成功，Cookie 已自动写入设置。") {
+    await refreshSession();
     await refreshSettings();
     cookieHealthRef.current = {
       checkedAt: 0,
@@ -5028,7 +5186,7 @@ export default function App() {
         return;
       }
 
-      await handleNeteaseLoginSuccess(null, `网页登录 Cookie 已导入：${checkResult.accountName ?? "网易云账号"}`);
+      await handleNeteaseLoginSuccess(`网页登录 Cookie 已导入：${checkResult.accountName ?? "网易云账号"}`);
       setCookieLoginInput("");
       closeQrLogin();
     } catch (error) {
@@ -5134,6 +5292,7 @@ export default function App() {
       }
       setSettings(saved);
       setQqCookieInput("");
+      await refreshSession();
       void refreshQqMusicAccountStatus(true);
       setMessage(result.message || `QQ 音乐 Cookie 已导入：${result.uin ?? "QQ 账号"}`);
       closeQqLogin();
@@ -5187,6 +5346,7 @@ export default function App() {
       if (saved) {
         setSettings(saved);
       }
+      await refreshSession();
       setQqCookieInput("");
       setQqLoginMessage(status.message);
       setMessage(status.message);
@@ -5228,7 +5388,7 @@ export default function App() {
       setQrLoginMessage(result.message);
 
       if (result.code === 200) {
-        await handleNeteaseLoginSuccess(result.session, "网易云验证码登录成功，Cookie 已自动写入设置。");
+        await handleNeteaseLoginSuccess("网易云验证码登录成功，Cookie 已自动写入设置。");
         closeQrLogin();
       }
     } catch (error) {
@@ -5270,7 +5430,7 @@ export default function App() {
   }
 
   function handleTogglePlayback() {
-    playerInteractionStartedRef.current = true;
+    markPlayerInteraction();
 
     if (!requirePlaybackAuth()) {
       return;
@@ -5371,7 +5531,7 @@ export default function App() {
       return;
     }
 
-    if (!accountIsLoggedIn) {
+    if (!neteaseAccountIsLoggedIn) {
       setMessage("收藏到歌单需要先登录网易云账号，已为你打开登录窗口。");
       await handleStartQrLogin();
       return;
@@ -5621,6 +5781,7 @@ export default function App() {
   }
 
   function handleTogglePlaybackMode() {
+    markPlayerInteraction();
     setPlaybackMode((current) => {
       const nextMode = getNextPlaybackMode(current);
       setMessage(playbackModeMeta[nextMode].message);
@@ -5651,10 +5812,12 @@ export default function App() {
   }
 
   function handleNextTrack() {
+    markPlayerInteraction();
     void playNextTrack();
   }
 
   function handleQueueSongNext(song: Song) {
+    markPlayerInteraction();
     setPlayQueue((current) => {
       const baseQueue = current.length > 0 ? current : visibleSongs;
       const dedupedQueue = baseQueue.filter((item) => item.id !== song.id);
@@ -5674,6 +5837,7 @@ export default function App() {
   }
 
   function handleRemoveFromQueue(songId: string) {
+    markPlayerInteraction();
     setPlayQueue((current) => {
       const nextQueue = current.filter((song) => song.id !== songId);
       if (currentTrack?.id === songId) {
@@ -6176,42 +6340,58 @@ export default function App() {
   }, [mainTab, navKey, discoverFeedKind]);
 
   useEffect(() => {
+    if (!dataScopeId) {
+      setSearchHistory([]);
+      setPlayHistory([]);
+      return;
+    }
+
+    const capturedScope = dataScopeId;
     let cancelled = false;
+    historyMutationVersionRef.current += 1;
+    const hydrationVersion = historyMutationVersionRef.current;
+    migrateLegacyStorageToGuestScope(capturedScope);
+    const scopedSearchHistory = loadSearchHistory(capturedScope);
+    const scopedPlayHistory = loadPlayHistory(capturedScope);
+    setSearchHistory(scopedSearchHistory);
+    setPlayHistory(scopedPlayHistory);
 
     const syncHistoriesFromDatabase = async () => {
-      try {
-        const [remoteSearchHistory, remotePlayHistory] = await Promise.all([
-          getSearchHistory(),
-          getPlayHistory()
-        ]);
+      const [searchResult, playResult] = await Promise.allSettled([
+        getSearchHistory(capturedScope),
+        getPlayHistory(capturedScope)
+      ]);
 
-        if (cancelled) {
-          return;
-        }
+      if (cancelled || hydrationVersion !== historyMutationVersionRef.current || !shouldApplyScopedResult(capturedScope, dataScopeIdRef.current)) {
+        return;
+      }
 
-        if (remoteSearchHistory.length > 0) {
-          setSearchHistory(remoteSearchHistory);
-          window.localStorage.setItem(SEARCH_HISTORY_STORAGE_KEY, JSON.stringify(remoteSearchHistory));
-        } else {
-          const localSearchHistory = loadSearchHistory();
-          if (localSearchHistory.length > 0) {
-            setSearchHistory(localSearchHistory);
-            void saveSearchHistory(localSearchHistory);
-          }
+      if (searchResult.status === "fulfilled") {
+        const decision = decideScopedHydration({
+          remoteSucceeded: true,
+          remoteHasData: searchResult.value.length > 0,
+          scopedLocalHasData: scopedSearchHistory.length > 0
+        });
+        const nextSearchHistory = decision.source === "remote" ? searchResult.value : scopedSearchHistory;
+        setSearchHistory(nextSearchHistory);
+        saveHistoryLocal(SEARCH_HISTORY_STORAGE_KEY, nextSearchHistory, capturedScope);
+        if (decision.uploadScopedLocal) {
+          enqueueScopedWrite(capturedScope, "search-history", () => saveSearchHistory(scopedSearchHistory, capturedScope));
         }
+      }
 
-        if (remotePlayHistory.length > 0) {
-          setPlayHistory(remotePlayHistory);
-          window.localStorage.setItem(PLAY_HISTORY_STORAGE_KEY, JSON.stringify(remotePlayHistory));
-        } else {
-          const localPlayHistory = loadPlayHistory();
-          if (localPlayHistory.length > 0) {
-            setPlayHistory(localPlayHistory);
-            void savePlayHistory(localPlayHistory);
-          }
+      if (playResult.status === "fulfilled") {
+        const decision = decideScopedHydration({
+          remoteSucceeded: true,
+          remoteHasData: playResult.value.length > 0,
+          scopedLocalHasData: scopedPlayHistory.length > 0
+        });
+        const nextPlayHistory = decision.source === "remote" ? playResult.value : scopedPlayHistory;
+        setPlayHistory(nextPlayHistory);
+        saveHistoryLocal(PLAY_HISTORY_STORAGE_KEY, nextPlayHistory, capturedScope);
+        if (decision.uploadScopedLocal) {
+          enqueueScopedWrite(capturedScope, "play-history", () => savePlayHistory(scopedPlayHistory, capturedScope));
         }
-      } catch {
-        // Keep local fallback data if database sync fails.
       }
     };
 
@@ -6220,7 +6400,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [session.profile?.id, session.profile?.provider]);
+  }, [dataScopeId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -6308,41 +6488,75 @@ export default function App() {
   }, [currentTrack?.coverUrl, currentTrack?.artist, currentTrack?.title]);
 
   useEffect(() => {
-    let cancelled = false;
+    if (playerStateSyncTimerRef.current) {
+      window.clearTimeout(playerStateSyncTimerRef.current);
+      playerStateSyncTimerRef.current = null;
+    }
+    if (pausedPlayerStateSyncTimerRef.current) {
+      window.clearTimeout(pausedPlayerStateSyncTimerRef.current);
+      pausedPlayerStateSyncTimerRef.current = null;
+    }
+
+    playerInteractionStartedRef.current = false;
+    playerMutationVersionRef.current += 1;
+    const hydrationMutationVersion = playerMutationVersionRef.current;
     playerStateHydratedRef.current = false;
     setPlayerStateReady(false);
+    setIsPlaying(false);
+
+    const applyPlayerState = (state: PersistedPlayerState) => {
+      playerStateFingerprintRef.current = getPlayerStateFingerprint(state);
+      restorePlaybackSecondsRef.current = state.playbackSeconds;
+      playbackSecondsRef.current = state.playbackSeconds;
+      volumeValueRef.current = state.volume;
+      setCurrentTrack(state.currentTrack);
+      setPlayQueue(state.playQueue);
+      setPlaybackSeconds(state.playbackSeconds);
+      setVolume(state.volume);
+      setPlaybackMode(normalizePlaybackMode(state.playbackMode));
+    };
+
+    if (!dataScopeId) {
+      applyPlayerState(DEFAULT_PLAYER_STATE);
+      return;
+    }
+
+    const capturedScope = dataScopeId;
+    let cancelled = false;
+    const scopedLocalPlayerState = loadPlayerState(capturedScope);
+    const hydrationBaselineFingerprint = getPlayerStateFingerprint(scopedLocalPlayerState);
+    applyPlayerState(scopedLocalPlayerState);
 
     const syncPlayerStateFromDatabase = async () => {
       try {
-        const remotePlayerState = await getPlayerStateRemote();
-        if (cancelled) {
+        const remotePlayerState = await getPlayerStateRemote(capturedScope);
+        if (cancelled || !shouldApplyScopedResult(capturedScope, dataScopeIdRef.current)) {
           return;
         }
 
-        if (playerInteractionStartedRef.current) {
+        if (
+          playerInteractionStartedRef.current ||
+          hydrationMutationVersion !== playerMutationVersionRef.current ||
+          playerStateFingerprintRef.current !== hydrationBaselineFingerprint
+        ) {
           return;
         }
 
-        if (hasPersistedPlayerState(remotePlayerState)) {
-          restorePlaybackSecondsRef.current = remotePlayerState.playbackSeconds;
-          playbackSecondsRef.current = remotePlayerState.playbackSeconds;
-          setCurrentTrack(remotePlayerState.currentTrack);
-          setPlayQueue(remotePlayerState.playQueue);
-          setPlaybackSeconds(remotePlayerState.playbackSeconds);
-          setVolume(remotePlayerState.volume);
-          setPlaybackMode(normalizePlaybackMode(remotePlayerState.playbackMode));
-          savePlayerStateLocal(remotePlayerState);
-        } else {
-          const localPlayerState = loadPlayerState();
-          if (hasPersistedPlayerState(localPlayerState)) {
-            restorePlaybackSecondsRef.current = localPlayerState.playbackSeconds;
-            void savePlayerStateRemote(localPlayerState);
-          }
+        const decision = decideScopedHydration({
+          remoteSucceeded: true,
+          remoteHasData: hasPersistedPlayerState(remotePlayerState),
+          scopedLocalHasData: hasPersistedPlayerState(scopedLocalPlayerState)
+        });
+        const nextPlayerState = decision.source === "remote" ? remotePlayerState : scopedLocalPlayerState;
+        applyPlayerState(nextPlayerState);
+        savePlayerStateLocal(nextPlayerState, capturedScope);
+        if (decision.uploadScopedLocal) {
+          enqueueScopedWrite(capturedScope, "player-state", () => savePlayerStateRemote(scopedLocalPlayerState, capturedScope));
         }
       } catch {
-        // Keep local fallback player state when database sync fails.
+        // Keep only this account scope's local fallback when database sync fails.
       } finally {
-        if (!cancelled) {
+        if (!cancelled && shouldApplyScopedResult(capturedScope, dataScopeIdRef.current)) {
           playerStateHydratedRef.current = true;
           setPlayerStateReady(true);
         }
@@ -6356,7 +6570,7 @@ export default function App() {
       playerStateHydratedRef.current = false;
       setPlayerStateReady(false);
     };
-  }, [session.profile?.id, session.profile?.provider]);
+  }, [dataScopeId]);
 
   useEffect(() => {
     if (navKey === "playlists" && playlists.length === 0 && !loadingPlaylists) {
@@ -6388,7 +6602,7 @@ export default function App() {
         setQrLoginMessage(result.message);
 
         if (result.code === 803) {
-          await handleNeteaseLoginSuccess(result.session, "网易云扫码登录成功，Cookie 已自动写入设置。");
+          await handleNeteaseLoginSuccess("网易云扫码登录成功，Cookie 已自动写入设置。");
           qrCloseTimerRef.current = window.setTimeout(() => {
             if (!cancelled) {
               closeQrLogin();
@@ -6482,6 +6696,7 @@ export default function App() {
 
         if (result.code === 0) {
           await refreshSettings();
+          await refreshSession();
           await refreshQqMusicAccountStatus(true);
           setMessage(result.message || "QQ 音乐扫码登录成功。");
           window.setTimeout(() => {
@@ -6651,10 +6866,10 @@ export default function App() {
         getLyrics(songDetailSong),
         getSongComments(songDetailSong, 1, 6),
         getSongInsight(songDetailSong),
-        accountIsLoggedIn || songDetailSong.source === "qqmusic"
+        neteaseAccountIsLoggedIn || songDetailSong.source === "qqmusic"
           ? getSongAudioProbe(songDetailSong, playbackLevel, "playback")
           : Promise.reject(new Error("登录后检测实际播放音源")),
-        accountIsLoggedIn || songDetailSong.source === "qqmusic"
+        neteaseAccountIsLoggedIn || songDetailSong.source === "qqmusic"
           ? getSongAudioProbe(songDetailSong, downloadLevel, "download")
           : Promise.reject(new Error("登录后检测实际下载音源"))
       ]);
@@ -6704,7 +6919,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [songDetailSong?.id, songDetailSong?.mediaId, songDetailSong?.providerSongId, songDetailSong?.source, qualitySelections, qualitySelectionTouched, settings.defaultPlaybackQuality, settings.defaultDownloadQuality, accountIsLoggedIn]);
+  }, [songDetailSong?.id, songDetailSong?.mediaId, songDetailSong?.providerSongId, songDetailSong?.source, qualitySelections, qualitySelectionTouched, settings.defaultPlaybackQuality, settings.defaultDownloadQuality, neteaseAccountIsLoggedIn]);
 
   useEffect(() => {
     if (!userProfileTarget) {
@@ -6935,7 +7150,7 @@ export default function App() {
       audio.dataset.playIntent = "paused";
       setIsPlaying(false);
 
-      if (playbackMode === "repeat-one" && currentTrack && accountIsLoggedIn) {
+      if (playbackMode === "repeat-one" && currentTrack && neteaseAccountIsLoggedIn) {
         audio.currentTime = 0;
         playbackSecondsRef.current = 0;
         setPlaybackSeconds(0);
@@ -6997,9 +7212,17 @@ export default function App() {
       audio.removeEventListener("ended", handleEnded);
       audio.removeEventListener("error", handleError);
     };
-  }, [accountIsLoggedIn, activePlaylist?.id, currentTrack?.id, playbackMode, playbackSourcePlaylistId, playQueue, resultSource, results]);
+  }, [neteaseAccountIsLoggedIn, activePlaylist?.id, currentTrack?.id, playbackMode, playbackSourcePlaylistId, playQueue, resultSource, results]);
 
   useEffect(() => {
+    if (!dataScopeId || !shouldPersistScopedState({
+      hydrated: playerStateHydratedRef.current,
+      capturedScope: dataScopeId,
+      currentScope: dataScopeIdRef.current
+    })) {
+      return;
+    }
+
     const nextPlayerState: PersistedPlayerState = {
       currentTrack,
       playQueue,
@@ -7008,13 +7231,19 @@ export default function App() {
       playbackMode
     };
 
-    savePlayerStateLocal(nextPlayerState);
-  }, [currentTrack, playQueue, playbackSeconds, volume, playbackMode]);
+    savePlayerStateLocal(nextPlayerState, dataScopeId);
+  }, [dataScopeId, playerStateReady, currentTrack, playQueue, playbackSeconds, volume, playbackMode]);
 
   useEffect(() => {
-    if (!playerStateReady || !playerStateHydratedRef.current) {
+    if (!dataScopeId || !playerStateReady || !shouldPersistScopedState({
+      hydrated: playerStateHydratedRef.current,
+      capturedScope: dataScopeId,
+      currentScope: dataScopeIdRef.current
+    })) {
       return;
     }
+
+    const capturedScope = dataScopeId;
 
     const syncedState: PersistedPlayerState = {
       currentTrack,
@@ -7029,7 +7258,13 @@ export default function App() {
     }
 
     playerStateSyncTimerRef.current = window.setTimeout(() => {
-      void savePlayerStateRemote(syncedState);
+      if (shouldPersistScopedState({
+        hydrated: playerStateHydratedRef.current,
+        capturedScope,
+        currentScope: dataScopeIdRef.current
+      })) {
+        enqueueScopedWrite(capturedScope, "player-state", () => savePlayerStateRemote(syncedState, capturedScope));
+      }
       playerStateSyncTimerRef.current = null;
     }, 320);
 
@@ -7039,7 +7274,7 @@ export default function App() {
         playerStateSyncTimerRef.current = null;
       }
     };
-  }, [playerStateReady, currentTrack, playQueue, volume, playbackMode, Math.floor(Math.max(0, playbackSeconds) / 5)]);
+  }, [dataScopeId, playerStateReady, currentTrack, playQueue, volume, playbackMode, Math.floor(Math.max(0, playbackSeconds) / 5)]);
 
   useEffect(() => {
     if (pausedPlayerStateSyncTimerRef.current) {
@@ -7047,9 +7282,15 @@ export default function App() {
       pausedPlayerStateSyncTimerRef.current = null;
     }
 
-    if (!playerStateReady || !playerStateHydratedRef.current || isPlaying) {
+    if (!dataScopeId || !playerStateReady || !shouldPersistScopedState({
+      hydrated: playerStateHydratedRef.current,
+      capturedScope: dataScopeId,
+      currentScope: dataScopeIdRef.current
+    }) || isPlaying) {
       return;
     }
+
+    const capturedScope = dataScopeId;
 
     const exactState: PersistedPlayerState = {
       currentTrack,
@@ -7060,7 +7301,13 @@ export default function App() {
     };
 
     pausedPlayerStateSyncTimerRef.current = window.setTimeout(() => {
-      void savePlayerStateRemote(exactState);
+      if (shouldPersistScopedState({
+        hydrated: playerStateHydratedRef.current,
+        capturedScope,
+        currentScope: dataScopeIdRef.current
+      })) {
+        enqueueScopedWrite(capturedScope, "player-state", () => savePlayerStateRemote(exactState, capturedScope));
+      }
       pausedPlayerStateSyncTimerRef.current = null;
     }, PAUSED_PLAYER_STATE_SYNC_DELAY_MS);
 
@@ -7070,7 +7317,7 @@ export default function App() {
         pausedPlayerStateSyncTimerRef.current = null;
       }
     };
-  }, [playerStateReady, isPlaying, currentTrack, playQueue, playbackSeconds, volume, playbackMode]);
+  }, [dataScopeId, playerStateReady, isPlaying, currentTrack, playQueue, playbackSeconds, volume, playbackMode]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -7402,9 +7649,9 @@ export default function App() {
             <button
               type="button"
               className={comment.liked ? "comment-action active" : "comment-action"}
-              disabled={likeBusy || !accountIsLoggedIn}
+              disabled={likeBusy || !neteaseAccountIsLoggedIn}
               onClick={() => void handleToggleCommentLike(comment)}
-              title={accountIsLoggedIn ? (comment.liked ? "取消点赞" : "点赞评论") : "登录后点赞评论"}
+              title={neteaseAccountIsLoggedIn ? (comment.liked ? "取消点赞" : "点赞评论") : "登录后点赞评论"}
             >
               <span>{likeBusy ? "..." : comment.liked ? "已赞" : "赞"}</span>
               {comment.likedCount > 0 ? <strong>{comment.likedCount}</strong> : null}
@@ -7412,12 +7659,12 @@ export default function App() {
             <button
               type="button"
               className={isReplying ? "comment-action active" : "comment-action"}
-              disabled={!accountIsLoggedIn}
+              disabled={!neteaseAccountIsLoggedIn}
               onClick={() => {
                 setCommentActionError("");
                 setReplyingCommentId(isReplying ? null : comment.id);
               }}
-              title={accountIsLoggedIn ? "回复评论" : "登录后回复评论"}
+              title={neteaseAccountIsLoggedIn ? "回复评论" : "登录后回复评论"}
             >
               回复
             </button>
@@ -7596,7 +7843,7 @@ export default function App() {
     setOpenQualityMenuId(null);
     setQualityMenuStyle(null);
 
-    if (accountIsLoggedIn && isCurrentTrack) {
+    if (neteaseAccountIsLoggedIn && isCurrentTrack) {
       window.setTimeout(() => {
         syncAudioForSong(song, shouldResumePlayback, { level, startAtSeconds: resumeSeconds });
       }, 0);
@@ -7711,6 +7958,7 @@ export default function App() {
   };
 
   function seekPlayback(nextTime: number) {
+    markPlayerInteraction();
     const audio = audioRef.current;
     playbackSecondsRef.current = nextTime;
     setPlaybackSeconds(nextTime);
@@ -7730,9 +7978,15 @@ export default function App() {
     }
 
     event.preventDefault();
+    markPlayerInteraction();
     const step = event.shiftKey ? 1 : 4;
     const direction = wheelDelta > 0 ? -1 : 1;
     setVolume((current) => clampVolumeValue(current + direction * step));
+  }
+
+  function handleVolumeChange(nextVolume: number) {
+    markPlayerInteraction();
+    setVolume(clampVolumeValue(nextVolume));
   }
 
   function renderPlayerBar(mode: "dock" | "modal") {
@@ -7771,14 +8025,14 @@ export default function App() {
             </button>
             <button
               type="button"
-              className={!accountIsLoggedIn ? "dock-like dock-playlist-add locked-download-button" : "dock-like dock-playlist-add"}
+              className={!neteaseAccountIsLoggedIn ? "dock-like dock-playlist-add locked-download-button" : "dock-like dock-playlist-add"}
               aria-label={currentTrack ? `收藏 ${currentTrack.title} 到歌单` : "收藏当前歌曲到歌单"}
-              title={!accountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
+              title={!neteaseAccountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
               disabled={!currentTrack || Boolean(addingToPlaylistId)}
               onClick={() => currentTrack ? void handleOpenPlaylistPicker(currentTrack) : undefined}
             >
               <PlaylistAddIcon />
-              {!accountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
+              {!neteaseAccountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
             </button>
           </div>
         </div>
@@ -7819,14 +8073,14 @@ export default function App() {
         <div className="dock-volume player-bar-tools">
           <button
             type="button"
-            className={!hasNeteaseDownloadAuth || Boolean(currentTrack && isSongDownloadLocked(currentTrack)) ? "dock-queue-button player-download-button locked-download-button" : "dock-queue-button player-download-button"}
+            className={!songHasDownloadCredential(currentTrack) || Boolean(currentTrack && isSongDownloadLocked(currentTrack)) ? "dock-queue-button player-download-button locked-download-button" : "dock-queue-button player-download-button"}
             onClick={() => currentTrack ? void handleDownload(currentTrack) : undefined}
-            aria-label={!hasNeteaseDownloadAuth ? "登录后下载当前歌曲" : currentTrack && isSongDownloadLocked(currentTrack) ? "当前歌曲暂不可下载" : currentTrack ? `下载 ${currentTrack.title}` : "下载当前歌曲"}
-            title={!hasNeteaseDownloadAuth ? "登录后下载" : currentTrack && isSongDownloadLocked(currentTrack) ? getSongDownloadBlockedText(currentTrack) : directDownloadingSongId === currentTrack?.id ? "正在下载" : "下载当前歌曲"}
+            aria-label={!songHasDownloadCredential(currentTrack) ? getDownloadCredentialTitle(currentTrack) : currentTrack && isSongDownloadLocked(currentTrack) ? "当前歌曲暂不可下载" : currentTrack ? `下载 ${currentTrack.title}` : "下载当前歌曲"}
+            title={!songHasDownloadCredential(currentTrack) ? getDownloadCredentialTitle(currentTrack) : currentTrack && isSongDownloadLocked(currentTrack) ? getSongDownloadBlockedText(currentTrack) : directDownloadingSongId === currentTrack?.id ? "正在下载" : "下载当前歌曲"}
             disabled={!currentTrack || Boolean(directDownloadingSongId || batchDownloading || currentTrack && isSongDownloadLocked(currentTrack))}
           >
             <DownloadIcon />
-            {!hasNeteaseDownloadAuth || currentTrack && isSongDownloadLocked(currentTrack) ? <span className="download-lock-badge"><LockIcon /></span> : null}
+            {!songHasDownloadCredential(currentTrack) || currentTrack && isSongDownloadLocked(currentTrack) ? <span className="download-lock-badge"><LockIcon /></span> : null}
           </button>
           <button
             type="button"
@@ -7869,7 +8123,7 @@ export default function App() {
             value={volume}
             aria-label="音量"
             title="滚轮调节音量，按住 Shift 微调"
-            onChange={(event) => setVolume(clampVolumeValue(Number(event.target.value)))}
+            onChange={(event) => handleVolumeChange(Number(event.target.value))}
           />
           <strong>{volume}</strong>
         </div>
@@ -8033,7 +8287,7 @@ export default function App() {
                 <strong>{activeIdentityName}</strong>
               </div>
               <div className="identity-platforms" aria-label="平台账号状态">
-                <span className={["identity-platform-chip", accountIsLoggedIn ? "active" : "", accountVipEnabled ? "primary-vip" : "", neteaseSourceActive ? "current-source" : ""].filter(Boolean).join(" ")}>
+                <span className={["identity-platform-chip", neteaseAccountIsLoggedIn ? "active" : "", accountVipEnabled ? "primary-vip" : "", neteaseSourceActive ? "current-source" : ""].filter(Boolean).join(" ")}>
                   <b>网易</b>
                   <em>{neteasePlatformStatusLabel}</em>
                 </span>
@@ -8084,12 +8338,12 @@ export default function App() {
                   </div>
                 </section>
 
-                <section className={`${accountIsLoggedIn ? "platform-account-card active" : "platform-account-card pending"} ${activeSearchProviderMode === "netease" ? "current-source" : ""}`} aria-label="网易云音乐账号">
+                <section className={`${neteaseAccountIsLoggedIn ? "platform-account-card active" : "platform-account-card pending"} ${activeSearchProviderMode === "netease" ? "current-source" : ""}`} aria-label="网易云音乐账号">
                   <div className="platform-account-main">
                     <span className="platform-account-mark netease" aria-hidden="true">网</span>
                     <div className="platform-account-copy">
                       <strong>网易云音乐</strong>
-                      <span>{accountIsLoggedIn ? "账号已同步" : "未登录 · 播放和评论需登录"}</span>
+                      <span>{neteaseAccountIsLoggedIn ? "账号已同步" : "未登录 · 播放和评论需登录"}</span>
                     </div>
                     <div className="platform-account-badges">
                       {activeSearchProviderMode === "netease" ? <span className="platform-account-current">当前源</span> : null}
@@ -8098,19 +8352,19 @@ export default function App() {
                       </span>
                     </div>
                   </div>
-                  <p>{accountIsLoggedIn ? "用于网易云曲库、歌单、评论、喜欢与下载权限校验。" : "扫码、验证码或 MUSIC_U Cookie 均可接入网易云账号。"}</p>
+                  <p>{neteaseAccountIsLoggedIn ? "用于网易云曲库、歌单、评论、喜欢与下载权限校验。" : "扫码、验证码或 MUSIC_U Cookie 均可接入网易云账号。"}</p>
                   <div className="platform-account-membership" aria-label="网易云会员有效期">
                     <span>会员有效期</span>
                     <strong>{neteaseMembershipExpireLabel}</strong>
                   </div>
                   <div className="platform-account-actions">
-                    <button type="button" role="menuitem" disabled={!accountIsLoggedIn} onClick={openMyUserProfile}>
+                    <button type="button" role="menuitem" disabled={!neteaseAccountIsLoggedIn} onClick={openMyUserProfile}>
                       个人信息
                     </button>
                     <button type="button" role="menuitem" onClick={() => void handleStartQrLogin()}>
-                      {accountIsLoggedIn ? "重新登录" : "登录账号"}
+                      {neteaseAccountIsLoggedIn ? "重新登录" : "登录账号"}
                     </button>
-                    <button type="button" role="menuitem" className="danger" disabled={!accountIsLoggedIn && !hasNeteaseCookie} onClick={() => void handleClearCookie()}>
+                    <button type="button" role="menuitem" className="danger" disabled={!neteaseAccountIsLoggedIn && !hasNeteaseCookie} onClick={() => void handleClearCookie()}>
                       退出登录
                     </button>
                   </div>
@@ -9392,23 +9646,23 @@ export default function App() {
                       <>
                         <button
                           type="button"
-                          className={!hasNeteaseDownloadAuth ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
+                          className={!batchHasDownloadCredentials(selectedVisibleSongs) ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
                           disabled={batchDownloading || selectedVisibleSongs.length === 0}
                           onClick={() => void handleBatchDownload(selectedVisibleSongs, "已选歌曲")}
                           title="直连下载已选歌曲"
                         >
-                          {!hasNeteaseDownloadAuth ? <LockIcon /> : <OperationIcon name="download" />}
+                          {!batchHasDownloadCredentials(selectedVisibleSongs) ? <LockIcon /> : <OperationIcon name="download" />}
                           <span>{batchDownloading ? "启动" : "下载"}</span>
                         </button>
                         {!isQqDataMode ? (
                           <button
                             type="button"
-                            className={!accountIsLoggedIn ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
+                            className={!neteaseAccountIsLoggedIn ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
                             disabled={Boolean(addingToPlaylistId) || selectedVisibleSongs.length === 0}
                             onClick={() => void handleOpenPlaylistPickerForSongs(selectedVisibleSongs)}
                             title="收藏已选歌曲"
                           >
-                            {!accountIsLoggedIn ? <LockIcon /> : <OperationIcon name="playlist" />}
+                            {!neteaseAccountIsLoggedIn ? <LockIcon /> : <OperationIcon name="playlist" />}
                             <span>收藏</span>
                           </button>
                         ) : null}
@@ -9520,26 +9774,26 @@ export default function App() {
                       {!isQqDataMode ? (
                         <button
                           type="button"
-                          className={!accountIsLoggedIn ? "row-icon-button playlist-add-button locked-download-button" : "row-icon-button playlist-add-button"}
-                          aria-label={!accountIsLoggedIn ? `登录后收藏 ${song.title} 到歌单` : `收藏 ${song.title} 到歌单`}
-                          title={!accountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
+                          className={!neteaseAccountIsLoggedIn ? "row-icon-button playlist-add-button locked-download-button" : "row-icon-button playlist-add-button"}
+                          aria-label={!neteaseAccountIsLoggedIn ? `登录后收藏 ${song.title} 到歌单` : `收藏 ${song.title} 到歌单`}
+                          title={!neteaseAccountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
                           disabled={Boolean(addingToPlaylistId)}
                           onClick={(event) => { event.stopPropagation(); void handleOpenPlaylistPicker(song); }}
                         >
                           <PlaylistAddIcon />
-                          {!accountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                          {!neteaseAccountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
                         </button>
                       ) : null}
                       <button
                         type="button"
-                        className={!hasNeteaseDownloadAuth || isSongDownloadLocked(song) ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
-                        aria-label={!hasNeteaseDownloadAuth ? `登录后下载 ${song.title}` : isSongDownloadLocked(song) ? `${song.title} 暂不可下载` : directDownloadingSongId === song.id ? `正在下载 ${song.title}` : `下载 ${song.title}`}
-                        title={!hasNeteaseDownloadAuth ? "登录后下载" : isSongDownloadLocked(song) ? getSongDownloadBlockedText(song) : directDownloadingSongId === song.id ? "正在下载" : "下载"}
+                        className={!songHasDownloadCredential(song) || isSongDownloadLocked(song) ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
+                        aria-label={!songHasDownloadCredential(song) ? getDownloadCredentialTitle(song) : isSongDownloadLocked(song) ? `${song.title} 暂不可下载` : directDownloadingSongId === song.id ? `正在下载 ${song.title}` : `下载 ${song.title}`}
+                        title={!songHasDownloadCredential(song) ? getDownloadCredentialTitle(song) : isSongDownloadLocked(song) ? getSongDownloadBlockedText(song) : directDownloadingSongId === song.id ? "正在下载" : "下载"}
                         disabled={Boolean(directDownloadingSongId || batchDownloading || isSongDownloadLocked(song))}
                         onClick={(event) => { event.stopPropagation(); void handleDownload(song); }}
                       >
                         <DownloadIcon />
-                        {!hasNeteaseDownloadAuth || isSongDownloadLocked(song) ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                        {!songHasDownloadCredential(song) || isSongDownloadLocked(song) ? <span className="download-lock-badge"><LockIcon /></span> : null}
                       </button>
                     </div>
                   </article>
@@ -9782,23 +10036,23 @@ export default function App() {
                         <>
                           <button
                             type="button"
-                            className={!hasNeteaseDownloadAuth ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
+                            className={!batchHasDownloadCredentials(selectedVisibleSongs) ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
                             disabled={batchDownloading || selectedVisibleSongs.length === 0}
                             onClick={() => void handleBatchDownload(selectedVisibleSongs, "已选歌曲")}
                             title="直连下载已选歌曲"
                           >
-                            {!hasNeteaseDownloadAuth ? <LockIcon /> : <OperationIcon name="download" />}
+                            {!batchHasDownloadCredentials(selectedVisibleSongs) ? <LockIcon /> : <OperationIcon name="download" />}
                             <span>{batchDownloading ? "启动" : "下载"}</span>
                           </button>
                           {!isQqDataMode ? (
                             <button
                               type="button"
-                              className={!accountIsLoggedIn ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
+                              className={!neteaseAccountIsLoggedIn ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
                               disabled={Boolean(addingToPlaylistId) || selectedVisibleSongs.length === 0}
                               onClick={() => void handleOpenPlaylistPickerForSongs(selectedVisibleSongs)}
                               title="收藏已选歌曲"
                             >
-                              {!accountIsLoggedIn ? <LockIcon /> : <OperationIcon name="playlist" />}
+                              {!neteaseAccountIsLoggedIn ? <LockIcon /> : <OperationIcon name="playlist" />}
                               <span>收藏</span>
                             </button>
                           ) : null}
@@ -9894,26 +10148,26 @@ export default function App() {
                         {!isQqDataMode ? (
                           <button
                             type="button"
-                            className={!accountIsLoggedIn ? "row-icon-button playlist-add-button locked-download-button" : "row-icon-button playlist-add-button"}
-                            aria-label={!accountIsLoggedIn ? `登录后收藏 ${song.title} 到歌单` : `收藏 ${song.title} 到歌单`}
-                            title={!accountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
+                            className={!neteaseAccountIsLoggedIn ? "row-icon-button playlist-add-button locked-download-button" : "row-icon-button playlist-add-button"}
+                            aria-label={!neteaseAccountIsLoggedIn ? `登录后收藏 ${song.title} 到歌单` : `收藏 ${song.title} 到歌单`}
+                            title={!neteaseAccountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
                             disabled={Boolean(addingToPlaylistId)}
                             onClick={() => void handleOpenPlaylistPicker(song)}
                           >
                             <PlaylistAddIcon />
-                            {!accountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                            {!neteaseAccountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
                           </button>
                         ) : null}
                         <button
                           type="button"
-                          className={!hasNeteaseDownloadAuth || isSongDownloadLocked(song) ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
-                          aria-label={!hasNeteaseDownloadAuth ? `登录后下载 ${song.title}` : isSongDownloadLocked(song) ? `${song.title} 暂不可下载` : directDownloadingSongId === song.id ? `正在下载 ${song.title}` : `下载 ${song.title}`}
-                          title={!hasNeteaseDownloadAuth ? "登录后下载" : isSongDownloadLocked(song) ? getSongDownloadBlockedText(song) : directDownloadingSongId === song.id ? "正在下载" : "下载"}
+                          className={!songHasDownloadCredential(song) || isSongDownloadLocked(song) ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
+                          aria-label={!songHasDownloadCredential(song) ? getDownloadCredentialTitle(song) : isSongDownloadLocked(song) ? `${song.title} 暂不可下载` : directDownloadingSongId === song.id ? `正在下载 ${song.title}` : `下载 ${song.title}`}
+                          title={!songHasDownloadCredential(song) ? getDownloadCredentialTitle(song) : isSongDownloadLocked(song) ? getSongDownloadBlockedText(song) : directDownloadingSongId === song.id ? "正在下载" : "下载"}
                           disabled={Boolean(directDownloadingSongId || batchDownloading || isSongDownloadLocked(song))}
                           onClick={() => void handleDownload(song)}
                         >
                           <DownloadIcon />
-                          {!hasNeteaseDownloadAuth || isSongDownloadLocked(song) ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                          {!songHasDownloadCredential(song) || isSongDownloadLocked(song) ? <span className="download-lock-badge"><LockIcon /></span> : null}
                         </button>
                       </div>
                     </article>
@@ -10966,7 +11220,7 @@ export default function App() {
                     type="button"
                     className="row-icon-button playlist-add-button"
                     disabled={Boolean(addingToPlaylistId)}
-                    title={accountIsLoggedIn ? "收藏到歌单" : "登录后收藏到歌单"}
+                    title={neteaseAccountIsLoggedIn ? "收藏到歌单" : "登录后收藏到歌单"}
                     onClick={() => {
                       closeSongDetail();
                       void handleOpenPlaylistPicker(detailSong);
@@ -10976,16 +11230,16 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    className={!hasNeteaseDownloadAuth || isSongDownloadLocked(detailSong) ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
+                    className={!songHasDownloadCredential(detailSong) || isSongDownloadLocked(detailSong) ? "row-icon-button accent locked-download-button" : "row-icon-button accent"}
                     disabled={Boolean(directDownloadingSongId || batchDownloading || isSongDownloadLocked(detailSong))}
-                    title={hasNeteaseDownloadAuth ? isSongDownloadLocked(detailSong) ? getSongDownloadBlockedText(detailSong) : "下载" : "登录后下载"}
+                    title={songHasDownloadCredential(detailSong) ? isSongDownloadLocked(detailSong) ? getSongDownloadBlockedText(detailSong) : "下载" : getDownloadCredentialTitle(detailSong)}
                     onClick={() => {
                       closeSongDetail();
                       void handleDownload(detailSong);
                     }}
                   >
                     <DownloadIcon />
-                    {!hasNeteaseDownloadAuth || isSongDownloadLocked(detailSong) ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                    {!songHasDownloadCredential(detailSong) || isSongDownloadLocked(detailSong) ? <span className="download-lock-badge"><LockIcon /></span> : null}
                   </button>
                   <button
                     type="button"
@@ -11646,8 +11900,8 @@ export default function App() {
             <span className="song-context-icon"><PlaylistAddIcon /></span>
             收藏到歌单
           </button>
-          <button type="button" role="menuitem" disabled={Boolean(directDownloadingSongId || batchDownloading || isSongDownloadLocked(songContextMenu.song))} title={isSongDownloadLocked(songContextMenu.song) ? getSongDownloadBlockedText(songContextMenu.song) : undefined} onClick={() => runSongContextAction(() => handleDownload(songContextMenu.song))}>
-            <span className="song-context-icon"><DownloadIcon /></span>
+          <button type="button" role="menuitem" disabled={Boolean(directDownloadingSongId || batchDownloading || isSongDownloadLocked(songContextMenu.song))} title={!songHasDownloadCredential(songContextMenu.song) ? getDownloadCredentialTitle(songContextMenu.song) : isSongDownloadLocked(songContextMenu.song) ? getSongDownloadBlockedText(songContextMenu.song) : undefined} onClick={() => runSongContextAction(() => handleDownload(songContextMenu.song))}>
+            <span className="song-context-icon">{songHasDownloadCredential(songContextMenu.song) ? <DownloadIcon /> : <LockIcon />}</span>
             下载
           </button>
           <button type="button" role="menuitem" onClick={() => runSongContextAction(() => handleCopySongLink(songContextMenu.song))}>

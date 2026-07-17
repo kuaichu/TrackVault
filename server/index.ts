@@ -10,6 +10,7 @@ import { requireAdminAuth } from "./admin-auth.js";
 import { getCloudSongs } from "./cloud-provider.js";
 import { getSongCommentReplies, getSongComments, replyToSongComment, setSongCommentLiked } from "./comment-provider.js";
 import { getDiscoverSongs } from "./discover-provider.js";
+import { getAccountState, getDataScopeId } from "./data-scope.js";
 import { addAudioMetadataToDownload, getAudioMetadataTarget, getHighResolutionCoverUrl } from "./download-metadata.js";
 import { getHeartbeatSongs } from "./heartbeat-provider.js";
 import { getArtistProfile, resolveArtistIdByName } from "./artist-provider.js";
@@ -50,6 +51,17 @@ const __dirname = path.dirname(__filename);
 const clientDistDir = path.resolve(__dirname, "../dist");
 const COVER_PROXY_MAX_BYTES = 5 * 1024 * 1024;
 type PlaylistProviderMode = "netease" | "qq";
+
+async function resolveRequestDataScope(request: express.Request, response: express.Response) {
+  const expectedDataScopeId = request.header("x-data-scope-id")?.trim() ?? "";
+  const currentDataScopeId = await getDataScopeId();
+  if (!expectedDataScopeId || expectedDataScopeId !== currentDataScopeId) {
+    response.status(409).json({ message: "账号数据作用域已变化，请重试。" });
+    return null;
+  }
+
+  return currentDataScopeId;
+}
 
 function resolvePlaylistProvider(request: express.Request, settings: AppSettings): PlaylistProviderMode {
   const provider = typeof request.query.provider === "string" ? request.query.provider : "";
@@ -222,27 +234,37 @@ app.get("/api/tasks/:taskId/file", async (request, response) => {
   });
 });
 
-app.get("/api/history/search", async (_request, response) => {
-  response.json({ items: await getSearchHistory() });
+app.get("/api/history/search", async (request, response) => {
+  const dataScopeId = await resolveRequestDataScope(request, response);
+  if (!dataScopeId) return;
+  response.json({ items: await getSearchHistory(dataScopeId) });
 });
 
 app.put("/api/history/search", async (request, response) => {
+  const dataScopeId = await resolveRequestDataScope(request, response);
+  if (!dataScopeId) return;
   const items = Array.isArray(request.body?.items) ? request.body.items : [];
-  response.json({ items: await saveSearchHistory(items) });
+  response.json({ items: await saveSearchHistory(items, dataScopeId) });
 });
 
 app.delete("/api/history/search", async (request, response) => {
+  const dataScopeId = await resolveRequestDataScope(request, response);
+  if (!dataScopeId) return;
   const keyword = typeof request.query.keyword === "string" ? request.query.keyword : "";
-  response.json({ items: await removeSearchHistory(keyword) });
+  response.json({ items: await removeSearchHistory(keyword, dataScopeId) });
 });
 
-app.get("/api/history/play", async (_request, response) => {
-  response.json({ items: await getPlayHistory() });
+app.get("/api/history/play", async (request, response) => {
+  const dataScopeId = await resolveRequestDataScope(request, response);
+  if (!dataScopeId) return;
+  response.json({ items: await getPlayHistory(dataScopeId) });
 });
 
 app.put("/api/history/play", async (request, response) => {
+  const dataScopeId = await resolveRequestDataScope(request, response);
+  if (!dataScopeId) return;
   const items = Array.isArray(request.body?.items) ? request.body.items : [];
-  response.json({ items: await savePlayHistory(items) });
+  response.json({ items: await savePlayHistory(items, dataScopeId) });
 });
 
 app.get("/api/playlists", async (request, response) => {
@@ -721,7 +743,7 @@ function getDownloadSongFromQuery(request: express.Request): Song {
     duration: typeof request.query.duration === "string" ? request.query.duration : "",
     quality: "",
     availableQualities: [],
-    source: typeof request.query.source === "string" ? request.query.source : "netease"
+    source: typeof request.query.source === "string" ? request.query.source : ""
   };
 }
 
@@ -870,7 +892,7 @@ app.post("/api/settings/qqmusic-cookie/check", async (request, response) => {
 });
 
 app.get("/api/account", async (_request, response) => {
-  response.json(await getSession());
+  response.json(await getAccountState());
 });
 
 app.get("/api/account/qqmusic", async (_request, response) => {
@@ -910,11 +932,11 @@ app.post("/api/account/login", async (request, response) => {
   const vipEnabled = Boolean(request.body?.vipEnabled);
   const note = typeof request.body?.note === "string" ? request.body.note : "";
 
-  response.json(await loginSession({ accountName, vipEnabled, note }));
+  response.json(await getAccountState(await loginSession({ accountName, vipEnabled, note })));
 });
 
 app.post("/api/account/logout", async (_request, response) => {
-  response.json(await logoutSession());
+  response.json(await getAccountState(await logoutSession()));
 });
 
 app.post("/api/account/qqmusic/logout", async (_request, response) => {
@@ -962,14 +984,18 @@ app.post("/api/account/netease/cellphone/login", async (request, response) => {
   }
 });
 
-app.get("/api/player-state", async (_request, response) => {
+app.get("/api/player-state", async (request, response) => {
+  const dataScopeId = await resolveRequestDataScope(request, response);
+  if (!dataScopeId) return;
   const { getPlayerState } = await import("./player-state-store.js");
-  response.json(await getPlayerState());
+  response.json(await getPlayerState(dataScopeId));
 });
 
 app.put("/api/player-state", async (request, response) => {
+  const dataScopeId = await resolveRequestDataScope(request, response);
+  if (!dataScopeId) return;
   const { savePlayerState } = await import("./player-state-store.js");
-  response.json(await savePlayerState(request.body));
+  response.json(await savePlayerState(request.body, dataScopeId));
 });
 
 app.post("/api/download", async (request, response) => {

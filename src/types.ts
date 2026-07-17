@@ -368,6 +368,10 @@ export type AuthSession = {
   profile: AccountProfile | null;
 };
 
+export type AccountState = AuthSession & {
+  dataScopeId: string;
+};
+
 export type PersistedPlayerState = {
   currentTrack: Song | null;
   playQueue: Song[];

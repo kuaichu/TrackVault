@@ -1,4 +1,4 @@
-import { getCurrentUserKey } from "./account-store.js";
+import { getDataScopeId } from "./data-scope.js";
 import { getDatabase, isSqliteAvailable, readJsonStore, updateJsonStore } from "./database.js";
 import type { PersistedPlayerState, PlaybackMode, Song } from "./types.js";
 
@@ -50,8 +50,8 @@ function normalizePlayerState(input: Partial<PersistedPlayerState>): PersistedPl
   };
 }
 
-export async function getPlayerState() {
-  const userKey = await getCurrentUserKey();
+export async function getPlayerState(dataScopeId?: string) {
+  const userKey = dataScopeId ?? await getDataScopeId();
 
   if (!isSqliteAvailable()) {
     const row = readJsonStore().player_state?.[userKey] as Partial<PersistedPlayerState> | undefined;
@@ -77,8 +77,8 @@ export async function getPlayerState() {
   return normalizePlayerState(JSON.parse(row.state_json) as Partial<PersistedPlayerState>);
 }
 
-export async function savePlayerState(input: PersistedPlayerState) {
-  const userKey = await getCurrentUserKey();
+export async function savePlayerState(input: PersistedPlayerState, dataScopeId?: string) {
+  const userKey = dataScopeId ?? await getDataScopeId();
   const nextState = normalizePlayerState(input);
 
   if (!isSqliteAvailable()) {
