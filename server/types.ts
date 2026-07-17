@@ -321,6 +321,18 @@ export type AppSettings = {
   autoLoadDiscoverOnStart: boolean;
 };
 
+export type PublicAppSettings = Omit<AppSettings, "neteaseCookie" | "qqMusicCookie"> & {
+  hasNeteaseCookie: boolean;
+  hasQqMusicCookie: boolean;
+};
+
+export type AppSettingsUpdate = Partial<Omit<AppSettings, "neteaseCookie" | "qqMusicCookie">> & {
+  neteaseCookie?: string;
+  qqMusicCookie?: string;
+  clearNeteaseCookie?: boolean;
+  clearQqMusicCookie?: boolean;
+};
+
 export type AdminConfig = {
   trustedUserWhitelist: string[];
   systemDefaultToken: string;
@@ -401,7 +413,6 @@ export type QqMusicQrStartResult = {
 export type QqMusicQrCheckResult = {
   code: number;
   message: string;
-  cookie?: string;
   account?: QqMusicAccountStatus;
 };
 

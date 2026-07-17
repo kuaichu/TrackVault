@@ -21,13 +21,13 @@ import { searchProvider, type SearchProviderMode } from "./provider.js";
 import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getPersonalRadioSongs } from "./personal-radio-provider.js";
-import { checkQqMusicCookie, createQqPlaylistFromTrackMids, getQqDiscoverSongs, getQqMusicAccountStatus, getQqMusicUserProfile, getQqPlaylistSongs, getQqSongCommentReplies, getQqSongComments, getQqSongLyrics, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream, setQqSongCommentLiked } from "./qqmusic-provider.js";
-import { checkQqMusicQrLogin, startQqMusicQrLogin } from "./qqmusic-auth.js";
-import { getAdminConfig, getSettings, saveAdminConfig, saveSettings } from "./settings-store.js";
+import { createQqPlaylistFromTrackMids, getQqDiscoverSongs, getQqMusicAccountStatus, getQqMusicUserProfile, getQqPlaylistSongs, getQqSongCommentReplies, getQqSongComments, getQqSongLyrics, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream, setQqSongCommentLiked } from "./qqmusic-provider.js";
+import { checkQqMusicQrLogin, importQqMusicCookie, logoutQqMusicSession, startQqMusicQrLogin } from "./qqmusic-auth.js";
+import { getAdminConfig, getSettings, saveAdminConfig, saveSettings, SettingsUpdateConflictError, toPublicSettings } from "./settings-store.js";
 import { getNeteaseSongInsight } from "./song-insight-provider.js";
 import { isSongLiked, toggleSongLike } from "./song-like-provider.js";
 import { assertDownloadAccess, checkNeteaseCookie, createTask, getAllTasks, getTaskFileForDownload, probeSongAudio, resolveDirectDownload, resolveSongStream } from "./task-store.js";
-import { checkNeteaseQrLogin, loginWithNeteaseCellphone, sendNeteaseCaptcha, startNeteaseQrLogin } from "./netease-auth.js";
+import { checkNeteaseQrLogin, importNeteaseCookie, loginWithNeteaseCellphone, sendNeteaseCaptcha, startNeteaseQrLogin } from "./netease-auth.js";
 import { getUserEvents, getUserMutualFollow, getUserProfile, getUserSocialList, setUserFollowed } from "./user-provider.js";
 import { formatTransferExport } from "./playlist-transfer/export-formatters.js";
 import { buildNeteaseImportedPlaylistAudit } from "./playlist-transfer/netease-import-audit.js";
@@ -39,7 +39,7 @@ import { addNeteaseTrackIdsToExistingPlaylist, checkNeteaseProviderTrackAvailabi
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
 import { createPlaylistTransferJob, getNeteaseImportTrackIds, getQqImportTrackMids } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
-import type { AdminConfigUpdate, AppSettings, DownloadQualityLevel, DownloadRequest, PersonalRadioKind, Song } from "./types.js";
+import type { AdminConfigUpdate, AppSettings, AppSettingsUpdate, DownloadQualityLevel, DownloadRequest, PersonalRadioKind, Song } from "./types.js";
 import type { PlaylistCompareResult, PlaylistCompareStatus } from "./playlist-transfer/playlist-compare.js";
 import type { MatchCandidate, TransferImportRequest, TransferTargetProvider, TransferTrack } from "./playlist-transfer/types.js";
 
@@ -823,12 +823,20 @@ app.get("/api/download/proxy", async (request, response) => {
 });
 
 app.get("/api/settings", async (_request, response) => {
-  response.json(await getSettings());
+  response.json(toPublicSettings(await getSettings()));
 });
 
 app.put("/api/settings", async (request, response) => {
-  const settings = request.body as AppSettings;
-  response.json(await saveSettings(settings));
+  try {
+    const settings = await saveSettings(request.body as AppSettingsUpdate);
+    response.json(toPublicSettings(settings));
+  } catch (error) {
+    if (error instanceof SettingsUpdateConflictError) {
+      response.status(400).json({ message: error.message });
+      return;
+    }
+    throw error;
+  }
 });
 
 app.get("/api/admin/config", requireAdminAuth, async (_request, response) => {
@@ -840,13 +848,25 @@ app.post("/api/admin/config", requireAdminAuth, async (request, response) => {
 });
 
 app.post("/api/settings/netease-cookie/check", async (request, response) => {
-  const cookie = typeof request.body?.cookie === "string" ? request.body.cookie : "";
-  response.json(await checkNeteaseCookie(cookie));
+  try {
+    const submittedCookie = typeof request.body?.cookie === "string" ? request.body.cookie.trim() : "";
+    if (submittedCookie) {
+      response.json(await importNeteaseCookie(submittedCookie));
+      return;
+    }
+    response.json(await checkNeteaseCookie((await getSettings()).neteaseCookie));
+  } catch (error) {
+    response.status(409).json({ message: error instanceof Error ? error.message : "网易云 Cookie 导入失败" });
+  }
 });
 
 app.post("/api/settings/qqmusic-cookie/check", async (request, response) => {
-  const cookie = typeof request.body?.cookie === "string" ? request.body.cookie : "";
-  response.json(await checkQqMusicCookie(cookie));
+  try {
+    const cookie = typeof request.body?.cookie === "string" ? request.body.cookie : "";
+    response.json(await importQqMusicCookie(cookie));
+  } catch (error) {
+    response.status(409).json({ message: error instanceof Error ? error.message : "QQ 音乐 Cookie 导入失败" });
+  }
 });
 
 app.get("/api/account", async (_request, response) => {
@@ -895,6 +915,10 @@ app.post("/api/account/login", async (request, response) => {
 
 app.post("/api/account/logout", async (_request, response) => {
   response.json(await logoutSession());
+});
+
+app.post("/api/account/qqmusic/logout", async (_request, response) => {
+  response.json(await logoutQqMusicSession());
 });
 
 app.post("/api/account/netease/qr/start", async (_request, response) => {

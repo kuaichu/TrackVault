@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
-import { checkQqMusicCookie } from "./qqmusic-provider.js";
-import { getSettings, saveSettings } from "./settings-store.js";
-import type { QqMusicAccountStatus } from "./types.js";
+import { checkQqMusicCookie, clearQqMusicRuntimeStateForCurrentSession } from "./qqmusic-provider.js";
+import { clearQqMusicCookie, saveSettings } from "./settings-store.js";
+import { getClientSessionId } from "./request-context.js";
+import { captureCredentialWriteGuard, invalidateCredentialWrites, isCredentialWriteGuardCurrent, runCredentialWriteIfCurrent, type CredentialWriteGuard } from "./credential-write-guard.js";
+import type { QqMusicAccountStatus, QqMusicCookieCheckResult } from "./types.js";
 
 const QQ_LOGIN_APP_ID = "1006102";
 const QQ_LOGIN_DAID = "384";
@@ -16,6 +18,8 @@ const QQ_LOGIN_USER_AGENT =
 const QQ_QR_SESSION_TTL_MS = 5 * 60 * 1000;
 
 type QqQrSession = {
+  clientSessionId: string;
+  credentialGuard: CredentialWriteGuard;
   qrsig: string;
   loginSig: string;
   cookies: Map<string, string>;
@@ -37,11 +41,25 @@ export type QqMusicQrStartResult = {
 export type QqMusicQrCheckResult = {
   code: number;
   message: string;
-  cookie?: string;
   account?: QqMusicAccountStatus;
 };
 
 const qrSessions = new Map<string, QqQrSession>();
+
+export function clearOwnedQqQrSessions<T extends { clientSessionId: string }>(sessions: Map<string, T>, clientSessionId: string) {
+  let clearedCount = 0;
+  for (const [key, session] of sessions.entries()) {
+    if (session.clientSessionId === clientSessionId) {
+      sessions.delete(key);
+      clearedCount += 1;
+    }
+  }
+  return clearedCount;
+}
+
+export function clearQqMusicQrSessionsForCurrentClient() {
+  return clearOwnedQqQrSessions(qrSessions, getClientSessionId());
+}
 
 function cleanupQrSessions() {
   const now = Date.now();
@@ -147,6 +165,7 @@ async function fetchWithLoginHeaders(url: string, cookies?: Map<string, string>,
 
 export async function startQqMusicQrLogin(): Promise<QqMusicQrStartResult> {
   cleanupQrSessions();
+  const credentialGuard = captureCredentialWriteGuard("qqmusic");
 
   const cookies = new Map<string, string>();
   const xloginResponse = await fetchWithLoginHeaders(getXloginUrl(), cookies, {
@@ -181,8 +200,13 @@ export async function startQqMusicQrLogin(): Promise<QqMusicQrStartResult> {
   }
 
   const qrBytes = Buffer.from(await qrResponse.arrayBuffer());
+  if (!isCredentialWriteGuardCurrent(credentialGuard)) {
+    throw new Error("登录状态已在二维码生成期间退出，请重新生成二维码。");
+  }
   const key = crypto.randomUUID();
   qrSessions.set(key, {
+    clientSessionId: getClientSessionId(),
+    credentialGuard,
     qrsig,
     loginSig,
     cookies,
@@ -212,27 +236,39 @@ async function followLoginRedirect(redirectUrl: string, cookies: Map<string, str
   }
 }
 
-async function persistQqCookie(cookie: string) {
+async function persistQqCookie(cookie: string, credentialGuard: CredentialWriteGuard) {
   const checkResult = await checkQqMusicCookie(cookie);
   if (!checkResult.ok) {
-    throw new Error(checkResult.message);
+    return checkResult;
   }
 
-  const settings = await getSettings();
-  await saveSettings({
-    ...settings,
-    qqMusicCookie: checkResult.refreshedCookie ?? cookie
-  });
+  await runCredentialWriteIfCurrent(credentialGuard, () => saveSettings({
+    qqMusicCookie: getQqMusicCookieForStorage(cookie, checkResult)
+  }));
 
+  return checkResult;
+}
+
+export function getQqMusicCookieForStorage(cookie: string, checkResult: QqMusicCookieCheckResult) {
+  return checkResult.refreshedCookie?.trim() || cookie.trim();
+}
+
+export async function importQqMusicCookie(cookie: string): Promise<QqMusicCookieCheckResult> {
+  const checkResult = await persistQqCookie(cookie, captureCredentialWriteGuard("qqmusic"));
   return {
-    cookie: checkResult.refreshedCookie ?? cookie,
-    account: {
-      ok: true,
-      uin: checkResult.uin,
-      displayName: checkResult.uin ? `QQ ${checkResult.uin}` : null,
-      vipEnabled: false,
-      message: checkResult.message
-    } satisfies QqMusicAccountStatus
+    ok: checkResult.ok,
+    uin: checkResult.uin,
+    message: checkResult.message
+  };
+}
+
+function toQqMusicAccountStatus(checkResult: QqMusicCookieCheckResult): QqMusicAccountStatus {
+  return {
+    ok: true,
+    uin: checkResult.uin,
+    displayName: checkResult.uin ? `QQ ${checkResult.uin}` : null,
+    vipEnabled: false,
+    message: checkResult.message
   };
 }
 
@@ -240,7 +276,8 @@ export async function checkQqMusicQrLogin(key: string): Promise<QqMusicQrCheckRe
   cleanupQrSessions();
 
   const session = qrSessions.get(key.trim());
-  if (!session) {
+  if (!session || session.clientSessionId !== getClientSessionId() || !isCredentialWriteGuardCurrent(session.credentialGuard)) {
+    qrSessions.delete(key.trim());
     return {
       code: 65,
       message: "二维码已过期，请重新生成。"
@@ -284,11 +321,28 @@ export async function checkQqMusicQrLogin(key: string): Promise<QqMusicQrCheckRe
   qrSessions.delete(key.trim());
 
   const cookie = cookiePairs(session.cookies);
-  const persisted = await persistQqCookie(cookie);
+  const checkResult = await persistQqCookie(cookie, session.credentialGuard);
+  if (!checkResult.ok) {
+    throw new Error(checkResult.message);
+  }
   return {
     code: 0,
     message: result.nickname ? `QQ 音乐扫码登录成功：${result.nickname}` : "QQ 音乐扫码登录成功。",
-    cookie: persisted.cookie,
-    account: persisted.account
+    account: toQqMusicAccountStatus(checkResult)
   };
+}
+
+export async function logoutQqMusicSession(): Promise<QqMusicAccountStatus> {
+  return invalidateCredentialWrites("qqmusic", async () => {
+    await clearQqMusicCookie();
+    clearQqMusicQrSessionsForCurrentClient();
+    await clearQqMusicRuntimeStateForCurrentSession();
+    return {
+      ok: false,
+      uin: null,
+      displayName: null,
+      vipEnabled: false,
+      message: "已退出 QQ 音乐账号。"
+    };
+  });
 }

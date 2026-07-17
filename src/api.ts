@@ -4,6 +4,7 @@ import type {
   AdminConfigView,
   ArtistProfile,
   AppSettings,
+  AppSettingsUpdate,
   AuthSession,
   NeteaseCaptchaSendResult,
   NeteaseCellphoneLoginResult,
@@ -1196,7 +1197,7 @@ export async function getSettings(): Promise<AppSettings> {
   return (await response.json()) as AppSettings;
 }
 
-export async function saveSettings(settings: AppSettings): Promise<AppSettings> {
+export async function saveSettings(settings: AppSettingsUpdate): Promise<AppSettings> {
   const response = await apiFetch("/api/settings", {
     method: "PUT",
     headers: {
@@ -1206,7 +1207,8 @@ export async function saveSettings(settings: AppSettings): Promise<AppSettings> 
   });
 
   if (!response.ok) {
-    throw new Error("保存设置失败");
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "保存设置失败");
   }
 
   return (await response.json()) as AppSettings;
@@ -1244,17 +1246,18 @@ export async function saveAdminConfig(config: AdminConfigUpdate, adminToken: str
   return (await response.json()) as AdminConfigView;
 }
 
-export async function checkNeteaseCookie(cookie: string): Promise<NeteaseCookieCheckResult> {
+export async function checkNeteaseCookie(cookie?: string): Promise<NeteaseCookieCheckResult> {
   const response = await apiFetch("/api/settings/netease-cookie/check", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ cookie })
+    body: JSON.stringify(cookie ? { cookie } : {})
   });
 
   if (!response.ok) {
-    throw new Error("检测 Cookie 失败");
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "检测 Cookie 失败");
   }
 
   return (await response.json()) as NeteaseCookieCheckResult;
@@ -1270,7 +1273,8 @@ export async function checkQqMusicCookie(cookie: string): Promise<QqMusicCookieC
   });
 
   if (!response.ok) {
-    throw new Error("检测 QQ 音乐 Cookie 失败");
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "检测 QQ 音乐 Cookie 失败");
   }
 
   return (await response.json()) as QqMusicCookieCheckResult;
@@ -1353,6 +1357,18 @@ export async function logoutAccount(): Promise<AuthSession> {
   }
 
   return (await response.json()) as AuthSession;
+}
+
+export async function logoutQqMusicAccount(): Promise<QqMusicAccountStatus> {
+  const response = await apiFetch("/api/account/qqmusic/logout", {
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw new Error("退出 QQ 音乐账号失败");
+  }
+
+  return (await response.json()) as QqMusicAccountStatus;
 }
 
 export async function startNeteaseQrLogin(): Promise<NeteaseQrStartResult> {

@@ -2,13 +2,14 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { getClientSessionId, runWithRequestContext } from "./request-context.js";
-import { getSettings } from "./settings-store.js";
+import { clearNeteaseCookie, getSettings } from "./settings-store.js";
 import { findMembershipExpireAt, formatMembershipExpireText } from "./membership-utils.js";
+import { invalidateCredentialWrites } from "./credential-write-guard.js";
 import type { AccountProfile, AuthSession } from "./types.js";
 
 const require = createRequire(import.meta.url);
 const { login_status, vip_info, vip_info_v2 } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
-const dataDir = path.resolve(process.cwd(), "data");
+const dataDir = path.resolve(process.env.TRACKVAULT_DATA_DIR?.trim() || path.join(process.cwd(), "data"));
 
 type LoginStatusBody = {
   data?: {
@@ -188,6 +189,9 @@ export async function loginSession(input: {
 
 export async function logoutSession(): Promise<AuthSession> {
   await ensureDataDir();
-  await fs.writeFile(getSessionPath(), JSON.stringify(emptySession, null, 2), "utf8");
+  await invalidateCredentialWrites("netease", async () => {
+    await clearNeteaseCookie();
+    await fs.writeFile(getSessionPath(), JSON.stringify(emptySession, null, 2), "utf8");
+  });
   return emptySession;
 }

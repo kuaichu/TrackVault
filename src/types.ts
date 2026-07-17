@@ -318,14 +318,21 @@ export type AppSettings = {
   vipEnabled: boolean;
   providerMode: "demo" | "netease" | "qq" | "aggregate";
   downloadDirectory: string;
-  neteaseCookie: string;
-  qqMusicCookie?: string;
+  hasNeteaseCookie: boolean;
+  hasQqMusicCookie: boolean;
   notes: string;
   defaultPlaybackQuality: DownloadQualityLevel;
   defaultDownloadQuality: DownloadQualityLevel;
   maxConcurrentDownloads: number;
   startupView: "discover" | "search" | "playlists" | "downloads";
   autoLoadDiscoverOnStart: boolean;
+};
+
+export type AppSettingsUpdate = Partial<Omit<AppSettings, "hasNeteaseCookie" | "hasQqMusicCookie">> & {
+  neteaseCookie?: string;
+  qqMusicCookie?: string;
+  clearNeteaseCookie?: boolean;
+  clearQqMusicCookie?: boolean;
 };
 
 export type AdminConfigView = {
@@ -379,7 +386,6 @@ export type QqMusicCookieCheckResult = {
   ok: boolean;
   uin: string | null;
   message: string;
-  refreshedCookie?: string;
 };
 
 export type QqMusicAccountStatus = {
@@ -402,7 +408,6 @@ export type QqMusicQrStartResult = {
 export type QqMusicQrCheckResult = {
   code: number;
   message: string;
-  cookie?: string;
   account?: QqMusicAccountStatus;
 };
 
@@ -472,7 +477,6 @@ export type NeteaseQrStartResult = {
 export type NeteaseQrCheckResult = {
   code: number;
   message: string;
-  cookie?: string;
   session?: AuthSession;
 };
 
@@ -485,7 +489,6 @@ export type NeteaseCaptchaSendResult = {
 export type NeteaseCellphoneLoginResult = {
   code: number;
   message: string;
-  cookie?: string;
   session?: AuthSession;
 };
 

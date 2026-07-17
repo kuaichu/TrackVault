@@ -53,6 +53,7 @@ import {
   loginAccount,
   loginWithNeteaseCellphone,
   logoutAccount,
+  logoutQqMusicAccount,
   savePlayHistory,
   savePlayerState as savePlayerStateRemote,
   saveSearchHistory,
@@ -208,8 +209,8 @@ const defaultSettings: AppSettings = {
   vipEnabled: false,
   providerMode: "netease",
   downloadDirectory: "downloads",
-  neteaseCookie: "",
-  qqMusicCookie: "",
+  hasNeteaseCookie: false,
+  hasQqMusicCookie: false,
   notes: "",
   defaultPlaybackQuality: "standard",
   defaultDownloadQuality: "hires",
@@ -1283,8 +1284,7 @@ export default function App() {
   const audioFadeTokenRef = useRef(0);
   const searchRequestIdRef = useRef(0);
   const listRequestIdRef = useRef(0);
-  const cookieHealthRef = useRef<{ cookie: string; checkedAt: number; result: NeteaseCookieCheckResult | null }>({
-    cookie: "",
+  const cookieHealthRef = useRef<{ checkedAt: number; result: NeteaseCookieCheckResult | null }>({
     checkedAt: 0,
     result: null
   });
@@ -1553,7 +1553,8 @@ export default function App() {
       : "当前为普通账号"
     : "登录后显示";
   const neteasePlatformStatusLabel = accountIsLoggedIn ? accountBadgeLabel : "未登录";
-  const hasQqMusicCookie = Boolean(settings.qqMusicCookie?.trim() || qqAccountStatus?.ok);
+  const hasNeteaseCookie = settings.hasNeteaseCookie;
+  const hasQqMusicCookie = Boolean(settings.hasQqMusicCookie || qqAccountStatus?.ok);
   const qqAccountVipEnabled = Boolean(qqAccountStatus?.vipEnabled);
   const qqMusicAccountName = qqAccountStatus?.displayName?.trim() || (qqAccountStatus?.uin ? `QQ ${qqAccountStatus.uin}` : "");
   const qqMusicPlatformStatusLabel = hasQqMusicCookie ? (qqAccountVipEnabled ? "VIP" : "普通") : "未登录";
@@ -1583,7 +1584,7 @@ export default function App() {
   const qqSourceActive = activeSearchProviderMode === "qq" || activeSearchProviderMode === "aggregate";
   const isQqDataMode = activeSearchProviderMode === "qq";
   const playlistProviderLabel = isQqDataMode ? "QQ 音乐" : "网易云";
-  const hasPlaylistCredential = isQqDataMode ? hasQqMusicCookie : Boolean(settings.neteaseCookie.trim());
+  const hasPlaylistCredential = isQqDataMode ? hasQqMusicCookie : hasNeteaseCookie;
   const hasNeteaseDownloadAuth = accountIsLoggedIn || isQqDataMode;
   const playbackLocked = !accountIsLoggedIn && !isQqDataMode;
   const hasPlaybackQueue = playQueue.length > 0 || results.length > 0;
@@ -2198,9 +2199,13 @@ export default function App() {
       navigateTopLevel("playlists");
 
       const startupProviderMode: ActiveProviderMode = nextSettings.providerMode === "qq" ? "qq" : nextSettings.providerMode === "aggregate" ? "aggregate" : "netease";
-      const startupCookie = startupProviderMode === "qq" ? nextSettings.qqMusicCookie?.trim() : nextSettings.neteaseCookie.trim();
-      if (startupCookie) {
-        void loadUserPlaylists({ cookieOverride: startupCookie, silentCookieCheck: true, providerMode: startupProviderMode });
+      const hasStartupCredential = startupProviderMode === "qq" ? nextSettings.hasQqMusicCookie : nextSettings.hasNeteaseCookie;
+      if (hasStartupCredential) {
+        void loadUserPlaylists({
+          silentCookieCheck: true,
+          providerMode: startupProviderMode,
+          hasNeteaseCredentialOverride: nextSettings.hasNeteaseCookie
+        });
       }
       return;
     }
@@ -2275,9 +2280,13 @@ export default function App() {
       navigateTopLevel("playlists");
 
       const startupProviderMode: ActiveProviderMode = nextSettings.providerMode === "qq" ? "qq" : nextSettings.providerMode === "aggregate" ? "aggregate" : "netease";
-      const startupCookie = startupProviderMode === "qq" ? nextSettings.qqMusicCookie?.trim() : nextSettings.neteaseCookie.trim();
-      if (startupCookie) {
-        void loadUserPlaylists({ cookieOverride: startupCookie, silentCookieCheck: true, providerMode: startupProviderMode });
+      const hasStartupCredential = startupProviderMode === "qq" ? nextSettings.hasQqMusicCookie : nextSettings.hasNeteaseCookie;
+      if (hasStartupCredential) {
+        void loadUserPlaylists({
+          silentCookieCheck: true,
+          providerMode: startupProviderMode,
+          hasNeteaseCredentialOverride: nextSettings.hasNeteaseCookie
+        });
       }
       return true;
     }
@@ -2356,7 +2365,7 @@ export default function App() {
     }
   }
 
-  async function loadUserPlaylists(options: { cookieOverride?: string; silentCookieCheck?: boolean; providerMode?: ActiveProviderMode } = {}) {
+  async function loadUserPlaylists(options: { silentCookieCheck?: boolean; providerMode?: ActiveProviderMode; hasNeteaseCredentialOverride?: boolean } = {}) {
     const targetProviderMode = options.providerMode ?? activeSearchProviderMode;
     const targetProviderLabel = targetProviderMode === "qq" ? "QQ 音乐" : "网易云";
 
@@ -2369,7 +2378,10 @@ export default function App() {
         return;
       }
     } else {
-      const cookieOk = await ensureNeteaseCookieHealthy({ cookieOverride: options.cookieOverride, silent: options.silentCookieCheck });
+      const cookieOk = await ensureNeteaseCookieHealthy({
+        silent: options.silentCookieCheck,
+        hasCredentialOverride: options.hasNeteaseCredentialOverride
+      });
       if (!cookieOk) {
         setPlaylists([]);
         return;
@@ -2459,10 +2471,10 @@ export default function App() {
     if (transferSourceProvider === "qq" && transferQqPlaylists.length === 0 && !loadingTransferQqPlaylists && hasQqMusicCookie) {
       void loadTransferQqPlaylists({ preferFirst: true });
     }
-    if (transferTargetProvider === "netease" && transferNeteaseTargetPlaylists.length === 0 && !loadingTransferNeteaseTargetPlaylists && settings.neteaseCookie.trim()) {
+    if (transferTargetProvider === "netease" && transferNeteaseTargetPlaylists.length === 0 && !loadingTransferNeteaseTargetPlaylists && hasNeteaseCookie) {
       void loadTransferNeteaseTargetPlaylists();
     }
-    if (transferSourceProvider === "netease" && playlists.length === 0 && !loadingPlaylists && settings.neteaseCookie.trim()) {
+    if (transferSourceProvider === "netease" && playlists.length === 0 && !loadingPlaylists && hasNeteaseCookie) {
       void loadUserPlaylists();
     }
   }
@@ -2979,7 +2991,7 @@ export default function App() {
     if (transferQqPlaylists.length === 0 && !loadingTransferQqPlaylists && hasQqMusicCookie) {
       void loadTransferQqPlaylists({ selectTransferPlaylist: false });
     }
-    if (compareNeteasePlaylists.length === 0 && !loadingTransferNeteaseTargetPlaylists && settings.neteaseCookie.trim()) {
+    if (compareNeteasePlaylists.length === 0 && !loadingTransferNeteaseTargetPlaylists && hasNeteaseCookie) {
       void loadTransferNeteaseTargetPlaylists();
     }
   }
@@ -3421,8 +3433,8 @@ export default function App() {
     }
   }
 
-  async function refreshQqMusicAccountStatus(cookieOverride?: string) {
-    if (!(cookieOverride ?? settings.qqMusicCookie).trim()) {
+  async function refreshQqMusicAccountStatus(hasCredentialOverride?: boolean) {
+    if (!(hasCredentialOverride ?? settings.hasQqMusicCookie)) {
       setQqAccountStatus(null);
       return null;
     }
@@ -3439,10 +3451,8 @@ export default function App() {
     }
   }
 
-  async function ensureNeteaseCookieHealthy(options: { force?: boolean; silent?: boolean; cookieOverride?: string } = {}) {
-    const cookie = (options.cookieOverride ?? settings.neteaseCookie).trim();
-
-    if (!cookie) {
+  async function ensureNeteaseCookieHealthy(options: { force?: boolean; silent?: boolean; hasCredentialOverride?: boolean } = {}) {
+    if (!(options.hasCredentialOverride ?? settings.hasNeteaseCookie)) {
       if (!options.silent) {
         setMessage("当前操作需要有效的网易云 Cookie，请先登录或重新扫码。");
       }
@@ -3452,7 +3462,6 @@ export default function App() {
     const cachedHealth = cookieHealthRef.current;
     const isFreshCache =
       !options.force &&
-      cachedHealth.cookie === cookie &&
       cachedHealth.result !== null &&
       Date.now() - cachedHealth.checkedAt < 60 * 1000;
 
@@ -3464,9 +3473,8 @@ export default function App() {
     }
 
     try {
-      const result = await checkNeteaseCookie(cookie);
+      const result = await checkNeteaseCookie();
       cookieHealthRef.current = {
-        cookie,
         checkedAt: Date.now(),
         result
       };
@@ -4895,25 +4903,29 @@ export default function App() {
   async function handleLogout() {
     try {
       setSession(await logoutAccount());
+      const saved = await refreshSettings();
+      if (saved) {
+        setSettings(saved);
+      }
+      cookieHealthRef.current = { checkedAt: 0, result: null };
       setAccountMenuOpen(false);
-      setMessage("已退出当前账号");
+      setMessage("已退出网易云账号");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "退出失败");
     }
   }
 
   async function handleClearCookie() {
-    const nextSettings = {
-      ...settings,
-      neteaseCookie: ""
-    };
-
     try {
-      setSettings(await saveSettings(nextSettings));
       setSession(await logoutAccount());
+      const saved = await refreshSettings();
+      if (saved) {
+        setSettings(saved);
+      }
+      cookieHealthRef.current = { checkedAt: 0, result: null };
       setPlaylists([]);
       setAccountMenuOpen(false);
-      setMessage("已清除网易云 Cookie，可在设置页重新填写。");
+      setMessage("已退出网易云账号并清除保存的 Cookie。");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "清除 Cookie 失败");
     }
@@ -4964,7 +4976,6 @@ export default function App() {
 
     await refreshSettings();
     cookieHealthRef.current = {
-      cookie: "",
       checkedAt: 0,
       result: null
     };
@@ -5014,11 +5025,6 @@ export default function App() {
         return;
       }
 
-      await saveSettings({
-        ...settings,
-        providerMode: "netease",
-        neteaseCookie: cookie
-      });
       await handleNeteaseLoginSuccess(null, `网页登录 Cookie 已导入：${checkResult.accountName ?? "网易云账号"}`);
       setCookieLoginInput("");
       closeQrLogin();
@@ -5052,7 +5058,7 @@ export default function App() {
   function openQqCookieLogin() {
     setAccountMenuOpen(false);
     setQqLoginMode("qr");
-    setQqCookieInput(settings.qqMusicCookie ?? "");
+    setQqCookieInput("");
     setQqLoginMessage("正在生成 QQ 音乐登录二维码...");
     setQqLoginOpen(true);
     void startQqQrLoginFlow();
@@ -5119,12 +5125,13 @@ export default function App() {
         return;
       }
 
-      const saved = await saveSettings({
-        ...settings,
-        qqMusicCookie: result.refreshedCookie ?? cookie
-      });
+      const saved = await refreshSettings();
+      if (!saved) {
+        throw new Error("QQ 音乐 Cookie 已验证，但读取保存状态失败。");
+      }
       setSettings(saved);
-      void refreshQqMusicAccountStatus(saved.qqMusicCookie);
+      setQqCookieInput("");
+      void refreshQqMusicAccountStatus(true);
       setMessage(result.message || `QQ 音乐 Cookie 已导入：${result.uin ?? "QQ 账号"}`);
       closeQqLogin();
     } catch (error) {
@@ -5171,15 +5178,15 @@ export default function App() {
 
   async function handleClearQqCookie() {
     try {
-      const saved = await saveSettings({
-        ...settings,
-        qqMusicCookie: ""
-      });
-      setSettings(saved);
-      setQqAccountStatus(null);
+      const status = await logoutQqMusicAccount();
+      setQqAccountStatus(status);
+      const saved = await refreshSettings();
+      if (saved) {
+        setSettings(saved);
+      }
       setQqCookieInput("");
-      setQqLoginMessage("已清除 QQ 音乐 Cookie。");
-      setMessage("已清除 QQ 音乐 Cookie。");
+      setQqLoginMessage(status.message);
+      setMessage(status.message);
       setAccountMenuOpen(false);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "清除 QQ 音乐 Cookie 失败");
@@ -6141,12 +6148,11 @@ export default function App() {
         applyStartupPreferences(settingsForStartup);
       }
       viewPersistenceReadyRef.current = true;
-      const cookie = nextSettings?.neteaseCookie.trim();
-      if (cookie) {
-        void ensureNeteaseCookieHealthy({ silent: true, force: true, cookieOverride: cookie });
+      if (nextSettings?.hasNeteaseCookie) {
+        void ensureNeteaseCookieHealthy({ silent: true, force: true, hasCredentialOverride: true });
       }
-      if (nextSettings?.qqMusicCookie.trim()) {
-        void refreshQqMusicAccountStatus(nextSettings.qqMusicCookie);
+      if (nextSettings?.hasQqMusicCookie) {
+        void refreshQqMusicAccountStatus(true);
       }
     });
     void refreshSession();
@@ -6217,7 +6223,7 @@ export default function App() {
     let cancelled = false;
 
     const syncCurrentTrackLiked = async () => {
-      if (!currentTrack?.id || !settings.neteaseCookie.trim()) {
+      if (!currentTrack?.id || !settings.hasNeteaseCookie) {
         if (!cancelled) {
           setLikedSongIds((current) => current.filter((id) => id !== currentTrack?.id));
         }
@@ -6243,7 +6249,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [currentTrack?.id, settings.neteaseCookie]);
+  }, [currentTrack?.id, settings.hasNeteaseCookie]);
 
   useEffect(() => {
     const coverUrl = getBrowserImageUrl(currentTrack?.coverUrl);
@@ -6472,7 +6478,7 @@ export default function App() {
 
         if (result.code === 0) {
           await refreshSettings();
-          await refreshQqMusicAccountStatus(result.cookie);
+          await refreshQqMusicAccountStatus(true);
           setMessage(result.message || "QQ 音乐扫码登录成功。");
           window.setTimeout(() => {
             if (!cancelled) {
@@ -8100,7 +8106,7 @@ export default function App() {
                     <button type="button" role="menuitem" onClick={() => void handleStartQrLogin()}>
                       {accountIsLoggedIn ? "重新登录" : "登录账号"}
                     </button>
-                    <button type="button" role="menuitem" className="danger" disabled={!accountIsLoggedIn} onClick={() => void handleClearCookie()}>
+                    <button type="button" role="menuitem" className="danger" disabled={!accountIsLoggedIn && !hasNeteaseCookie} onClick={() => void handleClearCookie()}>
                       退出登录
                     </button>
                   </div>
@@ -11223,7 +11229,7 @@ export default function App() {
                   </button>
                 </div>
                 <p className="cookie-login-guide">{COOKIE_LOGIN_GUIDE}</p>
-                <p className="cookie-login-warning">控制台读不到 MUSIC_U 是正常的。请在 Cookies 表格里复制 MUSIC_U 的 Value/值，再粘贴到下方。</p>
+                <p className="cookie-login-warning">控制台读不到 MUSIC_U 是正常的。输入框不会回填已保存凭证；留空不会覆盖现有 Cookie。</p>
                 <label>
                   <span>MUSIC_U Cookie</span>
                   <textarea
@@ -11310,7 +11316,7 @@ export default function App() {
                   </button>
                 </div>
                 <p className="cookie-login-guide">{QQ_COOKIE_LOGIN_GUIDE}</p>
-                <p className="cookie-login-warning">由于浏览器跨域限制，TrackVault 不能直接读取 y.qq.com 登录态。复制指令后在 QQ 音乐网页控制台运行，回来点“粘贴检测”即可。</p>
+                <p className="cookie-login-warning">输入框不会回填已保存凭证；留空不会覆盖现有 Cookie。复制指令后在 QQ 音乐网页控制台运行，回来点“粘贴检测”即可。</p>
                 <label>
                   <span>QQ 音乐 Cookie</span>
                   <textarea

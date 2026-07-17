@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const dataDir = path.resolve(process.cwd(), "data");
+const dataDir = path.resolve(process.env.TRACKVAULT_DATA_DIR?.trim() || path.join(process.cwd(), "data"));
 const databasePath = path.join(dataDir, "app.db");
 const jsonStorePath = path.join(dataDir, "app-store.json");
 
@@ -34,6 +34,9 @@ let database: SqliteDatabase | null = null;
 let jsonStoreCache: JsonStore | null = null;
 
 try {
+  if (process.env.TRACKVAULT_DISABLE_SQLITE === "1") {
+    throw new Error("SQLite disabled by environment");
+  }
   const sqliteModule = await import("node:sqlite");
   const DatabaseSync = sqliteModule.DatabaseSync as new (path: string) => SqliteDatabase;
   database = new DatabaseSync(databasePath);

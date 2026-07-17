@@ -1,6 +1,10 @@
 import { createRequire } from "node:module";
 import { getSession } from "./account-store.js";
-import { getSettings, saveSettings } from "./settings-store.js";
+import { saveSettings } from "./settings-store.js";
+import { captureCredentialWriteGuard, isCredentialWriteGuardCurrent, runCredentialWriteIfCurrent, type CredentialWriteGuard } from "./credential-write-guard.js";
+import { getClientSessionId } from "./request-context.js";
+import { checkNeteaseCookie } from "./task-store.js";
+import type { NeteaseCookieCheckResult } from "./types.js";
 import type { AuthSession } from "./types.js";
 
 const require = createRequire(import.meta.url);
@@ -29,7 +33,6 @@ export type NeteaseQrStartResult = {
 export type NeteaseQrCheckResult = {
   code: number;
   message: string;
-  cookie?: string;
   session?: AuthSession;
 };
 
@@ -42,7 +45,6 @@ export type NeteaseCaptchaSendResult = {
 export type NeteaseCellphoneLoginResult = {
   code: number;
   message: string;
-  cookie?: string;
   session?: AuthSession;
 };
 
@@ -75,6 +77,24 @@ type CellphoneLoginBody = {
   message?: string;
   cookie?: string;
 };
+
+type NeteaseQrSession = {
+  clientSessionId: string;
+  credentialGuard: CredentialWriteGuard;
+  createdAt: number;
+};
+
+const NETEASE_QR_SESSION_TTL_MS = 5 * 60 * 1000;
+const neteaseQrSessions = new Map<string, NeteaseQrSession>();
+
+function cleanupNeteaseQrSessions() {
+  const now = Date.now();
+  for (const [key, session] of neteaseQrSessions.entries()) {
+    if (now - session.createdAt > NETEASE_QR_SESSION_TTL_MS || !isCredentialWriteGuardCurrent(session.credentialGuard)) {
+      neteaseQrSessions.delete(key);
+    }
+  }
+}
 
 function withNeteaseRequestOptions(params: NeteaseApiParams = {}) {
   const realIP = process.env.NETEASE_REAL_IP?.trim();
@@ -126,18 +146,34 @@ function getNeteaseApiErrorMessage(error: unknown, fallback: string) {
   return message;
 }
 
-async function persistNeteaseCookie(cookie: string) {
-  const settings = await getSettings();
-  await saveSettings({
-    ...settings,
+async function persistNeteaseCookie(cookie: string, credentialGuard: CredentialWriteGuard) {
+  return runCredentialWriteIfCurrent(credentialGuard, async () => {
+    await saveSettings({
+      providerMode: "netease",
+      neteaseCookie: cookie
+    });
+
+    return getSession();
+  });
+}
+
+export async function importNeteaseCookie(cookie: string): Promise<NeteaseCookieCheckResult> {
+  const credentialGuard = captureCredentialWriteGuard("netease");
+  const checkResult = await checkNeteaseCookie(cookie);
+  if (!checkResult.ok) {
+    return checkResult;
+  }
+
+  await runCredentialWriteIfCurrent(credentialGuard, () => saveSettings({
     providerMode: "netease",
     neteaseCookie: cookie
-  });
-
-  return getSession();
+  }));
+  return checkResult;
 }
 
 export async function startNeteaseQrLogin(): Promise<NeteaseQrStartResult> {
+  cleanupNeteaseQrSessions();
+  const credentialGuard = captureCredentialWriteGuard("netease");
   let keyResponse;
   try {
     keyResponse = await login_qr_key(withNeteaseRequestOptions() as any);
@@ -171,6 +207,15 @@ export async function startNeteaseQrLogin(): Promise<NeteaseQrStartResult> {
     throw new Error("二维码生成失败，请稍后重试。");
   }
 
+  if (!isCredentialWriteGuardCurrent(credentialGuard)) {
+    throw new Error("登录状态已在二维码生成期间退出，请重新生成二维码。");
+  }
+  neteaseQrSessions.set(key, {
+    clientSessionId: getClientSessionId(),
+    credentialGuard,
+    createdAt: Date.now()
+  });
+
   return {
     key,
     qrImage,
@@ -179,9 +224,16 @@ export async function startNeteaseQrLogin(): Promise<NeteaseQrStartResult> {
 }
 
 export async function checkNeteaseQrLogin(key: string): Promise<NeteaseQrCheckResult> {
+  cleanupNeteaseQrSessions();
   const trimmedKey = key.trim();
   if (!trimmedKey) {
     throw new Error("缺少二维码登录 key。");
+  }
+
+  const qrSession = neteaseQrSessions.get(trimmedKey);
+  if (!qrSession || qrSession.clientSessionId !== getClientSessionId() || !isCredentialWriteGuardCurrent(qrSession.credentialGuard)) {
+    neteaseQrSessions.delete(trimmedKey);
+    return { code: 800, message: "二维码已过期，请重新生成。" };
   }
 
   let response;
@@ -206,11 +258,12 @@ export async function checkNeteaseQrLogin(key: string): Promise<NeteaseQrCheckRe
     return { code, message };
   }
 
+  neteaseQrSessions.delete(trimmedKey);
+
   return {
     code,
     message,
-    cookie: body.cookie,
-    session: await persistNeteaseCookie(body.cookie)
+    session: await persistNeteaseCookie(body.cookie, qrSession.credentialGuard)
   };
 }
 
@@ -262,6 +315,8 @@ export async function loginWithNeteaseCellphone(phone: string, captcha: string, 
     throw new Error("请输入短信验证码。");
   }
 
+  const credentialGuard = captureCredentialWriteGuard("netease");
+
   let response;
   try {
     response = await login_cellphone(
@@ -293,8 +348,7 @@ export async function loginWithNeteaseCellphone(phone: string, captcha: string, 
   return {
     code,
     message: body.message ?? "登录成功。",
-    cookie,
-    session: await persistNeteaseCookie(cookie)
+    session: await persistNeteaseCookie(cookie, credentialGuard)
   };
 }
 

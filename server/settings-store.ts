@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getDatabase, isSqliteAvailable, readJsonStore, updateJsonStore } from "./database.js";
 import { getClientSessionId } from "./request-context.js";
-import type { AdminConfig, AdminConfigUpdate, AdminConfigView, AppSettings } from "./types.js";
+import type { AdminConfig, AdminConfigUpdate, AdminConfigView, AppSettings, AppSettingsUpdate, PublicAppSettings } from "./types.js";
 
-const dataDir = path.resolve(process.cwd(), "data");
+const dataDir = path.resolve(process.env.TRACKVAULT_DATA_DIR?.trim() || path.join(process.cwd(), "data"));
 const legacySettingsPath = path.join(dataDir, "settings.json");
 
 const defaultSettings: AppSettings = {
@@ -50,6 +50,71 @@ function normalizeSettings(input: Partial<AppSettings>): AppSettings {
   };
 }
 
+export class SettingsUpdateConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SettingsUpdateConflictError";
+  }
+}
+
+export function toPublicSettings(settings: AppSettings): PublicAppSettings {
+  const { neteaseCookie, qqMusicCookie, ...publicSettings } = settings;
+  return {
+    ...publicSettings,
+    hasNeteaseCookie: Boolean(neteaseCookie.trim()),
+    hasQqMusicCookie: Boolean(qqMusicCookie?.trim())
+  };
+}
+
+export function mergeSettingsUpdate(current: AppSettings, update: AppSettingsUpdate): AppSettings {
+  const nextInput: Partial<AppSettings> = { ...current };
+  const ordinaryKeys: Array<keyof Omit<AppSettings, "neteaseCookie" | "qqMusicCookie">> = [
+    "accountName",
+    "vipEnabled",
+    "providerMode",
+    "downloadDirectory",
+    "notes",
+    "defaultPlaybackQuality",
+    "defaultDownloadQuality",
+    "maxConcurrentDownloads",
+    "startupView",
+    "autoLoadDiscoverOnStart"
+  ];
+
+  for (const key of ordinaryKeys) {
+    const value = update[key];
+    if (value !== undefined) {
+      (nextInput as Record<string, unknown>)[key] = value;
+    }
+  }
+
+  nextInput.neteaseCookie = mergeCredential(
+    current.neteaseCookie,
+    update.neteaseCookie,
+    update.clearNeteaseCookie,
+    "网易云"
+  );
+  nextInput.qqMusicCookie = mergeCredential(
+    current.qqMusicCookie ?? "",
+    update.qqMusicCookie,
+    update.clearQqMusicCookie,
+    "QQ 音乐"
+  );
+
+  return normalizeSettings(nextInput);
+}
+
+function mergeCredential(current: string, replacement: string | undefined, clear: boolean | undefined, platform: string) {
+  const trimmedReplacement = replacement?.trim() ?? "";
+  if (clear && trimmedReplacement) {
+    throw new SettingsUpdateConflictError(`${platform} Cookie 不能同时设置和清除。`);
+  }
+  if (clear) {
+    return "";
+  }
+  return trimmedReplacement || current;
+}
+
 function getSettingsKey() {
   return `session:${getClientSessionId()}`;
 }
@@ -64,7 +129,8 @@ async function loadSeedSettings() {
     const source = normalizeSettings(JSON.parse(raw) as Partial<AppSettings>);
     return {
       ...source,
-      neteaseCookie: ""
+      neteaseCookie: "",
+      qqMusicCookie: ""
     } satisfies AppSettings;
   } catch {
     return defaultSettings;
@@ -119,11 +185,11 @@ export async function getSettings(): Promise<AppSettings> {
   return normalizeSettings(JSON.parse(row.settings_json) as Partial<AppSettings>);
 }
 
-export async function saveSettings(input: AppSettings): Promise<AppSettings> {
+export async function saveSettings(input: AppSettingsUpdate): Promise<AppSettings> {
   await initializeSettingsStore();
   const settingsKey = getSettingsKey();
-
-  const nextSettings = normalizeSettings(input);
+  const currentSettings = await getSettingsByKey(settingsKey);
+  const nextSettings = mergeSettingsUpdate(currentSettings, input);
 
   if (!isSqliteAvailable()) {
     updateJsonStore((store) => {
@@ -144,6 +210,14 @@ export async function saveSettings(input: AppSettings): Promise<AppSettings> {
 
   upsertStatement.run(settingsKey, JSON.stringify(nextSettings), Date.now());
   return nextSettings;
+}
+
+export async function clearNeteaseCookie(): Promise<AppSettings> {
+  return saveSettings({ clearNeteaseCookie: true });
+}
+
+export async function clearQqMusicCookie(): Promise<AppSettings> {
+  return saveSettings({ clearQqMusicCookie: true });
 }
 
 export async function getSettingsForClientSessionId(clientSessionId: string): Promise<AppSettings> {

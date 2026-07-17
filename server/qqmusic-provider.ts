@@ -2,6 +2,8 @@ import { createRequire } from "node:module";
 import type { DownloadQualityLevel, DownloadQualityOption, LyricLine, PlaylistSongsPage, QqMusicAccountStatus, QqMusicCookieCheckResult, QqMusicProfileAlbum, QqMusicProfileSinger, QqMusicProfileUser, QqMusicUserProfile, Song, SongAudioProbe, SongAudioProbeMode, SongAvailability, SongComment, SongCommentRepliesPage, SongCommentsPage, SongLyrics, UserPlaylist } from "./types.js";
 import { getSettings } from "./settings-store.js";
 import { findMembershipExpireAt, formatMembershipExpireText } from "./membership-utils.js";
+import { getClientSessionId } from "./request-context.js";
+import { captureCredentialWriteGuard, runCredentialWriteIfCurrent } from "./credential-write-guard.js";
 
 const require = createRequire(import.meta.url);
 
@@ -13,6 +15,50 @@ type QqMusicApi = {
 };
 
 const qqMusic = require("qq-music-api") as QqMusicApi;
+
+export function createQqMusicRuntimeController(api: QqMusicApi) {
+  let ownerClientSessionId: string | null = null;
+  let queue: Promise<void> = Promise.resolve();
+
+  function enqueue<T>(operation: () => Promise<T> | T): Promise<T> {
+    const result = queue.catch(() => undefined).then(operation);
+    queue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  return {
+    call<T>(clientSessionId: string, cookies: string | Record<string, string>, path: string, query?: Record<string, string | number>) {
+      return enqueue(async () => {
+        api.setCookie(cookies);
+        ownerClientSessionId = clientSessionId;
+        return api.api<T>(path, query);
+      });
+    },
+    clearCookie(clientSessionId: string) {
+      return enqueue(() => {
+        if (ownerClientSessionId !== clientSessionId) {
+          return false;
+        }
+        api.setCookie({});
+        ownerClientSessionId = null;
+        return true;
+      });
+    },
+    getOwnerClientSessionId() {
+      return ownerClientSessionId;
+    }
+  };
+}
+
+const qqMusicRuntimeController = createQqMusicRuntimeController(qqMusic);
+
+function callQqMusicApi<T>(cookies: string | Record<string, string>, path: string, query?: Record<string, string | number>) {
+  return qqMusicRuntimeController.call<T>(getClientSessionId(), cookies, path, query);
+}
+
+export function clearQqMusicRuntimeStateForCurrentSession() {
+  return qqMusicRuntimeController.clearCookie(getClientSessionId());
+}
 
 type QqSinger = {
   id?: number | string;
@@ -592,7 +638,6 @@ async function getRequiredQqCookie() {
   }
 
   const cookieObj = getQqCookieIdentity(cookie);
-  qqMusic.setCookie(cookieObj);
   return cookieObj;
 }
 
@@ -658,8 +703,11 @@ export async function createQqPlaylistUsingApi(name: string, trackMids: string[]
 }
 
 export async function createQqPlaylistFromTrackMids(name: string, trackMids: string[]) {
-  await getRequiredQqCookie();
-  return createQqPlaylistUsingApi(name, trackMids, (path, query) => qqMusic.api(path, query));
+  const credentialGuard = captureCredentialWriteGuard("qqmusic");
+  return runCredentialWriteIfCurrent(credentialGuard, async () => {
+    const cookieObj = await getRequiredQqCookie();
+    return createQqPlaylistUsingApi(name, trackMids, (path, query) => callQqMusicApi(cookieObj, path, query));
+  });
 }
 
 function getQqPlaylistId(playlist: QqUserSonglistItem | QqSonglistDetail) {
@@ -1154,10 +1202,10 @@ function toQqAccountStatus(cookieObj: Record<string, string>, detail: QqProfileD
   };
 }
 
-async function configureQqCookie() {
+async function getOptionalQqCookie() {
   const settings = await getSettings();
   const cookie = settings.qqMusicCookie?.trim();
-  qqMusic.setCookie(cookie || {});
+  return cookie ? parseQqCookie(cookie) : {};
 }
 
 export async function checkQqMusicCookie(cookie: string): Promise<QqMusicCookieCheckResult> {
@@ -1187,10 +1235,8 @@ export async function checkQqMusicCookie(cookie: string): Promise<QqMusicCookieC
     };
   }
 
-  qqMusic.setCookie(cookieObj);
-
   try {
-    const refreshed = await qqMusic.api<{ musickey?: string }>("user/refresh");
+    const refreshed = await callQqMusicApi<{ musickey?: string }>(cookieObj, "user/refresh");
     const refreshedKey = refreshed.musickey?.trim();
     const nextCookie: Record<string, string> = {
       ...cookieObj,
@@ -1237,10 +1283,8 @@ export async function getQqMusicAccountStatus(): Promise<QqMusicAccountStatus> {
     };
   }
 
-  qqMusic.setCookie(cookieObj);
-
   try {
-    const detail = await qqMusic.api<QqProfileDetail>("user/detail", { id: cookieObj.uin });
+    const detail = await callQqMusicApi<QqProfileDetail>(cookieObj, "user/detail", { id: cookieObj.uin });
     return toQqAccountStatus(cookieObj, detail, "QQ 音乐账号信息已同步。");
   } catch (error) {
     return toQqAccountStatus(cookieObj, null, `QQ 音乐账号信息读取失败：${getQqErrorMessage(error)}`);
@@ -1252,9 +1296,9 @@ export async function getQqMusicUserProfile(): Promise<QqMusicUserProfile> {
   const issues: QqMusicUserProfile["issues"] = [];
   const [detailResult, createdResult, collectedPlaylistsResult, collectedAlbumsResult, followSingersResult, followUsersResult, fansResult] =
     await Promise.allSettled([
-      qqMusic.api<QqProfileDetail>("user/detail", { id: cookieObj.uin }),
-      qqMusic.api<QqUserSonglistsResult>("user/songlist", { id: cookieObj.uin }),
-      qqMusic.api<QqCollectedSonglistsResult>("user/collect/songlist", { id: cookieObj.uin, pageNo: 1, pageSize: 50 }),
+      callQqMusicApi<QqProfileDetail>(cookieObj, "user/detail", { id: cookieObj.uin }),
+      callQqMusicApi<QqUserSonglistsResult>(cookieObj, "user/songlist", { id: cookieObj.uin }),
+      callQqMusicApi<QqCollectedSonglistsResult>(cookieObj, "user/collect/songlist", { id: cookieObj.uin, pageNo: 1, pageSize: 50 }),
       getQqCollectedAlbums(cookieObj),
       getQqFollowSingers(cookieObj),
       getQqFollowUsers(cookieObj),
@@ -1344,11 +1388,11 @@ export async function getQqMusicUserProfile(): Promise<QqMusicUserProfile> {
 }
 
 async function resolveQqSongUrlByType(song: Song, qqType: QqAudioType): Promise<QqResolvedSong> {
-  await configureQqCookie();
+  const cookieObj = await getOptionalQqCookie();
   let url = "";
 
   try {
-    url = await qqMusic.api<string>("song/url", {
+    url = await callQqMusicApi<string>(cookieObj, "song/url", {
       id: song.id,
       mediaId: song.mediaId || song.id,
       type: qqType
@@ -1380,8 +1424,8 @@ export async function searchQqMusicSongs(query: string): Promise<Song[]> {
     return [];
   }
 
-  await configureQqCookie();
-  const data = await qqMusic.api<QqSearchResult>("search", {
+  const cookieObj = await getOptionalQqCookie();
+  const data = await callQqMusicApi<QqSearchResult>(cookieObj, "search", {
     key: keyword,
     pageNo: 1,
     pageSize: 20,
@@ -1392,8 +1436,8 @@ export async function searchQqMusicSongs(query: string): Promise<Song[]> {
 }
 
 export async function getQqDiscoverSongs(): Promise<Song[]> {
-  await configureQqCookie();
-  const data = await qqMusic.api<QqNewSongsResult>("new/songs", {
+  const cookieObj = await getOptionalQqCookie();
+  const data = await callQqMusicApi<QqNewSongsResult>(cookieObj, "new/songs", {
     type: 0
   });
 
@@ -1403,8 +1447,8 @@ export async function getQqDiscoverSongs(): Promise<Song[]> {
 export async function getQqUserPlaylists(): Promise<UserPlaylist[]> {
   const cookieObj = await getRequiredQqCookie();
   const [createdResult, collectedResult] = await Promise.allSettled([
-    qqMusic.api<QqUserSonglistsResult>("user/songlist", { id: cookieObj.uin }),
-    qqMusic.api<QqCollectedSonglistsResult>("user/collect/songlist", { id: cookieObj.uin, pageNo: 1, pageSize: 50 })
+    callQqMusicApi<QqUserSonglistsResult>(cookieObj, "user/songlist", { id: cookieObj.uin }),
+    callQqMusicApi<QqCollectedSonglistsResult>(cookieObj, "user/collect/songlist", { id: cookieObj.uin, pageNo: 1, pageSize: 50 })
   ]);
 
   const creatorName =
@@ -1432,7 +1476,7 @@ export async function getQqUserPlaylists(): Promise<UserPlaylist[]> {
 }
 
 export async function getQqPlaylistSongs(playlistId: string, page = 1, limit = 100, keyword = "", sortMode = "default"): Promise<PlaylistSongsPage> {
-  await configureQqCookie();
+  const cookieObj = await getOptionalQqCookie();
   const safePage = Math.max(1, Math.floor(page) || 1);
   const safeLimit = Math.min(200, Math.max(1, Math.floor(limit) || 100));
   const rawPlaylistId = getRawQqPlaylistId(playlistId);
@@ -1440,7 +1484,7 @@ export async function getQqPlaylistSongs(playlistId: string, page = 1, limit = 1
     throw new Error("缺少 QQ 音乐歌单 ID。");
   }
 
-  const data = await qqMusic.api<QqSonglistDetail>("songlist", {
+  const data = await callQqMusicApi<QqSonglistDetail>(cookieObj, "songlist", {
     id: rawPlaylistId
   });
   const allSongs = (data.songlist ?? []).map(mapQqSong).filter((song): song is Song => Boolean(song));
@@ -1466,7 +1510,6 @@ export async function getQqSongLyrics(songId: string, mediaId?: string): Promise
     throw new Error("缺少 QQ 音乐 songmid。");
   }
 
-  await configureQqCookie();
   let lines: LyricLine[] = [];
 
   for (const candidate of candidates) {
@@ -1490,10 +1533,10 @@ export async function getQqSongComments(songId: string, page = 1, limit = 20): P
     throw new Error("QQ 音乐评论需要数字 songid，当前歌曲缺少该信息。");
   }
 
-  await configureQqCookie();
+  const cookieObj = await getOptionalQqCookie();
   const safePage = Math.max(1, Math.floor(page) || 1);
   const safeLimit = Math.min(50, Math.max(5, Math.floor(limit) || 20));
-  const data = await qqMusic.api<QqCommentsResult>("comment", {
+  const data = await callQqMusicApi<QqCommentsResult>(cookieObj, "comment", {
     id: safeSongId,
     pageNo: safePage,
     pageSize: safeLimit,
@@ -1528,13 +1571,13 @@ export async function getQqSongCommentReplies(songId: string, parentCommentId: s
 }
 
 export async function setQqSongCommentLiked(commentId: string, liked: boolean) {
-  await getRequiredQqCookie();
+  const cookieObj = await getRequiredQqCookie();
   const safeCommentId = commentId.trim();
   if (!safeCommentId) {
     throw new Error("缺少 QQ 音乐评论 ID。");
   }
 
-  await qqMusic.api("comment/like", {
+  await callQqMusicApi(cookieObj, "comment/like", {
     id: safeCommentId,
     type: liked ? 1 : 2
   });
