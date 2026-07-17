@@ -6,6 +6,7 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { getAlbumProfile } from "./album-provider.js";
 import { getCurrentUserKey, getSession, loginSession, logoutSession } from "./account-store.js";
+import { requireAdminAuth } from "./admin-auth.js";
 import { getCloudSongs } from "./cloud-provider.js";
 import { getSongCommentReplies, getSongComments, replyToSongComment, setSongCommentLiked } from "./comment-provider.js";
 import { getDiscoverSongs } from "./discover-provider.js";
@@ -830,23 +831,11 @@ app.put("/api/settings", async (request, response) => {
   response.json(await saveSettings(settings));
 });
 
-app.get("/api/admin/config", async (_request, response) => {
-  const session = await getSession();
-  if (!session.loggedIn) {
-    response.status(401).json({ message: "Unauthorized: Login Required" });
-    return;
-  }
-
+app.get("/api/admin/config", requireAdminAuth, async (_request, response) => {
   response.json(await getAdminConfig());
 });
 
-app.post("/api/admin/config", async (request, response) => {
-  const session = await getSession();
-  if (!session.loggedIn) {
-    response.status(401).json({ message: "Unauthorized: Login Required" });
-    return;
-  }
-
+app.post("/api/admin/config", requireAdminAuth, async (request, response) => {
   response.json(await saveAdminConfig(request.body as AdminConfigUpdate));
 });
 

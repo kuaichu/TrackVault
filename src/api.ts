@@ -1212,8 +1212,12 @@ export async function saveSettings(settings: AppSettings): Promise<AppSettings> 
   return (await response.json()) as AppSettings;
 }
 
-export async function getAdminConfig(): Promise<AdminConfigView> {
-  const response = await apiFetch("/api/admin/config");
+export async function getAdminConfig(adminToken: string): Promise<AdminConfigView> {
+  const response = await apiFetch("/api/admin/config", {
+    headers: {
+      "x-trackvault-admin-token": adminToken
+    }
+  });
   if (!response.ok) {
     const data = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new Error(data?.message ?? "获取高级控制配置失败");
@@ -1222,11 +1226,12 @@ export async function getAdminConfig(): Promise<AdminConfigView> {
   return (await response.json()) as AdminConfigView;
 }
 
-export async function saveAdminConfig(config: AdminConfigUpdate): Promise<AdminConfigView> {
+export async function saveAdminConfig(config: AdminConfigUpdate, adminToken: string): Promise<AdminConfigView> {
   const response = await apiFetch("/api/admin/config", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      "x-trackvault-admin-token": adminToken
     },
     body: JSON.stringify(config)
   });

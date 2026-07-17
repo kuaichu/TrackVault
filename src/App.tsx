@@ -1377,7 +1377,9 @@ export default function App() {
   const [playlistCompareCreateName, setPlaylistCompareCreateName] = useState("");
   const [playlistCompareCreating, setPlaylistCompareCreating] = useState(false);
   const [playlistCompareCreateResult, setPlaylistCompareCreateResult] = useState<PlaylistTransferImportResult | null>(null);
-  const [adminConfigTokenInput, setAdminConfigTokenInput] = useState("");
+  const [adminAuthToken, setAdminAuthToken] = useState("");
+  const [adminConfigLoaded, setAdminConfigLoaded] = useState(false);
+  const [systemDefaultTokenInput, setSystemDefaultTokenInput] = useState("");
   const [session, setSession] = useState<AuthSession>({ loggedIn: false, profile: null });
   const [searching, setSearching] = useState(false);
   const [activeSearchChip, setActiveSearchChip] = useState("");
@@ -1403,6 +1405,7 @@ export default function App() {
   const [playlistSortMode, setPlaylistSortMode] = useState<PlaylistSortMode>("default");
   const [cloudMeta, setCloudMeta] = useState({ count: 0, size: 0, maxSize: 0 });
   const [savingSettings, setSavingSettings] = useState(false);
+  const [loadingAdminConfig, setLoadingAdminConfig] = useState(false);
   const [savingAdminConfig, setSavingAdminConfig] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const [batchDownloading, setBatchDownloading] = useState(false);
@@ -3390,14 +3393,23 @@ export default function App() {
     }
   }
 
-  async function refreshAdminConfig() {
+  async function refreshAdminConfig(adminToken: string) {
+    setLoadingAdminConfig(true);
     try {
-      const nextConfig = await getAdminConfigRemote();
+      const nextConfig = await getAdminConfigRemote(adminToken);
       setAdminConfig(nextConfig);
-      setAdminConfigTokenInput("");
+      setAdminConfigLoaded(true);
+      setSystemDefaultTokenInput("");
+      setMessage("管理员令牌已验证，高级控制配置已加载");
       return nextConfig;
-    } catch {
+    } catch (error) {
+      setAdminConfigLoaded(false);
+      setAdminConfig(defaultAdminConfig);
+      setSystemDefaultTokenInput("");
+      setMessage(error instanceof Error ? error.message : "获取高级控制配置失败");
       return null;
+    } finally {
+      setLoadingAdminConfig(false);
     }
   }
 
@@ -4778,20 +4790,25 @@ export default function App() {
 
     const payload: AdminConfigUpdate = {
       trustedUserWhitelistText: adminConfig.trustedUserWhitelistText,
-      systemDefaultToken: adminConfigTokenInput,
+      systemDefaultToken: systemDefaultTokenInput,
       systemFallbackEnabled: adminConfig.systemFallbackEnabled
     };
 
     try {
-      const saved = await saveAdminConfigRemote(payload);
+      const saved = await saveAdminConfigRemote(payload, adminAuthToken);
       setAdminConfig(saved);
-      setAdminConfigTokenInput("");
+      setSystemDefaultTokenInput("");
       setMessage("高级控制配置已保存");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "保存高级控制配置失败");
     } finally {
       setSavingAdminConfig(false);
     }
+  }
+
+  async function handleLoadAdminConfig(event: FormEvent) {
+    event.preventDefault();
+    await refreshAdminConfig(adminAuthToken);
   }
 
   async function handleSaveSettings(event: FormEvent) {
@@ -6132,7 +6149,6 @@ export default function App() {
         void refreshQqMusicAccountStatus(nextSettings.qqMusicCookie);
       }
     });
-    void refreshAdminConfig();
     void refreshSession();
     void refreshTasks();
     const timer = window.setInterval(() => {
@@ -7222,7 +7238,7 @@ export default function App() {
   const isPlaylistSongsView = mainTab === "search" && navKey === "playlists" && resultSource === "playlist" && Boolean(activePlaylist);
   const isDetailResultView = mainTab === "search" && (navKey === "artist" || navKey === "album");
   const canGoBackFromCurrentView = isPlaylistSongsView || (isDetailResultView && viewHistory.length > 0);
-  const showAdminFallbackControls = false;
+  const showAdminFallbackControls = true;
   const inferredDiscoverFeedKind: DiscoverFeedKind = results.some((song) => song.source === "netease-personal-radar")
     ? "radar"
     : results.some((song) => song.source === "netease-personal-roaming")
@@ -10139,44 +10155,71 @@ export default function App() {
                     <h1>白名单特权与保底凭证</h1>
                   </div>
 
-                  <form className="settings-grid" onSubmit={handleSaveAdminConfig}>
+                  <form className="settings-grid" onSubmit={handleLoadAdminConfig}>
                     <label className="settings-card">
-                      <span>Feature Pass Whitelist</span>
-                      <p>填写允许触发高阶凭证回退的用户 ID，支持逗号分隔或按行输入。</p>
-                      <textarea
-                        value={adminConfig.trustedUserWhitelistText}
-                        onChange={(event) => setAdminConfig((current) => ({ ...current, trustedUserWhitelistText: event.target.value }))}
-                        placeholder={"123456789\n987654321"}
-                      />
-                    </label>
-
-                    <label className="settings-card">
-                      <span>System Default Token</span>
-                      <p>{adminConfig.hasSystemDefaultToken ? "已配置全局保底凭证，留空表示保持不变。" : "管理员保底凭证，仅在命中白名单且个人凭证无高阶权限时回退使用。"}</p>
+                      <span>管理员令牌</span>
+                      <p>令牌仅保存在当前页面内存中，刷新页面后需要重新输入。</p>
                       <input
                         type="password"
-                        value={adminConfigTokenInput}
-                        onChange={(event) => setAdminConfigTokenInput(event.target.value)}
-                        placeholder={adminConfig.hasSystemDefaultToken ? "••••••••••••••••" : "输入新的系统保底凭证"}
-                      />
-                    </label>
-
-                    <label className="settings-card">
-                      <span>启用系统保底回退</span>
-                      <p>仅对白名单内且已登录的测试用户生效，普通用户永远只能使用自己的个人凭证。</p>
-                      <input
-                        type="checkbox"
-                        checked={adminConfig.systemFallbackEnabled}
-                        onChange={(event) => setAdminConfig((current) => ({ ...current, systemFallbackEnabled: event.target.checked }))}
+                        value={adminAuthToken}
+                        onChange={(event) => {
+                          setAdminAuthToken(event.target.value);
+                          setAdminConfigLoaded(false);
+                          setAdminConfig(defaultAdminConfig);
+                          setSystemDefaultTokenInput("");
+                        }}
+                        autoComplete="off"
+                        placeholder="输入 TRACKVAULT_ADMIN_TOKEN"
                       />
                     </label>
 
                     <div className="form-actions">
-                      <button type="submit" className="primary-button wide" disabled={savingAdminConfig}>
-                        {savingAdminConfig ? "保存中" : "保存高级控制"}
+                      <button type="submit" className="primary-button wide" disabled={loadingAdminConfig || !adminAuthToken}>
+                        {loadingAdminConfig ? "验证中" : "验证并加载高级配置"}
                       </button>
                     </div>
                   </form>
+
+                  {adminConfigLoaded ? (
+                    <form className="settings-grid" onSubmit={handleSaveAdminConfig}>
+                      <label className="settings-card">
+                        <span>Feature Pass Whitelist</span>
+                        <p>填写允许触发高阶凭证回退的用户 ID，支持逗号分隔或按行输入。</p>
+                        <textarea
+                          value={adminConfig.trustedUserWhitelistText}
+                          onChange={(event) => setAdminConfig((current) => ({ ...current, trustedUserWhitelistText: event.target.value }))}
+                          placeholder={"123456789\n987654321"}
+                        />
+                      </label>
+
+                      <label className="settings-card">
+                        <span>System Default Token</span>
+                        <p>{adminConfig.hasSystemDefaultToken ? "已配置全局保底凭证，留空表示保持不变。" : "管理员保底凭证，仅在命中白名单且个人凭证无高阶权限时回退使用。"}</p>
+                        <input
+                          type="password"
+                          value={systemDefaultTokenInput}
+                          onChange={(event) => setSystemDefaultTokenInput(event.target.value)}
+                          placeholder={adminConfig.hasSystemDefaultToken ? "••••••••••••••••" : "输入新的系统保底凭证"}
+                        />
+                      </label>
+
+                      <label className="settings-card">
+                        <span>启用系统保底回退</span>
+                        <p>仅对白名单内且已登录的测试用户生效，普通用户永远只能使用自己的个人凭证。</p>
+                        <input
+                          type="checkbox"
+                          checked={adminConfig.systemFallbackEnabled}
+                          onChange={(event) => setAdminConfig((current) => ({ ...current, systemFallbackEnabled: event.target.checked }))}
+                        />
+                      </label>
+
+                      <div className="form-actions">
+                        <button type="submit" className="primary-button wide" disabled={savingAdminConfig}>
+                          {savingAdminConfig ? "保存中" : "保存高级控制"}
+                        </button>
+                      </div>
+                    </form>
+                  ) : null}
                 </>
               ) : null}
             </section>
