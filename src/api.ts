@@ -641,7 +641,7 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
   }
 
   const reader = mediaResponse.body.getReader();
-  const chunks: Uint8Array[] = [];
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
   let receivedBytes = 0;
 
   try {
@@ -714,7 +714,7 @@ export async function startServerSongDownload(
   callbacks.onReady?.({ filename, sizeBytes: contentLength, quality });
 
   const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
   let receivedBytes = 0;
   const startedAt = performance.now();
 

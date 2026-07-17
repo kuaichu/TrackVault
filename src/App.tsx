@@ -1638,11 +1638,13 @@ export default function App() {
   }
 
   function getPreferredQualityForLevel(song: Song, level: DownloadQualityLevel) {
-    return song.availableQualities.find((quality) => quality.level === level)?.level ?? song.availableQualities.at(-1)?.level ?? "standard";
+    return song.availableQualities.find((quality) => quality.level === level)?.level
+      ?? song.availableQualities[song.availableQualities.length - 1]?.level
+      ?? "standard";
   }
 
   function getHighestQualityLabel(song: Song) {
-    return song.availableQualities.at(-1)?.label ?? song.quality ?? "未知";
+    return song.availableQualities[song.availableQualities.length - 1]?.label ?? song.quality ?? "未知";
   }
 
   function getSongSourceMeta(song: Song) {
@@ -2656,7 +2658,7 @@ export default function App() {
       try {
         const job = await getPlaylistTransferRunJob(jobId);
         if (transferRunJobIdRef.current !== jobId) {
-          return;
+          return null;
         }
 
         setTransferRunJob(job);
@@ -4885,11 +4887,12 @@ export default function App() {
     try {
       const nextSession = await loginAccount(loginForm);
       setSession(nextSession);
-      if (nextSession.profile) {
+      const profile = nextSession.profile;
+      if (profile) {
         setSettings((current) => ({
           ...current,
-          accountName: nextSession.profile.displayName,
-          vipEnabled: nextSession.profile.vipEnabled
+          accountName: profile.displayName,
+          vipEnabled: profile.vipEnabled
         }));
       }
       setMessage("本地会话已更新");
@@ -6252,8 +6255,9 @@ export default function App() {
   }, [currentTrack?.id, settings.hasNeteaseCookie]);
 
   useEffect(() => {
-    const coverUrl = getBrowserImageUrl(currentTrack?.coverUrl);
-    if (!coverUrl) {
+    const track = currentTrack;
+    const coverUrl = getBrowserImageUrl(track?.coverUrl);
+    if (!track || !coverUrl) {
       setPlayerTheme(defaultPlayerTheme);
       return;
     }
@@ -6280,7 +6284,7 @@ export default function App() {
         playerThemeCacheRef.current[themeCacheKey] = nextTheme;
         setPlayerTheme(nextTheme);
       } catch {
-        const fallbackTheme = buildFallbackPlayerTheme(`${currentTrack.title}-${currentTrack.artist}-${coverUrl}`);
+        const fallbackTheme = buildFallbackPlayerTheme(`${track.title}-${track.artist}-${coverUrl}`);
         playerThemeCacheRef.current[themeCacheKey] = fallbackTheme;
         setPlayerTheme(fallbackTheme);
       }
@@ -6291,7 +6295,7 @@ export default function App() {
         return;
       }
 
-      const fallbackTheme = buildFallbackPlayerTheme(`${currentTrack.title}-${currentTrack.artist}-${coverUrl}`);
+      const fallbackTheme = buildFallbackPlayerTheme(`${track.title}-${track.artist}-${coverUrl}`);
       playerThemeCacheRef.current[themeCacheKey] = fallbackTheme;
       setPlayerTheme(fallbackTheme);
     };
