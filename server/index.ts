@@ -24,7 +24,7 @@ import {
   withMediaTaggingSlot
 } from "./media-memory-policy.js";
 import { addSongToUserPlaylist, getPlaylistSongs, getUserPlaylists, removeSongsFromUserPlaylist } from "./playlist-provider.js";
-import { searchProvider, type SearchProviderMode } from "./provider.js";
+import { searchProvider } from "./provider.js";
 import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getPersonalRadioSongs } from "./personal-radio-provider.js";
@@ -32,6 +32,7 @@ import { createAccountRouter } from "./routes/account-router.js";
 import { createAdminRouter } from "./routes/admin-router.js";
 import { createDownloadTaskRouter } from "./routes/download-task-router.js";
 import { createMediaRouter } from "./routes/media-router.js";
+import { createMusicDiscoveryRouter } from "./routes/music-discovery-router.js";
 import { createPlatformCookieRouter, createSettingsRouter } from "./routes/settings-router.js";
 import { createUserStateRouter } from "./routes/user-state-router.js";
 import { createQqPlaylistFromTrackMids, getQqDiscoverSongs, getQqMusicAccountStatus, getQqMusicUserProfile, getQqPlaylistSongs, getQqSongCommentReplies, getQqSongComments, getQqSongLyrics, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream, setQqSongCommentLiked } from "./qqmusic-provider.js";
@@ -52,7 +53,7 @@ import { addNeteaseTrackIdsToExistingPlaylist, checkNeteaseProviderTrackAvailabi
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
 import { createPlaylistTransferJob, getNeteaseImportTrackIds, getQqImportTrackMids } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
-import type { AppSettings, DownloadQualityLevel, PersonalRadioKind, Song } from "./types.js";
+import type { AppSettings, DownloadQualityLevel, Song } from "./types.js";
 import type { PlaylistCompareResult, PlaylistCompareStatus } from "./playlist-transfer/playlist-compare.js";
 import type { MatchCandidate, TransferImportRequest, TransferTargetProvider, TransferTrack } from "./playlist-transfer/types.js";
 
@@ -130,31 +131,15 @@ function getErrorMessage(error: unknown, fallbackMessage: string) {
   return fallbackMessage;
 }
 
-app.get("/api/search", async (request, response) => {
-  const query = typeof request.query.q === "string" ? request.query.q : "";
-  const provider = typeof request.query.provider === "string" ? request.query.provider : "netease";
-  const providerMode: SearchProviderMode = provider === "qq" || provider === "aggregate" ? provider : "netease";
-
-  try {
-    const results = await searchProvider(query, providerMode);
-    response.json({ results, provider: providerMode });
-  } catch (error) {
-    response.status(502).json({
-      message: error instanceof Error ? error.message : "搜索失败"
-    });
-  }
-});
-
-app.get("/api/discover/songs", async (_request, response) => {
-  try {
-    const settings = await getSettings();
-    response.json({ songs: settings.providerMode === "qq" ? await getQqDiscoverSongs() : await getDiscoverSongs() });
-  } catch (error) {
-    response.status(502).json({
-      message: error instanceof Error ? error.message : "获取发现音乐失败"
-    });
-  }
-});
+app.use(createMusicDiscoveryRouter({
+  searchProvider,
+  getSettings,
+  getDiscoverSongs,
+  getQqDiscoverSongs,
+  getDailyRecommendSongs,
+  getPersonalRadioSongs,
+  getHeartbeatSongs
+}));
 
 app.use(createDownloadTaskRouter({
   getAllTasks,
@@ -251,43 +236,6 @@ app.get("/api/cloud/songs", async (_request, response) => {
   } catch (error) {
     response.status(401).json({
       message: error instanceof Error ? error.message : "获取云盘音乐失败"
-    });
-  }
-});
-
-app.get("/api/recommend/daily", async (_request, response) => {
-  try {
-    response.json({ songs: await getDailyRecommendSongs() });
-  } catch (error) {
-    response.status(401).json({
-      message: error instanceof Error ? error.message : "获取每日推荐失败"
-    });
-  }
-});
-
-app.get("/api/recommend/personal-radio", async (request, response) => {
-  const kind = request.query.kind === "roaming" ? "roaming" : "radar";
-
-  try {
-    response.json({ kind, songs: await getPersonalRadioSongs(kind as PersonalRadioKind) });
-  } catch (error) {
-    response.status(401).json({
-      message: error instanceof Error ? error.message : "获取私人推荐失败"
-    });
-  }
-});
-
-app.get("/api/playmode/heartbeat", async (request, response) => {
-  const songId = typeof request.query.id === "string" ? request.query.id : "";
-  const playlistId = typeof request.query.pid === "string" ? request.query.pid : "";
-  const startSongId = typeof request.query.sid === "string" ? request.query.sid : undefined;
-  const count = Number(request.query.count);
-
-  try {
-    response.json({ songs: await getHeartbeatSongs({ songId, playlistId, startSongId, count: Number.isFinite(count) ? count : undefined }) });
-  } catch (error) {
-    response.status(songId && playlistId ? 401 : 400).json({
-      message: error instanceof Error ? error.message : "获取心动模式歌曲失败"
     });
   }
 });
