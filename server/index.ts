@@ -33,6 +33,7 @@ import { createAdminRouter } from "./routes/admin-router.js";
 import { createDownloadTaskRouter } from "./routes/download-task-router.js";
 import { createMediaRouter } from "./routes/media-router.js";
 import { createPlatformCookieRouter, createSettingsRouter } from "./routes/settings-router.js";
+import { createUserStateRouter } from "./routes/user-state-router.js";
 import { createQqPlaylistFromTrackMids, getQqDiscoverSongs, getQqMusicAccountStatus, getQqMusicUserProfile, getQqPlaylistSongs, getQqSongCommentReplies, getQqSongComments, getQqSongLyrics, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream, setQqSongCommentLiked } from "./qqmusic-provider.js";
 import { checkQqMusicQrLogin, importQqMusicCookie, logoutQqMusicSession, startQqMusicQrLogin } from "./qqmusic-auth.js";
 import { getAdminConfig, getSettings, saveAdminConfig, saveSettings, SettingsUpdateConflictError, toPublicSettings } from "./settings-store.js";
@@ -61,17 +62,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const clientDistDir = path.resolve(__dirname, "../dist");
 type PlaylistProviderMode = "netease" | "qq";
-
-async function resolveRequestDataScope(request: express.Request, response: express.Response) {
-  const expectedDataScopeId = request.header("x-data-scope-id")?.trim() ?? "";
-  const currentDataScopeId = await getDataScopeId();
-  if (!expectedDataScopeId || expectedDataScopeId !== currentDataScopeId) {
-    response.status(409).json({ message: "账号数据作用域已变化，请重试。" });
-    return null;
-  }
-
-  return currentDataScopeId;
-}
 
 function resolvePlaylistProvider(request: express.Request, settings: AppSettings): PlaylistProviderMode {
   const provider = typeof request.query.provider === "string" ? request.query.provider : "";
@@ -174,38 +164,18 @@ app.use(createDownloadTaskRouter({
   isMediaAccessError: (error): error is MediaAccessError => error instanceof MediaAccessError
 }));
 
-app.get("/api/history/search", async (request, response) => {
-  const dataScopeId = await resolveRequestDataScope(request, response);
-  if (!dataScopeId) return;
-  response.json({ items: await getSearchHistory(dataScopeId) });
-});
-
-app.put("/api/history/search", async (request, response) => {
-  const dataScopeId = await resolveRequestDataScope(request, response);
-  if (!dataScopeId) return;
-  const items = Array.isArray(request.body?.items) ? request.body.items : [];
-  response.json({ items: await saveSearchHistory(items, dataScopeId) });
-});
-
-app.delete("/api/history/search", async (request, response) => {
-  const dataScopeId = await resolveRequestDataScope(request, response);
-  if (!dataScopeId) return;
-  const keyword = typeof request.query.keyword === "string" ? request.query.keyword : "";
-  response.json({ items: await removeSearchHistory(keyword, dataScopeId) });
-});
-
-app.get("/api/history/play", async (request, response) => {
-  const dataScopeId = await resolveRequestDataScope(request, response);
-  if (!dataScopeId) return;
-  response.json({ items: await getPlayHistory(dataScopeId) });
-});
-
-app.put("/api/history/play", async (request, response) => {
-  const dataScopeId = await resolveRequestDataScope(request, response);
-  if (!dataScopeId) return;
-  const items = Array.isArray(request.body?.items) ? request.body.items : [];
-  response.json({ items: await savePlayHistory(items, dataScopeId) });
-});
+app.use(createUserStateRouter({
+  getDataScopeId,
+  getSearchHistory,
+  saveSearchHistory,
+  removeSearchHistory,
+  getPlayHistory,
+  savePlayHistory,
+  getPlayerState: async (dataScopeId) =>
+    (await import("./player-state-store.js")).getPlayerState(dataScopeId),
+  savePlayerState: async (state, dataScopeId) =>
+    (await import("./player-state-store.js")).savePlayerState(state, dataScopeId)
+}));
 
 app.get("/api/playlists", async (request, response) => {
   try {
@@ -620,20 +590,6 @@ app.use(createAccountRouter({
   sendNeteaseCaptcha,
   loginWithNeteaseCellphone
 }));
-
-app.get("/api/player-state", async (request, response) => {
-  const dataScopeId = await resolveRequestDataScope(request, response);
-  if (!dataScopeId) return;
-  const { getPlayerState } = await import("./player-state-store.js");
-  response.json(await getPlayerState(dataScopeId));
-});
-
-app.put("/api/player-state", async (request, response) => {
-  const dataScopeId = await resolveRequestDataScope(request, response);
-  if (!dataScopeId) return;
-  const { savePlayerState } = await import("./player-state-store.js");
-  response.json(await savePlayerState(request.body, dataScopeId));
-});
 
 async function searchTransferTargetTracks(track: TransferTrack, targetProvider: TransferTargetProvider) {
   if ((targetProvider === "netease" || targetProvider === "qq") && track.source === targetProvider && track.sourceTrackId) {
