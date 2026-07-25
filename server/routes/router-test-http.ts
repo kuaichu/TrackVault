@@ -11,6 +11,7 @@ export type TestHttpResponse = {
 };
 
 export type TestHttpClient = {
+  requestRaw: (path: string, init?: RequestInit) => Promise<Response>;
   request: (path: string, init?: RequestInit) => Promise<TestHttpResponse>;
   requestJson: (method: "POST" | "PUT", path: string, body: unknown, headers?: HeadersInit) => Promise<TestHttpResponse>;
 };
@@ -58,8 +59,9 @@ export async function withTestRouter(
     }
 
     const { port } = address satisfies AddressInfo;
+    const requestRaw = (path: string, init?: RequestInit) => fetch(`http://127.0.0.1:${port}${path}`, init);
     const request = async (path: string, init?: RequestInit): Promise<TestHttpResponse> => {
-      const response = await fetch(`http://127.0.0.1:${port}${path}`, init);
+      const response = await requestRaw(path, init);
       return {
         status: response.status,
         body: await response.json()
@@ -75,7 +77,7 @@ export async function withTestRouter(
         body: JSON.stringify(body)
       });
 
-    await callback({ request, requestJson });
+    await callback({ requestRaw, request, requestJson });
   } finally {
     await closeServer(server);
   }
