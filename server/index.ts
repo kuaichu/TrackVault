@@ -30,6 +30,7 @@ import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getPersonalRadioSongs } from "./personal-radio-provider.js";
 import { createAccountRouter } from "./routes/account-router.js";
 import { createAdminRouter } from "./routes/admin-router.js";
+import { createDownloadTaskRouter } from "./routes/download-task-router.js";
 import { createMediaRouter } from "./routes/media-router.js";
 import { createPlatformCookieRouter, createSettingsRouter } from "./routes/settings-router.js";
 import { createQqPlaylistFromTrackMids, getQqDiscoverSongs, getQqMusicAccountStatus, getQqMusicUserProfile, getQqPlaylistSongs, getQqSongCommentReplies, getQqSongComments, getQqSongLyrics, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream, setQqSongCommentLiked } from "./qqmusic-provider.js";
@@ -50,7 +51,7 @@ import { addNeteaseTrackIdsToExistingPlaylist, checkNeteaseProviderTrackAvailabi
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
 import { createPlaylistTransferJob, getNeteaseImportTrackIds, getQqImportTrackMids } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
-import type { AppSettings, DownloadQualityLevel, DownloadRequest, PersonalRadioKind, Song } from "./types.js";
+import type { AppSettings, DownloadQualityLevel, PersonalRadioKind, Song } from "./types.js";
 import type { PlaylistCompareResult, PlaylistCompareStatus } from "./playlist-transfer/playlist-compare.js";
 import type { MatchCandidate, TransferImportRequest, TransferTargetProvider, TransferTrack } from "./playlist-transfer/types.js";
 
@@ -165,26 +166,13 @@ app.get("/api/discover/songs", async (_request, response) => {
   }
 });
 
-app.get("/api/tasks", async (_request, response) => {
-  response.json(await getAllTasks());
-});
-
-app.get("/api/tasks/:taskId/file", async (request, response) => {
-  const file = await getTaskFileForDownload(request.params.taskId);
-
-  if (!file) {
-    response.status(404).json({ message: "下载文件不存在或无权访问" });
-    return;
-  }
-
-  response.download(file.filePath, file.filename, (error) => {
-    if (!error || response.headersSent) {
-      return;
-    }
-
-    response.status(500).json({ message: "读取下载文件失败" });
-  });
-});
+app.use(createDownloadTaskRouter({
+  getAllTasks,
+  getTaskFileForDownload,
+  assertDownloadAccess,
+  createTask,
+  isMediaAccessError: (error): error is MediaAccessError => error instanceof MediaAccessError
+}));
 
 app.get("/api/history/search", async (request, response) => {
   const dataScopeId = await resolveRequestDataScope(request, response);
@@ -645,33 +633,6 @@ app.put("/api/player-state", async (request, response) => {
   if (!dataScopeId) return;
   const { savePlayerState } = await import("./player-state-store.js");
   response.json(await savePlayerState(request.body, dataScopeId));
-});
-
-app.post("/api/download", async (request, response) => {
-  const payload = request.body as DownloadRequest;
-  const song = payload?.song;
-  const level = payload?.level;
-  const userCookieOverride = typeof request.headers["x-user-cookie"] === "string" ? request.headers["x-user-cookie"] : undefined;
-
-  if (!song?.id || !song?.title || !song?.artist) {
-    response.status(400).json({ message: "缺少歌曲信息" });
-    return;
-  }
-
-  if (!level) {
-    response.status(400).json({ message: "缺少下载音质" });
-    return;
-  }
-
-  try {
-    await assertDownloadAccess(song, level, userCookieOverride);
-    const task = await createTask(song, level);
-    response.status(201).json(task);
-  } catch (error) {
-    response.status(error instanceof MediaAccessError ? error.status : 502).json({
-      message: error instanceof Error ? error.message : "加入下载队列失败"
-    });
-  }
 });
 
 async function searchTransferTargetTracks(track: TransferTrack, targetProvider: TransferTargetProvider) {
