@@ -34,6 +34,7 @@ import { createCommentRouter } from "./routes/comment-router.js";
 import { createDownloadTaskRouter } from "./routes/download-task-router.js";
 import { createLibraryRouter } from "./routes/library-router.js";
 import { createMediaRouter } from "./routes/media-router.js";
+import { createMusicMetadataRouter } from "./routes/music-metadata-router.js";
 import { createMusicDiscoveryRouter } from "./routes/music-discovery-router.js";
 import { createPlatformCookieRouter, createSettingsRouter } from "./routes/settings-router.js";
 import { createSongContentRouter } from "./routes/song-content-router.js";
@@ -162,37 +163,11 @@ app.use(createUserProfileRouter({
   setUserFollowed
 }));
 
-app.get("/api/artists/resolve/by-name", async (request, response) => {
-  const name = typeof request.query.name === "string" ? request.query.name : "";
-
-  try {
-    response.json(await resolveArtistIdByName(name));
-  } catch (error) {
-    response.status(404).json({
-      message: error instanceof Error ? error.message : "解析歌手失败"
-    });
-  }
-});
-
-app.get("/api/artists/:id", async (request, response) => {
-  try {
-    response.json({ artist: await getArtistProfile(request.params.id) });
-  } catch (error) {
-    response.status(502).json({
-      message: error instanceof Error ? error.message : "获取歌手信息失败"
-    });
-  }
-});
-
-app.get("/api/albums/:id", async (request, response) => {
-  try {
-    response.json({ album: await getAlbumProfile(request.params.id) });
-  } catch (error) {
-    response.status(502).json({
-      message: error instanceof Error ? error.message : "获取专辑信息失败"
-    });
-  }
-});
+app.use(createMusicMetadataRouter({
+  resolveArtistIdByName,
+  getArtistProfile,
+  getAlbumProfile
+}));
 
 app.use(createMediaRouter({
   fetchImpl: fetch,
