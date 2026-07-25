@@ -31,6 +31,7 @@ import { getPersonalRadioSongs } from "./personal-radio-provider.js";
 import { createAccountRouter } from "./routes/account-router.js";
 import { createAdminRouter } from "./routes/admin-router.js";
 import { createDownloadTaskRouter } from "./routes/download-task-router.js";
+import { createLibraryRouter } from "./routes/library-router.js";
 import { createMediaRouter } from "./routes/media-router.js";
 import { createMusicDiscoveryRouter } from "./routes/music-discovery-router.js";
 import { createPlatformCookieRouter, createSettingsRouter } from "./routes/settings-router.js";
@@ -53,7 +54,7 @@ import { addNeteaseTrackIdsToExistingPlaylist, checkNeteaseProviderTrackAvailabi
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
 import { createPlaylistTransferJob, getNeteaseImportTrackIds, getQqImportTrackMids } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
-import type { AppSettings, DownloadQualityLevel, Song } from "./types.js";
+import type { DownloadQualityLevel, Song } from "./types.js";
 import type { PlaylistCompareResult, PlaylistCompareStatus } from "./playlist-transfer/playlist-compare.js";
 import type { MatchCandidate, TransferImportRequest, TransferTargetProvider, TransferTrack } from "./playlist-transfer/types.js";
 
@@ -62,20 +63,6 @@ const port = 3010;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const clientDistDir = path.resolve(__dirname, "../dist");
-type PlaylistProviderMode = "netease" | "qq";
-
-function resolvePlaylistProvider(request: express.Request, settings: AppSettings): PlaylistProviderMode {
-  const provider = typeof request.query.provider === "string" ? request.query.provider : "";
-  if (provider === "qq") {
-    return "qq";
-  }
-
-  if (provider === "netease") {
-    return "netease";
-  }
-
-  return settings.providerMode === "qq" ? "qq" : "netease";
-}
 
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
@@ -162,83 +149,16 @@ app.use(createUserStateRouter({
     (await import("./player-state-store.js")).savePlayerState(state, dataScopeId)
 }));
 
-app.get("/api/playlists", async (request, response) => {
-  try {
-    const settings = await getSettings();
-    const provider = resolvePlaylistProvider(request, settings);
-    response.json({ playlists: provider === "qq" ? await getQqUserPlaylists() : await getUserPlaylists() });
-  } catch (error) {
-    response.status(401).json({
-      message: error instanceof Error ? error.message : "获取歌单失败"
-    });
-  }
-});
-
-app.get("/api/playlists/:id/songs", async (request, response) => {
-  try {
-    const page = Number(request.query.page);
-    const limit = Number(request.query.limit);
-    const keyword = typeof request.query.keyword === "string" ? request.query.keyword : "";
-    const sort = typeof request.query.sort === "string" ? request.query.sort : "default";
-    const settings = await getSettings();
-    const provider = resolvePlaylistProvider(request, settings);
-    response.json(
-      provider === "qq"
-        ? await getQqPlaylistSongs(request.params.id, page, limit, keyword, sort)
-        : await getPlaylistSongs(request.params.id, page, limit, keyword, sort)
-    );
-  } catch (error) {
-    response.status(502).json({
-      message: error instanceof Error ? error.message : "获取歌单歌曲失败"
-    });
-  }
-});
-
-app.post("/api/playlists/:id/tracks", async (request, response) => {
-  const songId = typeof request.body?.songId === "string" ? request.body.songId : "";
-
-  try {
-    const settings = await getSettings();
-    if (settings.providerMode === "qq") {
-      response.status(501).json({ message: "QQ 音乐收藏到歌单暂未接入。" });
-      return;
-    }
-
-    response.status(201).json(await addSongToUserPlaylist(request.params.id, songId));
-  } catch (error) {
-    response.status(400).json({
-      message: error instanceof Error ? error.message : "添加到歌单失败"
-    });
-  }
-});
-
-app.delete("/api/playlists/:id/tracks", async (request, response) => {
-  const songIds = Array.isArray(request.body?.songIds) ? request.body.songIds.filter((songId: unknown) => typeof songId === "string") : [];
-
-  try {
-    const settings = await getSettings();
-    if (settings.providerMode === "qq") {
-      response.status(501).json({ message: "QQ 音乐歌单删除暂未接入。" });
-      return;
-    }
-
-    response.json(await removeSongsFromUserPlaylist(request.params.id, songIds));
-  } catch (error) {
-    response.status(400).json({
-      message: error instanceof Error ? error.message : "从歌单移除失败"
-    });
-  }
-});
-
-app.get("/api/cloud/songs", async (_request, response) => {
-  try {
-    response.json(await getCloudSongs());
-  } catch (error) {
-    response.status(401).json({
-      message: error instanceof Error ? error.message : "获取云盘音乐失败"
-    });
-  }
-});
+app.use(createLibraryRouter({
+  getSettings,
+  getUserPlaylists,
+  getQqUserPlaylists,
+  getPlaylistSongs,
+  getQqPlaylistSongs,
+  addSongToUserPlaylist,
+  removeSongsFromUserPlaylist,
+  getCloudSongs
+}));
 
 app.get("/api/lyrics/:id", async (request, response) => {
   const source = typeof request.query.source === "string" ? request.query.source : "";
