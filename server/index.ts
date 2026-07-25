@@ -37,6 +37,7 @@ import { createMediaRouter } from "./routes/media-router.js";
 import { createMusicDiscoveryRouter } from "./routes/music-discovery-router.js";
 import { createPlatformCookieRouter, createSettingsRouter } from "./routes/settings-router.js";
 import { createSongContentRouter } from "./routes/song-content-router.js";
+import { createUserProfileRouter } from "./routes/user-profile-router.js";
 import { createUserStateRouter } from "./routes/user-state-router.js";
 import { createQqPlaylistFromTrackMids, getQqDiscoverSongs, getQqMusicAccountStatus, getQqMusicUserProfile, getQqPlaylistSongs, getQqSongCommentReplies, getQqSongComments, getQqSongLyrics, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream, setQqSongCommentLiked } from "./qqmusic-provider.js";
 import { checkQqMusicQrLogin, importQqMusicCookie, logoutQqMusicSession, startQqMusicQrLogin } from "./qqmusic-auth.js";
@@ -153,62 +154,13 @@ app.use(createCommentRouter({
   replyToSongComment
 }));
 
-app.get("/api/users/:id", async (request, response) => {
-  try {
-    response.json({ user: await getUserProfile(request.params.id) });
-  } catch (error) {
-    response.status(502).json({
-      message: error instanceof Error ? error.message : "获取用户信息失败"
-    });
-  }
-});
-
-app.get("/api/users/:id/social", async (request, response) => {
-  const kind = request.query.kind === "followeds" ? "followeds" : "follows";
-  const page = Number(request.query.page);
-  const limit = Number(request.query.limit);
-
-  try {
-    response.json(await getUserSocialList(request.params.id, kind, page, limit));
-  } catch (error) {
-    response.status(502).json({
-      message: error instanceof Error ? error.message : "获取好友列表失败"
-    });
-  }
-});
-
-app.get("/api/users/:id/events", async (request, response) => {
-  const lasttime = Number(request.query.lasttime);
-  const limit = Number(request.query.limit);
-
-  try {
-    response.json(await getUserEvents(request.params.id, lasttime, limit));
-  } catch (error) {
-    response.status(502).json({
-      message: error instanceof Error ? error.message : "获取用户动态失败"
-    });
-  }
-});
-
-app.get("/api/users/:id/mutual-follow", async (request, response) => {
-  try {
-    response.json(await getUserMutualFollow(request.params.id));
-  } catch (error) {
-    response.status(401).json({
-      message: error instanceof Error ? error.message : "获取互关状态失败"
-    });
-  }
-});
-
-app.post("/api/users/:id/follow", async (request, response) => {
-  try {
-    response.json(await setUserFollowed(request.params.id, Boolean(request.body?.followed)));
-  } catch (error) {
-    response.status(401).json({
-      message: error instanceof Error ? error.message : "关注操作失败"
-    });
-  }
-});
+app.use(createUserProfileRouter({
+  getUserProfile,
+  getUserSocialList,
+  getUserEvents,
+  getUserMutualFollow,
+  setUserFollowed
+}));
 
 app.get("/api/artists/resolve/by-name", async (request, response) => {
   const name = typeof request.query.name === "string" ? request.query.name : "";
