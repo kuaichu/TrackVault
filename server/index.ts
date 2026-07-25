@@ -35,6 +35,7 @@ import { createLibraryRouter } from "./routes/library-router.js";
 import { createMediaRouter } from "./routes/media-router.js";
 import { createMusicDiscoveryRouter } from "./routes/music-discovery-router.js";
 import { createPlatformCookieRouter, createSettingsRouter } from "./routes/settings-router.js";
+import { createSongContentRouter } from "./routes/song-content-router.js";
 import { createUserStateRouter } from "./routes/user-state-router.js";
 import { createQqPlaylistFromTrackMids, getQqDiscoverSongs, getQqMusicAccountStatus, getQqMusicUserProfile, getQqPlaylistSongs, getQqSongCommentReplies, getQqSongComments, getQqSongLyrics, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream, setQqSongCommentLiked } from "./qqmusic-provider.js";
 import { checkQqMusicQrLogin, importQqMusicCookie, logoutQqMusicSession, startQqMusicQrLogin } from "./qqmusic-auth.js";
@@ -54,7 +55,6 @@ import { addNeteaseTrackIdsToExistingPlaylist, checkNeteaseProviderTrackAvailabi
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
 import { createPlaylistTransferJob, getNeteaseImportTrackIds, getQqImportTrackMids } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
-import type { DownloadQualityLevel, Song } from "./types.js";
 import type { PlaylistCompareResult, PlaylistCompareStatus } from "./playlist-transfer/playlist-compare.js";
 import type { MatchCandidate, TransferImportRequest, TransferTargetProvider, TransferTrack } from "./playlist-transfer/types.js";
 
@@ -160,22 +160,17 @@ app.use(createLibraryRouter({
   getCloudSongs
 }));
 
-app.get("/api/lyrics/:id", async (request, response) => {
-  const source = typeof request.query.source === "string" ? request.query.source : "";
-  const mediaId = typeof request.query.mediaId === "string" ? request.query.mediaId : undefined;
-
-  try {
-    response.json({
-      lyrics: source === "qqmusic"
-        ? await getQqSongLyrics(request.params.id, mediaId)
-        : await getSongLyrics(request.params.id)
-    });
-  } catch (error) {
-    response.status(502).json({
-      message: error instanceof Error ? error.message : "获取歌词失败"
-    });
-  }
-});
+app.use(createSongContentRouter({
+  getSongLyrics,
+  getQqSongLyrics,
+  isQqMusicSong,
+  probeQqSongAudio,
+  probeSongAudio,
+  getNeteaseSongInsight,
+  isSongLiked,
+  toggleSongLike,
+  isMediaAccessError: (error): error is MediaAccessError => error instanceof MediaAccessError
+}));
 
 app.get("/api/comments/songs/:id", async (request, response) => {
   const source = typeof request.query.source === "string" ? request.query.source : "";
@@ -245,53 +240,6 @@ app.post("/api/comments/songs/:id/:commentId/replies", async (request, response)
   } catch (error) {
     response.status(401).json({
       message: error instanceof Error ? error.message : "回复评论失败"
-    });
-  }
-});
-
-app.post("/api/songs/audio-probe", async (request, response) => {
-  const song = request.body?.song as Song | undefined;
-  const level = typeof request.body?.level === "string" ? request.body.level : "standard";
-  const mode = request.body?.mode === "download" ? "download" : "playback";
-  const userCookieOverride = typeof request.headers["x-user-cookie"] === "string" ? request.headers["x-user-cookie"] : undefined;
-
-  if (!song?.id || !song?.title || !song?.artist) {
-    response.status(400).json({ message: "缺少歌曲信息" });
-    return;
-  }
-
-  try {
-    response.json({
-      probe: isQqMusicSong(song)
-        ? await probeQqSongAudio(song, level as DownloadQualityLevel, mode)
-        : await probeSongAudio(song, level as DownloadQualityLevel, mode, userCookieOverride)
-    });
-  } catch (error) {
-    response.status(error instanceof MediaAccessError ? error.status : 502).json({
-      message: error instanceof Error ? error.message : "检测实际音源失败"
-    });
-  }
-});
-
-app.get("/api/songs/:id/insight", async (request, response) => {
-  const source = typeof request.query.source === "string" ? request.query.source : "";
-
-  try {
-    if (source === "qqmusic") {
-      response.json({
-        insight: {
-          songId: request.params.id,
-          listening: { note: "QQ 音乐歌曲洞察暂未接入" },
-          encyclopedia: { tags: [] }
-        }
-      });
-      return;
-    }
-
-    response.json({ insight: await getNeteaseSongInsight(request.params.id) });
-  } catch (error) {
-    response.status(502).json({
-      message: error instanceof Error ? error.message : "获取歌曲洞察失败"
     });
   }
 });
@@ -381,28 +329,6 @@ app.get("/api/albums/:id", async (request, response) => {
   } catch (error) {
     response.status(502).json({
       message: error instanceof Error ? error.message : "获取专辑信息失败"
-    });
-  }
-});
-
-app.get("/api/likes/:id", async (request, response) => {
-  try {
-    response.json({ liked: await isSongLiked(request.params.id) });
-  } catch (error) {
-    response.status(401).json({
-      message: error instanceof Error ? error.message : "获取喜欢状态失败"
-    });
-  }
-});
-
-app.post("/api/likes/:id", async (request, response) => {
-  const liked = Boolean(request.body?.liked);
-
-  try {
-    response.json(await toggleSongLike(request.params.id, liked));
-  } catch (error) {
-    response.status(502).json({
-      message: error instanceof Error ? error.message : liked ? "加入喜欢失败" : "取消喜欢失败"
     });
   }
 });
