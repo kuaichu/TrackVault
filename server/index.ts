@@ -30,6 +30,9 @@ import { searchProvider, type SearchProviderMode } from "./provider.js";
 import { runWithRequestContext } from "./request-context.js";
 import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getPersonalRadioSongs } from "./personal-radio-provider.js";
+import { createAccountRouter } from "./routes/account-router.js";
+import { createAdminRouter } from "./routes/admin-router.js";
+import { createPlatformCookieRouter, createSettingsRouter } from "./routes/settings-router.js";
 import { createQqPlaylistFromTrackMids, getQqDiscoverSongs, getQqMusicAccountStatus, getQqMusicUserProfile, getQqPlaylistSongs, getQqSongCommentReplies, getQqSongComments, getQqSongLyrics, getQqUserPlaylists, isQqMusicSong, probeQqSongAudio, resolveQqSongStream, setQqSongCommentLiked } from "./qqmusic-provider.js";
 import { checkQqMusicQrLogin, importQqMusicCookie, logoutQqMusicSession, startQqMusicQrLogin } from "./qqmusic-auth.js";
 import { getAdminConfig, getSettings, saveAdminConfig, saveSettings, SettingsUpdateConflictError, toPublicSettings } from "./settings-store.js";
@@ -48,7 +51,7 @@ import { addNeteaseTrackIdsToExistingPlaylist, checkNeteaseProviderTrackAvailabi
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
 import { createPlaylistTransferJob, getNeteaseImportTrackIds, getQqImportTrackMids } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
-import type { AdminConfigUpdate, AppSettings, AppSettingsUpdate, DownloadQualityLevel, DownloadRequest, PersonalRadioKind, Song } from "./types.js";
+import type { AppSettings, DownloadQualityLevel, DownloadRequest, PersonalRadioKind, Song } from "./types.js";
 import type { PlaylistCompareResult, PlaylistCompareStatus } from "./playlist-transfer/playlist-compare.js";
 import type { MatchCandidate, TransferImportRequest, TransferTargetProvider, TransferTrack } from "./playlist-transfer/types.js";
 
@@ -950,145 +953,40 @@ app.get("/api/download/proxy", async (request, response) => {
   }
 });
 
-app.get("/api/settings", async (_request, response) => {
-  response.json(toPublicSettings(await getSettings()));
-});
+app.use(createSettingsRouter({
+  getSettings,
+  saveSettings,
+  toPublicSettings,
+  isSettingsUpdateConflictError: (error) => error instanceof SettingsUpdateConflictError
+}));
 
-app.put("/api/settings", async (request, response) => {
-  try {
-    const settings = await saveSettings(request.body as AppSettingsUpdate);
-    response.json(toPublicSettings(settings));
-  } catch (error) {
-    if (error instanceof SettingsUpdateConflictError) {
-      response.status(400).json({ message: error.message });
-      return;
-    }
-    throw error;
-  }
-});
+app.use(createAdminRouter({
+  requireAdminAuth,
+  getAdminConfig,
+  saveAdminConfig
+}));
 
-app.get("/api/admin/config", requireAdminAuth, async (_request, response) => {
-  response.json(await getAdminConfig());
-});
+app.use(createPlatformCookieRouter({
+  getSettings,
+  checkNeteaseCookie,
+  importNeteaseCookie,
+  importQqMusicCookie
+}));
 
-app.post("/api/admin/config", requireAdminAuth, async (request, response) => {
-  response.json(await saveAdminConfig(request.body as AdminConfigUpdate));
-});
-
-app.post("/api/settings/netease-cookie/check", async (request, response) => {
-  try {
-    const submittedCookie = typeof request.body?.cookie === "string" ? request.body.cookie.trim() : "";
-    if (submittedCookie) {
-      response.json(await importNeteaseCookie(submittedCookie));
-      return;
-    }
-    response.json(await checkNeteaseCookie((await getSettings()).neteaseCookie));
-  } catch (error) {
-    response.status(409).json({ message: error instanceof Error ? error.message : "网易云 Cookie 导入失败" });
-  }
-});
-
-app.post("/api/settings/qqmusic-cookie/check", async (request, response) => {
-  try {
-    const cookie = typeof request.body?.cookie === "string" ? request.body.cookie : "";
-    response.json(await importQqMusicCookie(cookie));
-  } catch (error) {
-    response.status(409).json({ message: error instanceof Error ? error.message : "QQ 音乐 Cookie 导入失败" });
-  }
-});
-
-app.get("/api/account", async (_request, response) => {
-  response.json(await getAccountState());
-});
-
-app.get("/api/account/qqmusic", async (_request, response) => {
-  response.json(await getQqMusicAccountStatus());
-});
-
-app.get("/api/account/qqmusic/profile", async (_request, response) => {
-  try {
-    response.json({ profile: await getQqMusicUserProfile() });
-  } catch (error) {
-    response.status(401).json({
-      message: error instanceof Error ? error.message : "获取 QQ 音乐个人主页失败"
-    });
-  }
-});
-
-app.post("/api/account/qqmusic/qr/start", async (_request, response) => {
-  try {
-    response.json(await startQqMusicQrLogin());
-  } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "QQ 音乐二维码生成失败" });
-  }
-});
-
-app.get("/api/account/qqmusic/qr/check", async (request, response) => {
-  const key = typeof request.query.key === "string" ? request.query.key : "";
-
-  try {
-    response.json(await checkQqMusicQrLogin(key));
-  } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "QQ 音乐扫码状态检查失败" });
-  }
-});
-
-app.post("/api/account/login", async (request, response) => {
-  const accountName = typeof request.body?.accountName === "string" ? request.body.accountName : "";
-  const vipEnabled = Boolean(request.body?.vipEnabled);
-  const note = typeof request.body?.note === "string" ? request.body.note : "";
-
-  response.json(await getAccountState(await loginSession({ accountName, vipEnabled, note })));
-});
-
-app.post("/api/account/logout", async (_request, response) => {
-  response.json(await getAccountState(await logoutSession()));
-});
-
-app.post("/api/account/qqmusic/logout", async (_request, response) => {
-  response.json(await logoutQqMusicSession());
-});
-
-app.post("/api/account/netease/qr/start", async (_request, response) => {
-  try {
-    response.json(await startNeteaseQrLogin());
-  } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "二维码登录初始化失败" });
-  }
-});
-
-app.get("/api/account/netease/qr/check", async (request, response) => {
-  const key = typeof request.query.key === "string" ? request.query.key : "";
-
-  try {
-    response.json(await checkNeteaseQrLogin(key));
-  } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "二维码登录状态检查失败" });
-  }
-});
-
-app.post("/api/account/netease/captcha/send", async (request, response) => {
-  const phone = typeof request.body?.phone === "string" ? request.body.phone : "";
-  const countryCode = typeof request.body?.countryCode === "string" ? request.body.countryCode : "86";
-
-  try {
-    response.json(await sendNeteaseCaptcha(phone, countryCode));
-  } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "验证码发送失败" });
-  }
-});
-
-app.post("/api/account/netease/cellphone/login", async (request, response) => {
-  const phone = typeof request.body?.phone === "string" ? request.body.phone : "";
-  const captcha = typeof request.body?.captcha === "string" ? request.body.captcha : "";
-  const countryCode = typeof request.body?.countryCode === "string" ? request.body.countryCode : "86";
-
-  try {
-    response.json(await loginWithNeteaseCellphone(phone, captcha, countryCode));
-  } catch (error) {
-    response.status(500).json({ message: error instanceof Error ? error.message : "手机号登录失败" });
-  }
-});
+app.use(createAccountRouter({
+  getAccountState,
+  loginSession,
+  logoutSession,
+  getQqMusicAccountStatus,
+  getQqMusicUserProfile,
+  startQqMusicQrLogin,
+  checkQqMusicQrLogin,
+  logoutQqMusicSession,
+  startNeteaseQrLogin,
+  checkNeteaseQrLogin,
+  sendNeteaseCaptcha,
+  loginWithNeteaseCellphone
+}));
 
 app.get("/api/player-state", async (request, response) => {
   const dataScopeId = await resolveRequestDataScope(request, response);
