@@ -295,6 +295,12 @@ export type DownloadTaskStatus =
   | "done"
   | "failed";
 
+export type DownloadMetadataStatus =
+  | "written"
+  | "skipped-size-limit"
+  | "not-requested"
+  | "failed";
+
 export type DownloadTask = {
   id: string;
   songId: string;
@@ -309,6 +315,9 @@ export type DownloadTask = {
   outputPath?: string;
   downloadedDuration?: string;
   fileSizeBytes?: number;
+  metadataStatus?: DownloadMetadataStatus;
+  warning?: string;
+  memoryLimitBytes?: number;
   error?: string;
   createdAt: string;
 };

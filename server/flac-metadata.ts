@@ -157,7 +157,7 @@ export function injectFlacMetadata(input: Uint8Array, song: Song, lyricsText: st
     return input;
   }
 
-  const bytes = input.slice(flacStartOffset);
+  const bytes = input.subarray(flacStartOffset);
   const blocks: Array<{ type: number; data: Uint8Array }> = [];
   let offset = 4;
 
@@ -171,7 +171,7 @@ export function injectFlacMetadata(input: Uint8Array, song: Song, lyricsText: st
       return input;
     }
 
-    blocks.push({ type, data: bytes.slice(offset, offset + length) });
+    blocks.push({ type, data: bytes.subarray(offset, offset + length) });
     offset += length;
 
     if (header & 0x80) {
@@ -193,5 +193,5 @@ export function injectFlacMetadata(input: Uint8Array, song: Song, lyricsText: st
   ];
   const encodedBlocks = metadataBlocks.map((block, index) => buildFlacMetadataBlock(block.type, block.data, index === metadataBlocks.length - 1));
 
-  return concatBytes([new Uint8Array([0x66, 0x4c, 0x61, 0x43]), ...encodedBlocks, bytes.slice(offset)]);
+  return concatBytes([new Uint8Array([0x66, 0x4c, 0x61, 0x43]), ...encodedBlocks, bytes.subarray(offset)]);
 }

@@ -5176,6 +5176,12 @@ button.quick-chip:active,
   color: #ffb89b;
 }
 
+.download-task-meta .queue-warning {
+  border-color: rgba(255, 204, 112, 0.24);
+  background: rgba(255, 204, 112, 0.09);
+  color: #ffdba0;
+}
+
 .download-task-action {
   display: flex;
   justify-content: flex-end;

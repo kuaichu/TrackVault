@@ -2,6 +2,7 @@ import { getSongLyrics } from "./lyric-provider.js";
 import { getQqSongLyrics } from "./qqmusic-provider.js";
 import { formatLyricsAsLrc, injectFlacMetadata, isFlacBytes, type FlacCoverData } from "./flac-metadata.js";
 import { injectMp3Metadata, isMp3Bytes } from "./mp3-metadata.js";
+import { readResponseBytesWithLimit } from "./media-memory-policy.js";
 import type { Song } from "./types.js";
 
 const COVER_MAX_BYTES = 5 * 1024 * 1024;
@@ -103,10 +104,7 @@ async function fetchCover(song: Song): Promise<FlacCoverData | null> {
     return null;
   }
 
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > COVER_MAX_BYTES) {
-    return null;
-  }
+  const bytes = await readResponseBytesWithLimit(response, { limitBytes: COVER_MAX_BYTES });
 
   return {
     mimeType: contentType,
@@ -163,15 +161,11 @@ export async function addAudioMetadataToDownload(input: {
     return input.bytes;
   }
 
-  try {
-    const [lyricsText, cover] = await Promise.all([
-      fetchLyricsText(input.song),
-      fetchCover(input.song).catch(() => null)
-    ]);
-    return target === "flac"
-      ? injectFlacMetadata(input.bytes, input.song, lyricsText, cover)
-      : injectMp3Metadata(input.bytes, input.song, lyricsText, cover);
-  } catch {
-    return input.bytes;
-  }
+  const [lyricsText, cover] = await Promise.all([
+    fetchLyricsText(input.song),
+    fetchCover(input.song).catch(() => null)
+  ]);
+  return target === "flac"
+    ? injectFlacMetadata(input.bytes, input.song, lyricsText, cover)
+    : injectMp3Metadata(input.bytes, input.song, lyricsText, cover);
 }

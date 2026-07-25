@@ -54,13 +54,13 @@ function getId3v2TagLength(bytes: Uint8Array) {
 
 function stripExistingId3Tags(bytes: Uint8Array) {
   const id3v2Length = getId3v2TagLength(bytes);
-  const withoutId3v2 = id3v2Length > 0 ? bytes.slice(id3v2Length) : bytes;
+  const withoutId3v2 = id3v2Length > 0 ? bytes.subarray(id3v2Length) : bytes;
   const hasId3v1 = withoutId3v2.length >= 128 &&
     withoutId3v2[withoutId3v2.length - 128] === 0x54 &&
     withoutId3v2[withoutId3v2.length - 127] === 0x41 &&
     withoutId3v2[withoutId3v2.length - 126] === 0x47;
 
-  return hasId3v1 ? withoutId3v2.slice(0, withoutId3v2.length - 128) : withoutId3v2;
+  return hasId3v1 ? withoutId3v2.subarray(0, withoutId3v2.length - 128) : withoutId3v2;
 }
 
 export function isMp3Bytes(input: Uint8Array) {

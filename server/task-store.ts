@@ -1,15 +1,14 @@
-import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import type { SoundQualityType } from "NeteaseCloudMusicApi";
 import { getCurrentUserKey } from "./account-store.js";
 import { getDatabase, isSqliteAvailable, readJsonStore, updateJsonStore } from "./database.js";
 import { getDownloadAuthRequirement } from "./download-auth-policy.js";
 import { buildMediaCredentialPlan, extractClientSessionIdFromUserKey, MediaAccessError } from "./media-security.js";
 import { addAudioMetadataToDownload, getAudioMetadataTarget } from "./download-metadata.js";
+import { downloadMediaResponseToFile } from "./media-download-file.js";
+import { getMaxInMemoryMediaBytes } from "./media-memory-policy.js";
 import { isQqMusicSong, probeQqSongAudio, resolveQqDirectDownload } from "./qqmusic-provider.js";
 import { runWithRequestContext } from "./request-context.js";
 import { getSettings, getSettingsForClientSessionId } from "./settings-store.js";
@@ -73,10 +72,16 @@ export type DirectDownloadResolution = {
 };
 
 function normalizeTask(task: DownloadTask): DownloadTask {
+  const metadataStatus = task.metadataStatus === "written" || task.metadataStatus === "skipped-size-limit" || task.metadataStatus === "not-requested" || task.metadataStatus === "failed"
+    ? task.metadataStatus
+    : undefined;
   const normalizedTask: DownloadTask = {
     ...task,
     retryCount: Number.isFinite(task.retryCount) ? Math.max(0, Math.trunc(task.retryCount ?? 0)) : 0,
-    retryLimit: Number.isFinite(task.retryLimit) ? Math.max(0, Math.trunc(task.retryLimit ?? DEFAULT_RETRY_LIMIT)) : DEFAULT_RETRY_LIMIT
+    retryLimit: Number.isFinite(task.retryLimit) ? Math.max(0, Math.trunc(task.retryLimit ?? DEFAULT_RETRY_LIMIT)) : DEFAULT_RETRY_LIMIT,
+    metadataStatus,
+    warning: typeof task.warning === "string" && task.warning.trim() ? task.warning : undefined,
+    memoryLimitBytes: Number.isSafeInteger(task.memoryLimitBytes) && Number(task.memoryLimitBytes) > 0 ? Number(task.memoryLimitBytes) : undefined
   };
 
   if (task.status === "downloading" || task.status === "preparing" || task.status === "queued") {
@@ -825,15 +830,17 @@ async function downloadSongFile(task: DownloadTask, song: Song) {
         const plan = await buildMediaCredentialPlan({ clientSessionId: ownerSessionId });
         return resolveSongDownloadWithPlan(song, selectedLevel, plan);
       })();
-  const response = await fetch(resolvedSong.url);
+  const upstreamAbortController = new AbortController();
+  const response = await fetch(resolvedSong.url, { signal: upstreamAbortController.signal });
 
   if (!response.ok || !response.body) {
+    upstreamAbortController.abort(new Error(`下载失败，远程响应状态为 ${response.status}`));
+    await response.body?.cancel().catch(() => undefined);
     throw new Error(`下载失败，远程响应状态为 ${response.status}`);
   }
 
   await fsPromises.mkdir(outputDir, { recursive: true });
 
-  const contentLength = Number(response.headers.get("content-length") ?? "0");
   const extension = getFileExtension(
     resolvedSong.url,
     response.headers.get("content-type"),
@@ -842,47 +849,47 @@ async function downloadSongFile(task: DownloadTask, song: Song) {
   const contentType = response.headers.get("content-type");
   const safeFileName = buildDownloadFileBaseName(task.title, task.artist);
   const outputPath = await getAvailableOutputPath(outputDir, safeFileName, extension);
-  const writeStream = fs.createWriteStream(outputPath);
-
-  let receivedBytes = 0;
+  const metadataTarget = getAudioMetadataTarget({ filename: outputPath, type: resolvedSong.type, contentType });
+  const maxInMemoryMediaBytes = getMaxInMemoryMediaBytes();
   task.status = "downloading";
   task.progress = 12;
+  task.metadataStatus = undefined;
+  task.warning = undefined;
+  task.memoryLimitBytes = maxInMemoryMediaBytes;
   scheduleTaskPersist();
 
-  const progressStream = Readable.fromWeb(response.body as any).on("data", (chunk: Buffer) => {
-    receivedBytes += chunk.length;
-
-    if (contentLength > 0) {
-      task.progress = Math.min(99, Math.max(12, Math.round((receivedBytes / contentLength) * 100)));
+  const result = await downloadMediaResponseToFile({
+    response,
+    outputPath,
+    tempId: task.id,
+    maxInMemoryMediaBytes,
+    metadataRequested: Boolean(metadataTarget),
+    abortController: upstreamAbortController,
+    onProgress: (receivedBytes, contentLength) => {
+      if (contentLength && contentLength > 0) {
+        task.progress = Math.min(95, Math.max(12, Math.round((receivedBytes / contentLength) * 100)));
+      } else {
+        task.progress = Math.min(95, task.progress + 8);
+      }
       scheduleTaskPersist();
-      return;
-    }
-
-    task.progress = Math.min(95, task.progress + 8);
-    scheduleTaskPersist();
-  });
-
-  await pipeline(progressStream, writeStream);
-
-  let finalFileSizeBytes = contentLength > 0 ? contentLength : receivedBytes;
-  if (getAudioMetadataTarget({ filename: outputPath, type: resolvedSong.type, contentType })) {
-    const originalBytes = await fsPromises.readFile(outputPath);
-    const taggedBytes = await addAudioMetadataToDownload({
+    },
+    writeMetadata: metadataTarget ? (originalBytes) => addAudioMetadataToDownload({
       song,
       bytes: originalBytes,
       filename: outputPath,
       type: resolvedSong.type,
       contentType
-    });
-    await fsPromises.writeFile(outputPath, taggedBytes);
-    finalFileSizeBytes = taggedBytes.byteLength;
-  }
+    }) : undefined
+  });
 
   task.progress = 100;
   task.status = "done";
   task.outputPath = outputPath;
   task.downloadedDuration = formatDuration(Number(resolvedSong.time ?? parseDurationToMs(song.duration)));
-  task.fileSizeBytes = finalFileSizeBytes;
+  task.fileSizeBytes = result.fileSizeBytes;
+  task.metadataStatus = result.metadataStatus;
+  task.warning = result.warning;
+  task.memoryLimitBytes = result.memoryLimitBytes;
   scheduleTaskPersist();
 }
 

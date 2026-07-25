@@ -9,7 +9,7 @@
     "dev:server": "tsx watch server/index.ts",
     "typecheck:client": "tsc -p tsconfig.json --noEmit",
     "build": "vite build && tsc -p tsconfig.server.json",
-    "test": "tsx --test \"server/**/*.test.ts\"",
+    "test": "tsx --test \"server/**/*.test.ts\" \"src/**/*.test.ts\"",
     "start": "node dist-server/index.js"
   },
   "dependencies": {

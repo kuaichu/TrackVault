@@ -17,6 +17,14 @@ import { getArtistProfile, resolveArtistIdByName } from "./artist-provider.js";
 import { getPlayHistory, getSearchHistory, removeSearchHistory, savePlayHistory, saveSearchHistory } from "./history-store.js";
 import { getSongLyrics } from "./lyric-provider.js";
 import { MediaAccessError } from "./media-security.js";
+import {
+  decideServerMediaHandling,
+  getMaxInMemoryMediaBytes,
+  getResponseContentLength,
+  MediaMemoryLimitExceededError,
+  readResponseBytesWithLimit,
+  withMediaTaggingSlot
+} from "./media-memory-policy.js";
 import { addSongToUserPlaylist, getPlaylistSongs, getUserPlaylists, removeSongsFromUserPlaylist } from "./playlist-provider.js";
 import { searchProvider, type SearchProviderMode } from "./provider.js";
 import { runWithRequestContext } from "./request-context.js";
@@ -130,6 +138,35 @@ function getErrorMessage(error: unknown, fallbackMessage: string) {
   return fallbackMessage;
 }
 
+function bindUpstreamAbort(request: express.Request, response: express.Response) {
+  const controller = new AbortController();
+  const abort = () => {
+    if (!controller.signal.aborted) {
+      controller.abort(new Error("客户端已断开媒体传输"));
+    }
+  };
+  const abortOnIncompleteClose = () => {
+    if (!response.writableFinished) {
+      abort();
+    }
+  };
+
+  request.once("aborted", abort);
+  response.once("close", abortOnIncompleteClose);
+
+  return {
+    controller,
+    cleanup() {
+      request.off("aborted", abort);
+      response.off("close", abortOnIncompleteClose);
+    }
+  };
+}
+
+function toNodeReadable(body: ReadableStream<Uint8Array>) {
+  return Readable.fromWeb(body as import("node:stream/web").ReadableStream<Uint8Array>);
+}
+
 function isAllowedCoverHost(hostname: string) {
   const normalizedHost = hostname.toLowerCase();
   return (
@@ -165,24 +202,14 @@ app.get("/api/media/cover", async (request, response) => {
       return;
     }
 
-    const contentLength = Number(upstream.headers.get("content-length") ?? "0");
-    if (contentLength > COVER_PROXY_MAX_BYTES) {
-      response.status(413).json({ message: "封面文件过大" });
-      return;
-    }
-
-    const bytes = Buffer.from(await upstream.arrayBuffer());
-    if (bytes.byteLength > COVER_PROXY_MAX_BYTES) {
-      response.status(413).json({ message: "封面文件过大" });
-      return;
-    }
+    const bytes = await readResponseBytesWithLimit(upstream, { limitBytes: COVER_PROXY_MAX_BYTES });
 
     response.setHeader("Content-Type", contentType);
     response.setHeader("Cache-Control", "public, max-age=86400");
-    response.send(bytes);
+    response.end(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
   } catch (error) {
-    response.status(502).json({
-      message: error instanceof Error ? error.message : "封面拉取失败"
+    response.status(error instanceof MediaMemoryLimitExceededError ? 413 : 502).json({
+      message: error instanceof MediaMemoryLimitExceededError ? "封面文件过大" : error instanceof Error ? error.message : "封面拉取失败"
     });
   }
 });
@@ -642,6 +669,7 @@ app.get("/api/stream", async (request, response) => {
     return;
   }
 
+  const upstreamAbort = bindUpstreamAbort(request, response);
   try {
     const resolved =
       source === "qqmusic"
@@ -666,7 +694,8 @@ app.get("/api/stream", async (request, response) => {
             Number.isFinite(expectedDurationSeconds) ? expectedDurationSeconds : 0
           );
     const upstream = await fetch(resolved.url, {
-      headers: request.headers.range ? { Range: request.headers.range } : undefined
+      headers: request.headers.range ? { Range: request.headers.range } : undefined,
+      signal: upstreamAbort.controller.signal
     });
 
     if (!upstream.ok || !upstream.body) {
@@ -699,12 +728,20 @@ app.get("/api/stream", async (request, response) => {
     response.setHeader("Pragma", "no-cache");
     response.setHeader("Expires", "0");
     response.status(upstream.status);
-    Readable.fromWeb(upstream.body as any).pipe(response);
+    await pipeline(toNodeReadable(upstream.body), response);
   } catch (error) {
+    if (response.destroyed || response.headersSent) {
+      if (!response.destroyed) {
+        response.destroy(error instanceof Error ? error : undefined);
+      }
+      return;
+    }
     const status = error instanceof MediaAccessError ? error.status : source === "qqmusic" ? 409 : 502;
     response.status(status).json({
       message: error instanceof Error ? error.message : "音频流获取失败"
     });
+  } finally {
+    upstreamAbort.cleanup();
   }
 });
 
@@ -759,7 +796,10 @@ app.get("/api/download/direct", async (request, response) => {
 
   try {
     const directDownload = await resolveDirectDownload(song, level as DownloadQualityLevel, userCookieOverride);
-    response.json(directDownload);
+    response.json({
+      ...directDownload,
+      maxInMemoryMediaBytes: getMaxInMemoryMediaBytes()
+    });
   } catch (error) {
     response.status(error instanceof MediaAccessError ? error.status : 502).json({
       message: error instanceof Error ? error.message : "获取直连下载地址失败"
@@ -777,13 +817,16 @@ app.get("/api/download/proxy", async (request, response) => {
     return;
   }
 
+  const upstreamAbort = bindUpstreamAbort(request, response);
   try {
     const directDownload = await resolveDirectDownload(song, level as DownloadQualityLevel, userCookieOverride);
     const upstream = await fetch(directDownload.url, {
-      headers: request.headers.range ? { Range: request.headers.range } : undefined
+      headers: request.headers.range ? { Range: request.headers.range } : undefined,
+      signal: upstreamAbort.controller.signal
     });
 
     if (!upstream.ok || !upstream.body) {
+      await upstream.body?.cancel().catch(() => undefined);
       response.status(upstream.status || 502).json({ message: "备用下载拉取失败" });
       return;
     }
@@ -791,23 +834,51 @@ app.get("/api/download/proxy", async (request, response) => {
     const contentType = upstream.headers.get("content-type") ?? "application/octet-stream";
     const contentLength = upstream.headers.get("content-length");
     const contentRange = upstream.headers.get("content-range");
-
-    response.setHeader("Content-Type", contentType);
-    response.setHeader("Content-Disposition", buildContentDisposition(directDownload.filename));
-    if (directDownload.quality) {
-      response.setHeader("X-TrackVault-Quality", directDownload.quality);
-    }
-    response.setHeader("Access-Control-Allow-Origin", "*");
-    response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, Content-Length, Content-Range, X-TrackVault-Quality");
-
-    const metadataTarget = !request.headers.range ? getAudioMetadataTarget({
+    const maxInMemoryMediaBytes = getMaxInMemoryMediaBytes();
+    const metadataRequested = !request.headers.range && request.query.metadata !== "raw";
+    const metadataTarget = metadataRequested ? getAudioMetadataTarget({
       filename: directDownload.filename,
       type: directDownload.type,
       contentType
     }) : null;
+    const decision = decideServerMediaHandling({
+      metadataRequested,
+      metadataTarget,
+      contentLength: getResponseContentLength(upstream),
+      limitBytes: maxInMemoryMediaBytes
+    });
 
-    if (metadataTarget) {
-      const originalBytes = new Uint8Array(await upstream.arrayBuffer());
+    if (decision.kind === "reject") {
+      upstreamAbort.controller.abort(decision.error);
+      await upstream.body.cancel(decision.error).catch(() => undefined);
+      throw decision.error;
+    }
+
+    if (decision.kind === "stream") {
+      response.setHeader("Content-Disposition", buildContentDisposition(directDownload.filename));
+      if (directDownload.quality) {
+        response.setHeader("X-TrackVault-Quality", directDownload.quality);
+      }
+      response.setHeader("X-TrackVault-Max-In-Memory-Media-Bytes", String(maxInMemoryMediaBytes));
+      response.setHeader("Access-Control-Allow-Origin", "*");
+      response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, Content-Length, Content-Range, X-TrackVault-Quality, X-TrackVault-Max-In-Memory-Media-Bytes");
+      response.setHeader("Content-Type", contentType);
+      if (contentLength) {
+        response.setHeader("Content-Length", contentLength);
+      }
+      if (contentRange) {
+        response.setHeader("Content-Range", contentRange);
+      }
+      response.status(upstream.status);
+      await pipeline(toNodeReadable(upstream.body), response);
+      return;
+    }
+
+    await withMediaTaggingSlot(async () => {
+      const originalBytes = await readResponseBytesWithLimit(upstream, {
+        limitBytes: maxInMemoryMediaBytes,
+        abortController: upstreamAbort.controller
+      });
       const taggedBytes = await addAudioMetadataToDownload({
         song,
         bytes: originalBytes,
@@ -815,32 +886,67 @@ app.get("/api/download/proxy", async (request, response) => {
         type: directDownload.type,
         contentType
       });
+      response.setHeader("Content-Disposition", buildContentDisposition(directDownload.filename));
+      if (directDownload.quality) {
+        response.setHeader("X-TrackVault-Quality", directDownload.quality);
+      }
+      response.setHeader("X-TrackVault-Max-In-Memory-Media-Bytes", String(maxInMemoryMediaBytes));
+      response.setHeader("Access-Control-Allow-Origin", "*");
+      response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, Content-Length, X-TrackVault-Quality, X-TrackVault-Max-In-Memory-Media-Bytes");
       response.setHeader("Content-Type", metadataTarget === "flac" ? "audio/flac" : "audio/mpeg");
       response.setHeader("Content-Length", String(taggedBytes.byteLength));
-      response.send(Buffer.from(taggedBytes));
-      return;
-    }
+      response.status(upstream.status);
 
-    if (contentLength) {
-      response.setHeader("Content-Length", contentLength);
-    }
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const cleanup = () => {
+          response.off("error", fail);
+          response.off("close", onClose);
+        };
+        const succeed = () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve();
+        };
+        const fail = (error: Error) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(error);
+        };
+        const onClose = () => {
+          if (response.writableFinished) {
+            succeed();
+          } else {
+            fail(new Error("客户端在标签文件发送完成前断开"));
+          }
+        };
 
-    if (contentRange) {
-      response.setHeader("Content-Range", contentRange);
-      response.status(206);
-    }
-
-    await pipeline(Readable.fromWeb(upstream.body as any), response);
-  } catch (error) {
-    if (!response.headersSent) {
-      response.status(error instanceof MediaAccessError ? error.status : 502).json({
-        message: error instanceof Error ? error.message : "备用下载失败"
+        response.once("error", fail);
+        response.once("close", onClose);
+        response.end(Buffer.from(taggedBytes.buffer, taggedBytes.byteOffset, taggedBytes.byteLength), succeed);
       });
+    });
+  } catch (error) {
+    if (response.destroyed || response.headersSent) {
+      console.warn("Proxy download stream interrupted:", error instanceof Error ? error.message : error);
+      if (!response.destroyed) {
+        response.destroy(error instanceof Error ? error : undefined);
+      }
       return;
     }
 
-    console.warn("Proxy download stream interrupted:", error instanceof Error ? error.message : error);
-    response.destroy(error instanceof Error ? error : undefined);
+    if (error instanceof MediaMemoryLimitExceededError) {
+      response.status(413).json(error.toJSON());
+      return;
+    }
+
+    response.status(error instanceof MediaAccessError ? error.status : 502).json({
+      message: error instanceof Error ? error.message : "备用下载失败"
+    });
+  } finally {
+    upstreamAbort.cleanup();
   }
 });
 
