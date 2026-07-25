@@ -36,6 +36,7 @@ import { createLibraryRouter } from "./routes/library-router.js";
 import { createMediaRouter } from "./routes/media-router.js";
 import { createMusicMetadataRouter } from "./routes/music-metadata-router.js";
 import { createMusicDiscoveryRouter } from "./routes/music-discovery-router.js";
+import { createPlaylistTransferJobRouter } from "./routes/playlist-transfer-job-router.js";
 import { createPlatformCookieRouter, createSettingsRouter } from "./routes/settings-router.js";
 import { createSongContentRouter } from "./routes/song-content-router.js";
 import { createUserProfileRouter } from "./routes/user-profile-router.js";
@@ -59,7 +60,7 @@ import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist
 import { createPlaylistTransferJob, getNeteaseImportTrackIds, getQqImportTrackMids } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
 import type { PlaylistCompareResult, PlaylistCompareStatus } from "./playlist-transfer/playlist-compare.js";
-import type { MatchCandidate, TransferImportRequest, TransferTargetProvider, TransferTrack } from "./playlist-transfer/types.js";
+import type { MatchCandidate, TransferExportFormat, TransferImportRequest, TransferTargetProvider, TransferTrack } from "./playlist-transfer/types.js";
 
 const app = express();
 const port = 3010;
@@ -317,151 +318,24 @@ async function checkTransferTargetAvailability(candidate: MatchCandidate) {
   return null;
 }
 
-app.get("/api/playlist-transfer/jobs", async (_request, response) => {
-  const ownerKey = await getCurrentUserKey();
-  response.json({ jobs: await listPlaylistTransferJobs(ownerKey) });
-});
-
-app.post("/api/playlist-transfer/jobs", async (request, response) => {
-  const ownerKey = await getCurrentUserKey();
-  const payload = request.body as TransferImportRequest;
-
-  try {
-    const job = await createPlaylistTransferJob(
-      {
-        ...payload,
-        ownerKey
-      },
-      {
-        loadSourceTracks: (input) => loadTransferSourceTracks(input),
-        searchTargetTracks: searchTransferTargetTracks,
-        checkAvailability: checkTransferTargetAvailability,
-        saveJob: savePlaylistTransferJob
-      }
-    );
-    response.status(201).json(job);
-  } catch (error) {
-    response.status(400).json({
-      message: error instanceof Error ? error.message : "创建歌单互转任务失败"
-    });
-  }
-});
-
-app.post("/api/playlist-transfer/jobs/progress", async (request, response) => {
-  const ownerKey = await getCurrentUserKey();
-  const payload = request.body as TransferImportRequest;
-
-  const job = startPlaylistTransferRunJob(
-    {
-      ...payload,
-      ownerKey
-    },
-    {
-      loadSourceTracks: (input) => loadTransferSourceTracks(input),
-      searchTargetTracks: searchTransferTargetTracks,
-      checkAvailability: checkTransferTargetAvailability,
-      saveJob: savePlaylistTransferJob
-    }
-  );
-
-  response.status(202).json({ job });
-});
-
-app.get("/api/playlist-transfer/jobs/progress/:id", (request, response) => {
-  const job = getPlaylistTransferRunJob(request.params.id);
-  if (!job) {
-    response.status(404).json({ message: "歌单互转进度任务不存在" });
-    return;
-  }
-
-  response.json({ job });
-});
-
-app.get("/api/playlist-transfer/jobs/:id", async (request, response) => {
-  const ownerKey = await getCurrentUserKey();
-  const job = await getPlaylistTransferJob(ownerKey, request.params.id);
-  if (!job) {
-    response.status(404).json({ message: "歌单互转任务不存在" });
-    return;
-  }
-
-  response.json(job);
-});
-
-app.post("/api/playlist-transfer/jobs/:id/export", async (request, response) => {
-  const ownerKey = await getCurrentUserKey();
-  const job = await getPlaylistTransferJob(ownerKey, request.params.id);
-  if (!job) {
-    response.status(404).json({ message: "歌单互转任务不存在" });
-    return;
-  }
-
-  const format = typeof request.body?.format === "string" ? request.body.format : "markdown";
-  response.json(formatTransferExport(job, format));
-});
-
-app.post("/api/playlist-transfer/jobs/:id/import/netease", async (request, response) => {
-  const ownerKey = await getCurrentUserKey();
-  const job = await getPlaylistTransferJob(ownerKey, request.params.id);
-  if (!job) {
-    response.status(404).json({ message: "歌单互转任务不存在" });
-    return;
-  }
-
-  if (job.targetProvider !== "netease") {
-    response.status(400).json({ message: "只有目标为网易云的互转任务才能直接导入网易云歌单。" });
-    return;
-  }
-
-  try {
-    const name = typeof request.body?.name === "string" && request.body.name.trim()
-      ? request.body.name.trim()
-      : `${job.playlistName} 转换结果`;
-    const targetPlaylistId = typeof request.body?.playlistId === "string" ? request.body.playlistId.trim() : "";
-    const trackIds = getNeteaseImportTrackIds(job);
-    const result = targetPlaylistId
-      ? await addNeteaseTrackIdsToExistingPlaylist(targetPlaylistId, trackIds)
-      : await createNeteasePlaylistFromTrackIds(name, trackIds);
-    response.json({
-      ...result,
-      skippedCount: job.summary.total - result.addedCount
-    });
-  } catch (error) {
-    response.status(400).json({
-      message: error instanceof Error ? error.message : "导入网易云歌单失败"
-    });
-  }
-});
-
-app.post("/api/playlist-transfer/jobs/:id/import/qq", async (request, response) => {
-  const ownerKey = await getCurrentUserKey();
-  const job = await getPlaylistTransferJob(ownerKey, request.params.id);
-  if (!job) {
-    response.status(404).json({ message: "歌单互转任务不存在" });
-    return;
-  }
-
-  if (job.targetProvider !== "qq") {
-    response.status(400).json({ message: "只有目标为 QQ 音乐的互转任务才能直接导入 QQ 歌单。" });
-    return;
-  }
-
-  try {
-    const name = typeof request.body?.name === "string" && request.body.name.trim()
-      ? request.body.name.trim()
-      : `${job.playlistName} 转换结果`;
-    const trackMids = getQqImportTrackMids(job);
-    const result = await createQqPlaylistFromTrackMids(name, trackMids);
-    response.json({
-      ...result,
-      skippedCount: job.summary.total - result.addedCount
-    });
-  } catch (error) {
-    response.status(400).json({
-      message: error instanceof Error ? error.message : "导入 QQ 音乐歌单失败"
-    });
-  }
-});
+app.use(createPlaylistTransferJobRouter({
+  getCurrentUserKey,
+  listPlaylistTransferJobs,
+  createPlaylistTransferJob,
+  startPlaylistTransferRunJob,
+  loadSourceTracks: (input) => loadTransferSourceTracks(input),
+  searchTargetTracks: searchTransferTargetTracks,
+  checkAvailability: checkTransferTargetAvailability,
+  saveJob: savePlaylistTransferJob,
+  getPlaylistTransferRunJob,
+  getPlaylistTransferJob,
+  formatTransferExport: (job, format) => formatTransferExport(job, format as TransferExportFormat),
+  getNeteaseImportTrackIds,
+  addNeteaseTrackIdsToExistingPlaylist,
+  createNeteasePlaylistFromTrackIds,
+  getQqImportTrackMids,
+  createQqPlaylistFromTrackMids
+}));
 
 app.post("/api/playlist-transfer/netease-import-audit", async (request, response) => {
   const playlistId = typeof request.body?.playlistId === "string" ? request.body.playlistId.trim() : "";
