@@ -30,6 +30,7 @@ import { getDailyRecommendSongs } from "./recommend-provider.js";
 import { getPersonalRadioSongs } from "./personal-radio-provider.js";
 import { createAccountRouter } from "./routes/account-router.js";
 import { createAdminRouter } from "./routes/admin-router.js";
+import { createCommentRouter } from "./routes/comment-router.js";
 import { createDownloadTaskRouter } from "./routes/download-task-router.js";
 import { createLibraryRouter } from "./routes/library-router.js";
 import { createMediaRouter } from "./routes/media-router.js";
@@ -88,36 +89,6 @@ app.get("/api/health", (_request, response) => {
   response.json({ ok: true });
 });
 
-function getErrorMessage(error: unknown, fallbackMessage: string) {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-
-  if (error && typeof error === "object") {
-    const record = error as {
-      message?: unknown;
-      msg?: unknown;
-      body?: { message?: unknown; msg?: unknown; code?: unknown };
-      status?: unknown;
-    };
-    const bodyMessage = typeof record.body?.message === "string" ? record.body.message.trim() : "";
-    const bodyMsg = typeof record.body?.msg === "string" ? record.body.msg.trim() : "";
-    const message = typeof record.message === "string" ? record.message.trim() : "";
-    const msg = typeof record.msg === "string" ? record.msg.trim() : "";
-
-    if (bodyMessage || bodyMsg || message || msg) {
-      return bodyMessage || bodyMsg || message || msg;
-    }
-
-    const code = record.body?.code ?? record.status;
-    if (typeof code === "number" || typeof code === "string") {
-      return `${fallbackMessage}：${code}`;
-    }
-  }
-
-  return fallbackMessage;
-}
-
 app.use(createMusicDiscoveryRouter({
   searchProvider,
   getSettings,
@@ -172,77 +143,15 @@ app.use(createSongContentRouter({
   isMediaAccessError: (error): error is MediaAccessError => error instanceof MediaAccessError
 }));
 
-app.get("/api/comments/songs/:id", async (request, response) => {
-  const source = typeof request.query.source === "string" ? request.query.source : "";
-  const providerSongId = typeof request.query.providerSongId === "string" ? request.query.providerSongId : request.params.id;
-
-  try {
-    const page = Number(request.query.page);
-    const limit = Number(request.query.limit);
-    const comments = source === "qqmusic"
-      ? await getQqSongComments(providerSongId, page, limit)
-      : await getSongComments(request.params.id, page, limit);
-    response.json(source === "qqmusic" ? { ...comments, songId: request.params.id } : comments);
-  } catch (error) {
-    response.status(502).json({
-      message: error instanceof Error ? error.message : "获取评论失败"
-    });
-  }
-});
-
-app.get("/api/comments/songs/:id/:commentId/replies", async (request, response) => {
-  const source = typeof request.query.source === "string" ? request.query.source : "";
-  const providerSongId = typeof request.query.providerSongId === "string" ? request.query.providerSongId : request.params.id;
-
-  try {
-    const time = Number(request.query.time);
-    const limit = Number(request.query.limit);
-    response.json(
-      source === "qqmusic"
-        ? await getQqSongCommentReplies(providerSongId, request.params.commentId)
-        : await getSongCommentReplies(request.params.id, request.params.commentId, time, limit)
-    );
-  } catch (error) {
-    response.status(502).json({
-      message: error instanceof Error ? error.message : "获取评论回复失败"
-    });
-  }
-});
-
-app.post("/api/comments/songs/:id/:commentId/like", async (request, response) => {
-  const liked = Boolean(request.body?.liked);
-  const source = typeof request.query.source === "string" ? request.query.source : "";
-
-  try {
-    response.json(
-      source === "qqmusic"
-        ? await setQqSongCommentLiked(request.params.commentId, liked)
-        : await setSongCommentLiked(request.params.id, request.params.commentId, liked)
-    );
-  } catch (error) {
-    response.status(401).json({
-      message: getErrorMessage(error, liked ? "点赞评论失败" : "取消点赞失败")
-    });
-  }
-});
-
-app.post("/api/comments/songs/:id/:commentId/replies", async (request, response) => {
-  const content = typeof request.body?.content === "string" ? request.body.content : "";
-  const source = typeof request.query.source === "string" ? request.query.source : "";
-
-  try {
-    if (source === "qqmusic") {
-      response.status(501).json({ message: "QQ 音乐评论回复暂未接入。" });
-      return;
-    }
-
-    response.json(await replyToSongComment(request.params.id, request.params.commentId, content));
-  } catch (error) {
-    response.status(401).json({
-      message: error instanceof Error ? error.message : "回复评论失败"
-    });
-  }
-});
+app.use(createCommentRouter({
+  getSongComments,
+  getQqSongComments,
+  getSongCommentReplies,
+  getQqSongCommentReplies,
+  setSongCommentLiked,
+  setQqSongCommentLiked,
+  replyToSongComment
+}));
 
 app.get("/api/users/:id", async (request, response) => {
   try {
