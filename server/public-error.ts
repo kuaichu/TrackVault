@@ -21,9 +21,41 @@ export function toExpressError(error: unknown, internalMessage: string): Error {
   return error instanceof Error ? error : new Error(internalMessage);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isInvalidJsonBodyError(error: unknown): boolean {
+  return isRecord(error)
+    && error.status === 400
+    && error.type === "entity.parse.failed";
+}
+
+function isRequestBodyTooLargeError(error: unknown): boolean {
+  return isRecord(error)
+    && error.status === 413
+    && error.type === "entity.too.large";
+}
+
 export const safeHttpErrorHandler: ErrorRequestHandler = (error, _request, response, next) => {
   if (response.headersSent) {
     next(toExpressError(error, "HTTP request failed after response headers were sent"));
+    return;
+  }
+
+  if (isInvalidJsonBodyError(error)) {
+    response.status(400).json({
+      code: "INVALID_JSON_BODY",
+      message: "请求 JSON 格式无效。"
+    });
+    return;
+  }
+
+  if (isRequestBodyTooLargeError(error)) {
+    response.status(413).json({
+      code: "REQUEST_BODY_TOO_LARGE",
+      message: "请求体超过允许大小。"
+    });
     return;
   }
 

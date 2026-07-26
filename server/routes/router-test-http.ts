@@ -2,7 +2,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import express from "express";
-import type { ErrorRequestHandler, RequestHandler } from "express";
+import type { Application, ErrorRequestHandler, RequestHandler } from "express";
 import { runWithRequestContext } from "../request-context.js";
 
 export type TestHttpResponse = {
@@ -18,6 +18,7 @@ export type TestHttpClient = {
 
 export type TestRouterOptions = {
   jsonStrict?: boolean;
+  registerJsonBodyParsers?: (app: Application) => void;
 };
 
 async function closeServer(server: Server) {
@@ -42,7 +43,11 @@ export async function withTestRouter(
   options: TestRouterOptions = {}
 ) {
   const app = express();
-  app.use(express.json({ strict: options.jsonStrict ?? true }));
+  if (options.registerJsonBodyParsers) {
+    options.registerJsonBodyParsers(app);
+  } else {
+    app.use(express.json({ strict: options.jsonStrict ?? true }));
+  }
   app.use((request, _response, next) => {
     const headerSessionId = request.get("x-client-session-id");
     const querySessionId = typeof request.query.sid === "string" ? request.query.sid : undefined;

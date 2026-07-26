@@ -26,6 +26,10 @@ import { safeHttpErrorHandler } from "../public-error.js";
 import { assertPublicDtoSafe } from "../playlist-transfer/assert-public-dto-safe.js";
 import { formatPlaylistCompareExport } from "../playlist-transfer/playlist-compare.js";
 import { PLAYLIST_COMPARE_EXPORT_LIMITS } from "../playlist-transfer/playlist-compare-export-policy.js";
+import {
+  HTTP_JSON_BODY_LIMIT_BYTES,
+  registerHttpJsonBodyParsers
+} from "../http-json-body.js";
 
 const timeout = { timeout: 5_000 };
 
@@ -716,6 +720,54 @@ test("export rejects collection limits before formatting without reflecting requ
       }
     });
   }
+});
+
+test("export keeps HTTP body and parsed resource policy 413 contracts distinct", timeout, async () => {
+  const secret = "compare-http-body-limit-secret-sentinel";
+  let formatterCalls = 0;
+  const router = createPlaylistCompareRouter(createDependencies({
+    formatPlaylistCompareExport: () => {
+      formatterCalls += 1;
+      return exportResult;
+    }
+  }));
+
+  await withTestRouter([router, safeHttpErrorHandler], async ({ request }) => {
+    const transportResponse = await request("/api/playlist-transfer/compare/export", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret, padding: "x".repeat(HTTP_JSON_BODY_LIMIT_BYTES) }),
+      signal: AbortSignal.timeout(3_000)
+    });
+    assert.equal(transportResponse.status, 413);
+    assert.deepEqual(transportResponse.body, {
+      code: "REQUEST_BODY_TOO_LARGE",
+      message: "请求体超过允许大小。"
+    });
+    assert.doesNotMatch(JSON.stringify(transportResponse.body), new RegExp(secret));
+
+    const policyResponse = await request("/api/playlist-transfer/compare/export", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        result: compareResult,
+        statuses: ["exact"],
+        itemIndexes: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.itemIndexes + 1 }, () => 0)
+      }),
+      signal: AbortSignal.timeout(3_000)
+    });
+    assert.equal(policyResponse.status, 413);
+    assert.deepEqual(policyResponse.body, {
+      code: "PLAYLIST_COMPARE_EXPORT_LIMIT_EXCEEDED",
+      message: "歌单对比导出数据超过允许上限。",
+      limit: {
+        resource: "itemIndexes",
+        maximum: PLAYLIST_COMPARE_EXPORT_LIMITS.itemIndexes
+      }
+    });
+  }, { registerJsonBodyParsers: registerHttpJsonBodyParsers });
+
+  assert.equal(formatterCalls, 0);
 });
 
 test("export filters NaN and Infinity and forwards formatter failures", timeout, async () => {

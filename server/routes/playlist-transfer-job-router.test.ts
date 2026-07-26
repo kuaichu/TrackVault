@@ -18,6 +18,7 @@ import { getRequiredClientSessionId } from "../request-context.js";
 import { assertPublicDtoSafe } from "../playlist-transfer/assert-public-dto-safe.js";
 import { formatTransferExport } from "../playlist-transfer/export-formatters.js";
 import { safeHttpErrorHandler } from "../public-error.js";
+import { registerHttpJsonBodyParsers } from "../http-json-body.js";
 
 const timeout = { timeout: 5_000 };
 
@@ -314,7 +315,7 @@ test("creation endpoints reject non-object JSON bodies before creating a task", 
         assert.deepEqual(response.body, { message: "歌单互转任务输入格式无效。" });
       }
     }
-  }, { jsonStrict: false });
+  }, { registerJsonBodyParsers: registerHttpJsonBodyParsers });
 
   assert.equal(createCalls, 0);
   assert.equal(startCalls, 0);

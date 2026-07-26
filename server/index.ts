@@ -3,6 +3,7 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerTerminalRoutes } from "./http-terminal-routes.js";
+import { registerHttpJsonBodyParsers } from "./http-json-body.js";
 import { safeHttpErrorHandler } from "./public-error.js";
 import { getAlbumProfile } from "./album-provider.js";
 import { getCurrentUserKey, getSession, loginSession, logoutSession } from "./account-store.js";
@@ -74,11 +75,7 @@ const __dirname = path.dirname(__filename);
 const clientDistDir = path.resolve(__dirname, "../dist");
 
 app.use(cors());
-app.post([
-  "/api/playlist-transfer/jobs",
-  "/api/playlist-transfer/jobs/progress"
-], express.json({ limit: "2mb", strict: false }));
-app.use(express.json({ limit: "2mb" }));
+registerHttpJsonBodyParsers(app);
 app.use((request, response, next) => {
   const headerSessionId = typeof request.headers["x-client-session-id"] === "string" ? request.headers["x-client-session-id"] : "";
   const querySessionId = typeof request.query.sid === "string" ? request.query.sid : "";
