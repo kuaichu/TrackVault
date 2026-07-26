@@ -570,7 +570,7 @@ export type TransferSummary = {
 
 export type PlaylistTransferJob = {
   id: string;
-  ownerKey: string;
+  ownerKey?: string;
   sourceProvider: TransferSourceProvider;
   targetProvider: TransferTargetProvider;
   playlistName: string;
@@ -585,9 +585,7 @@ export type PlaylistTransferRunJobStatus = "queued" | "loading" | "running" | "s
 export type PlaylistTransferRunJob = {
   id: string;
   status: PlaylistTransferRunJobStatus;
-  input: TransferImportRequest & {
-    ownerKey: string;
-  };
+  input: TransferImportRequest;
   progress: {
     phase: "queued" | "loading" | "matching" | "saving" | "completed" | "failed";
     processed: number;
@@ -600,7 +598,7 @@ export type PlaylistTransferRunJob = {
     skipped: number;
     currentTitle?: string;
   };
-  result?: PlaylistTransferJob;
+  result?: Omit<PlaylistTransferJob, "ownerKey">;
   error?: string;
   createdAt: string;
   updatedAt: string;

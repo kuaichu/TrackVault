@@ -30,7 +30,12 @@ type PlaylistCompareJobDeps = {
   loadSideTracks: (provider: string, playlistId: string) => Promise<TransferTrack[]>;
 };
 
-const jobs = new Map<string, PlaylistCompareJob>();
+type StoredPlaylistCompareJob = {
+  ownerKey: string;
+  job: PlaylistCompareJob;
+};
+
+const jobs = new Map<string, StoredPlaylistCompareJob>();
 
 function nowIso() {
   return new Date().toISOString();
@@ -114,7 +119,11 @@ async function runJob(job: PlaylistCompareJob, deps: PlaylistCompareJobDeps) {
   }
 }
 
-export function startPlaylistCompareJob(input: PlaylistCompareRequest, deps: PlaylistCompareJobDeps) {
+export function startPlaylistCompareJob(
+  ownerKey: string,
+  input: PlaylistCompareRequest,
+  deps: PlaylistCompareJobDeps
+) {
   const createdAt = nowIso();
   const job: PlaylistCompareJob = {
     id: crypto.randomUUID(),
@@ -125,13 +134,18 @@ export function startPlaylistCompareJob(input: PlaylistCompareRequest, deps: Pla
     updatedAt: createdAt
   };
 
-  jobs.set(job.id, job);
+  jobs.set(job.id, { ownerKey, job });
   setTimeout(() => {
     void runJob(job, deps);
   }, 0);
   return job;
 }
 
-export function getPlaylistCompareJob(id: string) {
-  return jobs.get(id) ?? null;
+export function getPlaylistCompareJob(ownerKey: string, id: string) {
+  const stored = jobs.get(id);
+  if (!stored?.ownerKey || stored.ownerKey !== ownerKey) {
+    return null;
+  }
+
+  return stored.job;
 }

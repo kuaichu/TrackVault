@@ -1,4 +1,4 @@
-import express from "express";
+import express, { type NextFunction } from "express";
 import type { buildNeteaseImportedPlaylistAudit } from "../playlist-transfer/netease-import-audit.js";
 import type {
   cancelNeteaseImportAuditJob,
@@ -15,6 +15,7 @@ import type {
 import type { TransferExportFormat } from "../playlist-transfer/types.js";
 
 export type NeteaseImportAuditRouterDependencies = {
+  getCurrentUserKey: () => Promise<string>;
   loadNeteasePlaylistAuditEntries: typeof loadNeteasePlaylistAuditEntries;
   buildNeteaseImportedPlaylistAudit: typeof buildNeteaseImportedPlaylistAudit;
   searchNeteaseProviderTracksByTitle: typeof searchNeteaseProviderTracksByTitle;
@@ -44,6 +45,15 @@ async function withAuditTimeout<T>(operation: Promise<T>, timeoutMs: number, fal
 
 export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditRouterDependencies) {
   const router = express.Router();
+
+  async function resolveOwner(next: NextFunction) {
+    try {
+      return await dependencies.getCurrentUserKey();
+    } catch (error) {
+      next(error);
+      return null;
+    }
+  }
 
   router.post("/api/playlist-transfer/netease-import-audit", async (request, response) => {
     const playlistId = typeof request.body?.playlistId === "string" ? request.body.playlistId.trim() : "";
@@ -80,7 +90,7 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
     }
   });
 
-  router.post("/api/playlist-transfer/netease-import-audit/jobs", async (request, response) => {
+  router.post("/api/playlist-transfer/netease-import-audit/jobs", async (request, response, next) => {
     const playlistId = typeof request.body?.playlistId === "string" ? request.body.playlistId.trim() : "";
     const playlistName = typeof request.body?.playlistName === "string" && request.body.playlistName.trim()
       ? request.body.playlistName.trim()
@@ -94,7 +104,12 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
       return;
     }
 
+    const ownerKey = await resolveOwner(next);
+    if (ownerKey === null) {
+      return;
+    }
     const job = dependencies.startNeteaseImportAuditJob(
+      ownerKey,
       {
         playlistId,
         playlistName,
@@ -120,8 +135,12 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
     response.status(202).json({ job });
   });
 
-  router.get("/api/playlist-transfer/netease-import-audit/jobs/:id", (request, response) => {
-    const job = dependencies.getNeteaseImportAuditJob(request.params.id);
+  router.get("/api/playlist-transfer/netease-import-audit/jobs/:id", async (request, response, next) => {
+    const ownerKey = await resolveOwner(next);
+    if (ownerKey === null) {
+      return;
+    }
+    const job = dependencies.getNeteaseImportAuditJob(ownerKey, request.params.id);
     if (!job) {
       response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
       return;
@@ -130,8 +149,12 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
     response.json({ job });
   });
 
-  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/cancel", (request, response) => {
-    const job = dependencies.cancelNeteaseImportAuditJob(request.params.id);
+  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/cancel", async (request, response, next) => {
+    const ownerKey = await resolveOwner(next);
+    if (ownerKey === null) {
+      return;
+    }
+    const job = dependencies.cancelNeteaseImportAuditJob(ownerKey, request.params.id);
     if (!job) {
       response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
       return;
@@ -140,8 +163,12 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
     response.json({ job });
   });
 
-  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/export", (request, response) => {
-    const job = dependencies.getNeteaseImportAuditJob(request.params.id);
+  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/export", async (request, response, next) => {
+    const ownerKey = await resolveOwner(next);
+    if (ownerKey === null) {
+      return;
+    }
+    const job = dependencies.getNeteaseImportAuditJob(ownerKey, request.params.id);
     if (!job) {
       response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
       return;
@@ -156,8 +183,12 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
     response.json(dependencies.formatNeteaseImportAuditJobExport(job.result, format as TransferExportFormat));
   });
 
-  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/import/playable", async (request, response) => {
-    const job = dependencies.getNeteaseImportAuditJob(request.params.id);
+  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/import/playable", async (request, response, next) => {
+    const ownerKey = await resolveOwner(next);
+    if (ownerKey === null) {
+      return;
+    }
+    const job = dependencies.getNeteaseImportAuditJob(ownerKey, request.params.id);
     if (!job) {
       response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
       return;

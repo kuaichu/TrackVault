@@ -19,15 +19,20 @@ export type PlaylistTransferRunProgress = Omit<PlaylistTransferProgress, "phase"
 export type PlaylistTransferRunJob = {
   id: string;
   status: PlaylistTransferRunJobStatus;
-  input: CreatePlaylistTransferInput;
+  input: Omit<CreatePlaylistTransferInput, "ownerKey">;
   progress: PlaylistTransferRunProgress;
-  result?: PlaylistTransferJob;
+  result?: Omit<PlaylistTransferJob, "ownerKey">;
   error?: string;
   createdAt: string;
   updatedAt: string;
 };
 
-const jobs = new Map<string, PlaylistTransferRunJob>();
+type StoredPlaylistTransferRunJob = {
+  readonly ownerKey: string;
+  job: PlaylistTransferRunJob;
+};
+
+const jobs = new Map<string, StoredPlaylistTransferRunJob>();
 
 function nowIso() {
   return new Date().toISOString();
@@ -69,9 +74,13 @@ function updateJob(job: PlaylistTransferRunJob, patch: Partial<PlaylistTransferR
   });
 }
 
-async function runJob(job: PlaylistTransferRunJob, deps: CreatePlaylistTransferDeps) {
+async function runJob(storedJob: StoredPlaylistTransferRunJob, deps: CreatePlaylistTransferDeps) {
+  const { job, ownerKey } = storedJob;
   try {
-    const result = await createPlaylistTransferJob(job.input, {
+    const result = await createPlaylistTransferJob({
+      ...job.input,
+      ownerKey
+    }, {
       ...deps,
       onProgress: (progress) => {
         deps.onProgress?.(progress);
@@ -82,9 +91,10 @@ async function runJob(job: PlaylistTransferRunJob, deps: CreatePlaylistTransferD
       }
     });
 
+    const { ownerKey: _resultOwnerKey, ...publicResult } = result;
     updateJob(job, {
       status: "completed",
-      result,
+      result: publicResult,
       progress: {
         ...job.progress,
         phase: "completed",
@@ -106,22 +116,32 @@ async function runJob(job: PlaylistTransferRunJob, deps: CreatePlaylistTransferD
 
 export function startPlaylistTransferRunJob(input: CreatePlaylistTransferInput, deps: CreatePlaylistTransferDeps) {
   const createdAt = nowIso();
+  const { ownerKey, ...publicInput } = input;
   const job: PlaylistTransferRunJob = {
     id: crypto.randomUUID(),
     status: "queued",
-    input,
+    input: publicInput,
     progress: emptyProgress("queued"),
     createdAt,
     updatedAt: createdAt
   };
 
-  jobs.set(job.id, job);
+  const storedJob: StoredPlaylistTransferRunJob = {
+    ownerKey,
+    job
+  };
+  jobs.set(job.id, storedJob);
   setTimeout(() => {
-    void runJob(job, deps);
+    void runJob(storedJob, deps);
   }, 0);
   return job;
 }
 
-export function getPlaylistTransferRunJob(id: string) {
-  return jobs.get(id) ?? null;
+export function getPlaylistTransferRunJob(ownerKey: string, id: string) {
+  const storedJob = jobs.get(id);
+  if (!storedJob?.ownerKey || storedJob.ownerKey !== ownerKey) {
+    return null;
+  }
+
+  return storedJob.job;
 }

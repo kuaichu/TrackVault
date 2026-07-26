@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { NextFunction, Request, Response, Router } from "express";
 import type { NeteaseImportedPlaylistAudit } from "../playlist-transfer/netease-import-audit.js";
 import type { NeteaseImportAuditJob } from "../playlist-transfer/netease-import-audit-job.js";
 import type { MatchCandidate, TransferTrack } from "../playlist-transfer/types.js";
@@ -77,6 +78,7 @@ function createDependencies(
   overrides: Partial<NeteaseImportAuditRouterDependencies> = {}
 ): NeteaseImportAuditRouterDependencies {
   return {
+    getCurrentUserKey: async () => "owner-a",
     loadNeteasePlaylistAuditEntries: async () => unexpectedDependency("loadNeteasePlaylistAuditEntries"),
     buildNeteaseImportedPlaylistAudit: async () => unexpectedDependency("buildNeteaseImportedPlaylistAudit"),
     searchNeteaseProviderTracksByTitle: async () => unexpectedDependency("searchNeteaseProviderTracksByTitle"),
@@ -88,6 +90,23 @@ function createDependencies(
     createNeteasePlaylistFromTrackIds: async () => unexpectedDependency("createNeteasePlaylistFromTrackIds"),
     ...overrides
   };
+}
+
+type RouteLayer = {
+  route?: {
+    path: string;
+    methods: Record<string, boolean>;
+    stack: Array<{
+      handle: (request: Request, response: Response, next: NextFunction) => unknown;
+    }>;
+  };
+};
+
+function getRouteHandler(router: Router, method: string, path: string) {
+  const { stack } = router as unknown as { stack: RouteLayer[] };
+  const layer = stack.find((candidate) => candidate.route?.path === path && candidate.route.methods[method]);
+  assert.ok(layer?.route, `Expected ${method.toUpperCase()} ${path} route`);
+  return layer.route.stack[0].handle;
 }
 
 test("sync audit keeps direct Number conversion, defaults, and availability semantics", timeout, async () => {
@@ -169,8 +188,9 @@ test("sync audit rejects missing ids and preserves Error and non-Error 502 respo
 });
 
 test("job start keeps normalization, 202, and the 12s/8s dependency fallbacks", timeout, async (context) => {
-  type StartInput = Parameters<NeteaseImportAuditRouterDependencies["startNeteaseImportAuditJob"]>[0];
-  type StartDependencies = Parameters<NeteaseImportAuditRouterDependencies["startNeteaseImportAuditJob"]>[1];
+  type StartInput = Parameters<NeteaseImportAuditRouterDependencies["startNeteaseImportAuditJob"]>[1];
+  type StartDependencies = Parameters<NeteaseImportAuditRouterDependencies["startNeteaseImportAuditJob"]>[2];
+  const owners: string[] = [];
   const inputs: StartInput[] = [];
   const startDependencies: StartDependencies[] = [];
   const sourceTrack: TransferTrack = { source: "netease", title: "歌曲", artists: ["歌手"] };
@@ -191,7 +211,8 @@ test("job start keeps normalization, 202, and the 12s/8s dependency fallbacks", 
       artists: ["歌手"]
     }],
     checkNeteaseProviderTrackAvailability: async () => ({ status: "vip_only", reason: "需要 VIP" }),
-    startNeteaseImportAuditJob: (input, jobDependencies) => {
+    startNeteaseImportAuditJob: (ownerKey, input, jobDependencies) => {
+      owners.push(ownerKey);
       inputs.push(input);
       startDependencies.push(jobDependencies);
       return queuedJob;
@@ -199,12 +220,13 @@ test("job start keeps normalization, 202, and the 12s/8s dependency fallbacks", 
   });
 
   await withTestRouter([createNeteaseImportAuditRouter(dependencies)], async ({ requestJson }) => {
-    const explicit = await requestJson("POST", "/api/playlist-transfer/netease-import-audit/jobs", {
+    const explicit = await requestJson("POST", "/api/playlist-transfer/netease-import-audit/jobs?ownerKey=query-attacker", {
       playlistId: "  liked  ",
       playlistName: "  后台歌单  ",
       maxTracks: 1200.9,
       candidateLimit: 0,
-      checkAvailability: true
+      checkAvailability: true,
+      ownerKey: "body-attacker"
     });
     assert.equal(explicit.status, 202);
     assert.deepEqual(explicit.body, { job: queuedJob });
@@ -217,6 +239,8 @@ test("job start keeps normalization, 202, and the 12s/8s dependency fallbacks", 
     });
     assert.equal(defaults.status, 202);
   });
+
+  assert.deepEqual(owners, ["owner-a", "owner-a"]);
 
   assert.deepEqual(inputs, [
     {
@@ -287,15 +311,15 @@ test("job start rejects a missing id before starting a job", timeout, async () =
   );
 });
 
-test("job lookup and cancellation pass ids directly without owner checks", timeout, async () => {
-  const calls = { get: [] as string[], cancel: [] as string[] };
+test("job lookup and cancellation pass trusted owners with decoded ids", timeout, async () => {
+  const calls = { get: [] as Array<[string, string]>, cancel: [] as Array<[string, string]> };
   const dependencies = createDependencies({
-    getNeteaseImportAuditJob: (id) => {
-      calls.get.push(id);
+    getNeteaseImportAuditJob: (ownerKey, id) => {
+      calls.get.push([ownerKey, id]);
       return id === "missing" ? null : queuedJob;
     },
-    cancelNeteaseImportAuditJob: (id) => {
-      calls.cancel.push(id);
+    cancelNeteaseImportAuditJob: (ownerKey, id) => {
+      calls.cancel.push([ownerKey, id]);
       return id === "missing" ? null : { ...queuedJob, status: "cancelling" };
     }
   });
@@ -316,15 +340,59 @@ test("job lookup and cancellation pass ids directly without owner checks", timeo
   });
 
   assert.deepEqual(calls, {
-    get: ["job id", "missing"],
-    cancel: ["job id", "missing"]
+    get: [["owner-a", "job id"], ["owner-a", "missing"]],
+    cancel: [["owner-a", "job id"], ["owner-a", "missing"]]
   });
+});
+
+test("all owner-protected audit routes forward identity failures without touching jobs", async () => {
+  const ownerError = new Error("owner lookup failed");
+  let jobCalls = 0;
+  const router = createNeteaseImportAuditRouter(createDependencies({
+    getCurrentUserKey: async () => {
+      throw ownerError;
+    },
+    startNeteaseImportAuditJob: () => {
+      jobCalls += 1;
+      return queuedJob;
+    },
+    getNeteaseImportAuditJob: () => {
+      jobCalls += 1;
+      return queuedJob;
+    },
+    cancelNeteaseImportAuditJob: () => {
+      jobCalls += 1;
+      return queuedJob;
+    }
+  }));
+  const routes = [
+    ["post", "/api/playlist-transfer/netease-import-audit/jobs"],
+    ["get", "/api/playlist-transfer/netease-import-audit/jobs/:id"],
+    ["post", "/api/playlist-transfer/netease-import-audit/jobs/:id/cancel"],
+    ["post", "/api/playlist-transfer/netease-import-audit/jobs/:id/export"],
+    ["post", "/api/playlist-transfer/netease-import-audit/jobs/:id/import/playable"]
+  ] as const;
+  const forwarded: unknown[] = [];
+
+  for (const [method, path] of routes) {
+    const handler = getRouteHandler(router, method, path);
+    await Promise.resolve(handler(
+      { body: { playlistId: "liked" }, params: { id: "job-1" } } as unknown as Request,
+      {} as Response,
+      (error) => {
+        forwarded.push(error);
+      }
+    ));
+  }
+
+  assert.deepEqual(forwarded, routes.map(() => ownerError));
+  assert.equal(jobCalls, 0);
 });
 
 test("export keeps completion gates, default format, and raw string format handling", timeout, async () => {
   const formats: string[] = [];
   const dependencies = createDependencies({
-    getNeteaseImportAuditJob: (id) => {
+    getNeteaseImportAuditJob: (_ownerKey, id) => {
       if (id === "missing") return null;
       if (id === "running") return queuedJob;
       return completedJob;
@@ -356,7 +424,7 @@ test("playable import keeps track filtering result, names, and non-negative skip
   const creates: Array<[string, string[]]> = [];
   const shortAudit = { ...audit, scannedCount: 1 };
   const dependencies = createDependencies({
-    getNeteaseImportAuditJob: (id) => id === "short"
+    getNeteaseImportAuditJob: (_ownerKey, id) => id === "short"
       ? { ...completedJob, result: shortAudit }
       : completedJob,
     createNeteasePlaylistFromTrackIds: async (name, trackIds) => {
@@ -396,7 +464,7 @@ test("playable import preserves missing, incomplete, empty, and provider failure
     result: { ...audit, playableTrackIds: [] }
   };
   const dependencies = createDependencies({
-    getNeteaseImportAuditJob: (id) => {
+    getNeteaseImportAuditJob: (_ownerKey, id) => {
       if (id === "missing") return null;
       if (id === "running") return queuedJob;
       if (id === "empty") return emptyJob;
@@ -428,6 +496,89 @@ test("playable import preserves missing, incomplete, empty, and provider failure
     assert.equal(fallback.status, 400);
     assert.deepEqual(fallback.body, { message: "创建正常歌曲新歌单失败" });
   });
+});
+
+test("all follow-up job operations hide foreign, missing, and legacy-unowned records behind the same 404", timeout, async () => {
+  let currentOwner = "owner-a";
+  let cancelMutations = 0;
+  let formatCalls = 0;
+  let playlistWrites = 0;
+  const resolvedOwners: string[] = [];
+  const dependencies = createDependencies({
+    getCurrentUserKey: async () => {
+      resolvedOwners.push(currentOwner);
+      return currentOwner;
+    },
+    getNeteaseImportAuditJob: (ownerKey, id) => ownerKey === "owner-a" && id === "owned"
+      ? completedJob
+      : null,
+    cancelNeteaseImportAuditJob: (ownerKey, id) => {
+      if (ownerKey === "owner-a" && id === "owned") {
+        cancelMutations += 1;
+        return completedJob;
+      }
+      return null;
+    },
+    formatNeteaseImportAuditJobExport: () => {
+      formatCalls += 1;
+      return { filename: "audit.txt", contentType: "text/plain", content: "audit" };
+    },
+    createNeteasePlaylistFromTrackIds: async () => {
+      playlistWrites += 1;
+      return {
+        playlistId: "new-list",
+        playlistName: "正常歌曲",
+        playlistUrl: "https://music.163.com/playlist?id=new-list",
+        addedCount: 2
+      };
+    }
+  });
+  const notFound = { message: "网易云导入歌单清理任务不存在。" };
+
+  await withTestRouter([createNeteaseImportAuditRouter(dependencies)], async ({ request, requestJson }) => {
+    const owned = await request("/api/playlist-transfer/netease-import-audit/jobs/owned");
+    assert.equal(owned.status, 200);
+
+    currentOwner = "owner-b";
+    const foreignRead = await request(
+      "/api/playlist-transfer/netease-import-audit/jobs/owned?ownerKey=owner-a",
+      { headers: { "x-owner-key": "owner-a" } }
+    );
+    const foreignCancel = await requestJson(
+      "POST",
+      "/api/playlist-transfer/netease-import-audit/jobs/owned/cancel?ownerKey=owner-a",
+      { ownerKey: "owner-a" },
+      { "x-owner-key": "owner-a" }
+    );
+    const foreignExport = await requestJson(
+      "POST",
+      "/api/playlist-transfer/netease-import-audit/jobs/owned/export",
+      { format: "text", ownerKey: "owner-a" }
+    );
+    const foreignImport = await requestJson(
+      "POST",
+      "/api/playlist-transfer/netease-import-audit/jobs/owned/import/playable",
+      { name: "越权歌单", ownerKey: "owner-a" }
+    );
+
+    for (const response of [foreignRead, foreignCancel, foreignExport, foreignImport]) {
+      assert.equal(response.status, 404);
+      assert.deepEqual(response.body, notFound);
+    }
+
+    currentOwner = "owner-a";
+    const missing = await request("/api/playlist-transfer/netease-import-audit/jobs/missing");
+    const legacyUnowned = await request("/api/playlist-transfer/netease-import-audit/jobs/legacy-unowned");
+    for (const response of [missing, legacyUnowned]) {
+      assert.equal(response.status, 404);
+      assert.deepEqual(response.body, notFound);
+    }
+  });
+
+  assert.deepEqual(resolvedOwners, ["owner-a", "owner-b", "owner-b", "owner-b", "owner-b", "owner-a", "owner-a"]);
+  assert.equal(cancelMutations, 0);
+  assert.equal(formatCalls, 0);
+  assert.equal(playlistWrites, 0);
 });
 
 test("unknown paths, unsupported methods, and compare routes pass to later handlers", timeout, async () => {

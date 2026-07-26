@@ -11,9 +11,9 @@ const unavailableTrack = {
   }
 };
 
-async function waitForJob(id: string, status: "completed" | "cancelled" | "failed") {
+async function waitForJob(ownerKey: string, id: string, status: "completed" | "cancelled" | "failed") {
   for (let index = 0; index < 20; index += 1) {
-    const job = getNeteaseImportAuditJob(id);
+    const job = getNeteaseImportAuditJob(ownerKey, id);
     if (job?.status === status) {
       return job;
     }
@@ -25,6 +25,7 @@ async function waitForJob(id: string, status: "completed" | "cancelled" | "faile
 
 test("startNeteaseImportAuditJob runs in background and stores completed result", async () => {
   const job = startNeteaseImportAuditJob(
+    "owner-a",
     {
       playlistId: "liked",
       playlistName: "我喜欢的音乐",
@@ -56,7 +57,7 @@ test("startNeteaseImportAuditJob runs in background and stores completed result"
   );
 
   assert.equal(job.status, "queued");
-  const completed = await waitForJob(job.id, "completed");
+  const completed = await waitForJob("owner-a", job.id, "completed");
 
   assert.equal(completed.status, "completed");
   assert.equal(completed.progress.scanned, 1);
@@ -65,6 +66,7 @@ test("startNeteaseImportAuditJob runs in background and stores completed result"
 
 test("cancelNeteaseImportAuditJob marks running jobs for cancellation", async () => {
   const job = startNeteaseImportAuditJob(
+    "owner-a",
     {
       playlistId: "liked",
       playlistName: "我喜欢的音乐",
@@ -91,11 +93,77 @@ test("cancelNeteaseImportAuditJob marks running jobs for cancellation", async ()
     }
   );
 
-  const cancelling = cancelNeteaseImportAuditJob(job.id);
+  const cancelling = cancelNeteaseImportAuditJob("owner-a", job.id);
   assert.equal(cancelling?.status, "cancelling");
 
-  const cancelled = await waitForJob(job.id, "cancelled");
+  const cancelled = await waitForJob("owner-a", job.id, "cancelled");
   assert.equal(cancelled.status, "cancelled");
+});
+
+test("jobs keep their creation owner private and reject cross-owner reads and cancellation", async () => {
+  let signalLoadStarted: (() => void) | undefined;
+  let releaseLoad: (() => void) | undefined;
+  const loadStarted = new Promise<void>((resolve) => {
+    signalLoadStarted = resolve;
+  });
+  const loadReleased = new Promise<void>((resolve) => {
+    releaseLoad = resolve;
+  });
+  let currentOwner = "owner-a";
+
+  const job = startNeteaseImportAuditJob(
+    currentOwner,
+    {
+      playlistId: "liked",
+      playlistName: "我喜欢的音乐",
+      maxTracks: 10,
+      candidateLimit: 3,
+      checkAvailability: false
+    },
+    {
+      loadEntries: async () => {
+        signalLoadStarted?.();
+        await loadReleased;
+        return [];
+      },
+      searchCandidates: async () => []
+    }
+  );
+
+  assert.equal(Object.prototype.hasOwnProperty.call(job, "ownerKey"), false);
+  await loadStarted;
+  currentOwner = "owner-b";
+
+  assert.equal(getNeteaseImportAuditJob(currentOwner, job.id), null);
+  assert.equal(cancelNeteaseImportAuditJob(currentOwner, job.id), null);
+  assert.equal(getNeteaseImportAuditJob("owner-a", job.id)?.status, "loading");
+
+  releaseLoad?.();
+  const completed = await waitForJob("owner-a", job.id, "completed");
+  assert.equal(completed.status, "completed");
+  assert.equal(Object.prototype.hasOwnProperty.call(completed, "ownerKey"), false);
+});
+
+test("legacy ownerless jobs fail closed", () => {
+  const job = startNeteaseImportAuditJob(
+    "",
+    {
+      playlistId: "legacy",
+      playlistName: "旧任务",
+      maxTracks: 1,
+      candidateLimit: 1,
+      checkAvailability: false
+    },
+    {
+      loadEntries: async () => [],
+      searchCandidates: async () => []
+    }
+  );
+
+  assert.equal(getNeteaseImportAuditJob("owner-a", job.id), null);
+  assert.equal(getNeteaseImportAuditJob("", job.id), null);
+  assert.equal(cancelNeteaseImportAuditJob("owner-a", job.id), null);
+  assert.equal(cancelNeteaseImportAuditJob("", job.id), null);
 });
 
 test("formatNeteaseImportAuditJobExport includes normal playable text playlist", () => {

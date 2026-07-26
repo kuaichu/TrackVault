@@ -253,6 +253,7 @@ app.use(createPlaylistTransferJobRouter({
 }));
 
 app.use(createNeteaseImportAuditRouter({
+  getCurrentUserKey,
   loadNeteasePlaylistAuditEntries,
   buildNeteaseImportedPlaylistAudit,
   searchNeteaseProviderTracksByTitle,
@@ -265,6 +266,7 @@ app.use(createNeteaseImportAuditRouter({
 }));
 
 app.use(createPlaylistCompareRouter({
+  getCurrentUserKey,
   loadNeteasePlaylistTransferTracks,
   loadQqPlaylistTransferTracks,
   startPlaylistCompareJob,

@@ -13,41 +13,76 @@ const rightTracks: TransferTrack[] = [
   { source: "qq", sourceTrackId: "r2", title: "右边独有", artists: ["B"] }
 ];
 
-async function waitForJob(id: string, status: "completed" | "failed") {
-  for (let index = 0; index < 20; index += 1) {
-    const job = getPlaylistCompareJob(id);
-    if (job?.status === status) {
-      return job;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+const compareInput = {
+  leftProvider: "netease" as const,
+  leftPlaylistId: "left",
+  leftPlaylistName: "左歌单",
+  rightProvider: "qq" as const,
+  rightPlaylistId: "right",
+  rightPlaylistName: "右歌单"
+};
 
-  throw new Error(`job did not reach ${status}`);
+function createDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function nextEventLoopTurn() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 test("startPlaylistCompareJob updates progress and stores completed result", async () => {
+  const bothLoadsStarted = createDeferred();
+  const releaseLoads = createDeferred();
+  let loadCount = 0;
   const job = startPlaylistCompareJob(
+    "owner-a",
+    compareInput,
     {
-      leftProvider: "netease",
-      leftPlaylistId: "left",
-      leftPlaylistName: "左歌单",
-      rightProvider: "qq",
-      rightPlaylistId: "right",
-      rightPlaylistName: "右歌单"
-    },
-    {
-      loadSideTracks: async (provider) => (provider === "netease" ? leftTracks : rightTracks)
+      loadSideTracks: async (provider) => {
+        loadCount += 1;
+        if (loadCount === 2) {
+          bothLoadsStarted.resolve();
+        }
+        await releaseLoads.promise;
+        return provider === "netease" ? leftTracks : rightTracks;
+      }
     }
   );
 
   assert.equal(job.status, "queued");
+  assert.equal("ownerKey" in job, false);
+  assert.equal(getPlaylistCompareJob("owner-b", job.id), null);
 
-  const completed = await waitForJob(job.id, "completed");
+  await bothLoadsStarted.promise;
+  assert.equal(getPlaylistCompareJob("owner-a", job.id)?.status, "loading");
+  releaseLoads.resolve();
+  await nextEventLoopTurn();
 
-  assert.equal(completed.status, "completed");
-  assert.equal(completed.progress.phase, "completed");
-  assert.equal(completed.progress.processed, leftTracks.length);
-  assert.equal(completed.result?.summary.exact, 1);
-  assert.equal(completed.result?.summary.leftOnly, 1);
-  assert.equal(completed.result?.summary.rightOnly, 1);
+  const completed = getPlaylistCompareJob("owner-a", job.id);
+
+  assert.equal(completed?.status, "completed");
+  assert.equal(completed?.progress.phase, "completed");
+  assert.equal(completed?.progress.processed, leftTracks.length);
+  assert.equal(completed?.result?.summary.exact, 1);
+  assert.equal(completed?.result?.summary.leftOnly, 1);
+  assert.equal(completed?.result?.summary.rightOnly, 1);
+  assert.equal(getPlaylistCompareJob("owner-b", job.id), null);
+  assert.equal(getPlaylistCompareJob("owner-a", "missing"), null);
+  assert.equal(getPlaylistCompareJob("owner-a", job.id), completed);
+});
+
+test("legacy ownerless jobs remain inaccessible to every identity", async () => {
+  const job = startPlaylistCompareJob("", compareInput, {
+    loadSideTracks: async () => []
+  });
+
+  assert.equal(getPlaylistCompareJob("owner-a", job.id), null);
+  assert.equal(getPlaylistCompareJob("owner-b", job.id), null);
+  assert.equal(getPlaylistCompareJob("", job.id), null);
+
+  await nextEventLoopTurn();
 });

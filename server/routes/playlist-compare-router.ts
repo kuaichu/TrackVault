@@ -11,6 +11,7 @@ import type { loadQqPlaylistTransferTracks } from "../playlist-transfer/qq-provi
 import type { TransferTrack } from "../playlist-transfer/types.js";
 
 export type PlaylistCompareRouterDependencies = {
+  getCurrentUserKey: () => Promise<string>;
   loadNeteasePlaylistTransferTracks: typeof loadNeteasePlaylistTransferTracks;
   loadQqPlaylistTransferTracks: typeof loadQqPlaylistTransferTracks;
   startPlaylistCompareJob: typeof startPlaylistCompareJob;
@@ -83,7 +84,7 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
     throw new Error("歌单对比暂只支持网易云歌单和 QQ 音乐公开歌单。");
   }
 
-  router.post("/api/playlist-transfer/compare/jobs", (request, response) => {
+  router.post("/api/playlist-transfer/compare/jobs", async (request, response, next) => {
     const input = normalizeCompareInput(request.body);
 
     if (!input.leftPlaylistId || !input.rightPlaylistId) {
@@ -91,21 +92,31 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
       return;
     }
 
-    const job = dependencies.startPlaylistCompareJob(input, {
-      loadSideTracks: loadCompareSideTracks
-    });
+    try {
+      const ownerKey = await dependencies.getCurrentUserKey();
+      const job = dependencies.startPlaylistCompareJob(ownerKey, input, {
+        loadSideTracks: loadCompareSideTracks
+      });
 
-    response.status(202).json({ job });
+      response.status(202).json({ job });
+    } catch (error) {
+      next(error);
+    }
   });
 
-  router.get("/api/playlist-transfer/compare/jobs/:id", (request, response) => {
-    const job = dependencies.getPlaylistCompareJob(request.params.id);
-    if (!job) {
-      response.status(404).json({ message: "歌单对比进度任务不存在" });
-      return;
-    }
+  router.get("/api/playlist-transfer/compare/jobs/:id", async (request, response, next) => {
+    try {
+      const ownerKey = await dependencies.getCurrentUserKey();
+      const job = dependencies.getPlaylistCompareJob(ownerKey, request.params.id);
+      if (!job) {
+        response.status(404).json({ message: "歌单对比进度任务不存在" });
+        return;
+      }
 
-    response.json({ job });
+      response.json({ job });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.post("/api/playlist-transfer/compare", async (request, response) => {

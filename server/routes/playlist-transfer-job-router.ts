@@ -19,7 +19,7 @@ export type PlaylistTransferJobRouterDependencies = {
   searchTargetTracks: CreatePlaylistTransferDeps["searchTargetTracks"];
   checkAvailability: NonNullable<CreatePlaylistTransferDeps["checkAvailability"]>;
   saveJob: CreatePlaylistTransferDeps["saveJob"];
-  getPlaylistTransferRunJob: (id: string) => PlaylistTransferRunJob | null;
+  getPlaylistTransferRunJob: (ownerKey: string, id: string) => PlaylistTransferRunJob | null;
   getPlaylistTransferJob: (ownerKey: string, id: string) => Promise<PlaylistTransferJob | null>;
   formatTransferExport: (job: PlaylistTransferJob, format: string) => TransferExportResult;
   getNeteaseImportTrackIds: (job: PlaylistTransferJob) => string[];
@@ -77,14 +77,19 @@ export function createPlaylistTransferJobRouter(dependencies: PlaylistTransferJo
     response.status(202).json({ job });
   });
 
-  router.get("/api/playlist-transfer/jobs/progress/:id", (request, response) => {
-    const job = dependencies.getPlaylistTransferRunJob(request.params.id);
-    if (!job) {
-      response.status(404).json({ message: "歌单互转进度任务不存在" });
-      return;
-    }
+  router.get("/api/playlist-transfer/jobs/progress/:id", async (request, response, next) => {
+    try {
+      const ownerKey = await dependencies.getCurrentUserKey();
+      const job = dependencies.getPlaylistTransferRunJob(ownerKey, request.params.id);
+      if (!job) {
+        response.status(404).json({ message: "歌单互转进度任务不存在" });
+        return;
+      }
 
-    response.json({ job });
+      response.json({ job });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.get("/api/playlist-transfer/jobs/:id", async (request, response) => {

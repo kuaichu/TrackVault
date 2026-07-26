@@ -31,6 +31,7 @@ export type NeteaseImportAuditJob = {
 };
 
 type InternalJob = NeteaseImportAuditJob & {
+  ownerKey: string;
   cancelRequested: boolean;
 };
 
@@ -47,7 +48,7 @@ function nowIso() {
 }
 
 function publicJob(job: InternalJob): NeteaseImportAuditJob {
-  const { cancelRequested: _cancelRequested, ...rest } = job;
+  const { cancelRequested: _cancelRequested, ownerKey: _ownerKey, ...rest } = job;
   return rest;
 }
 
@@ -137,10 +138,11 @@ async function runJob(job: InternalJob, deps: NeteaseImportAuditJobDeps) {
   }
 }
 
-export function startNeteaseImportAuditJob(input: NeteaseImportAuditJobInput, deps: NeteaseImportAuditJobDeps) {
+export function startNeteaseImportAuditJob(ownerKey: string, input: NeteaseImportAuditJobInput, deps: NeteaseImportAuditJobDeps) {
   const createdAt = nowIso();
   const job: InternalJob = {
     id: crypto.randomUUID(),
+    ownerKey,
     status: "queued",
     input,
     progress: {
@@ -164,14 +166,14 @@ export function startNeteaseImportAuditJob(input: NeteaseImportAuditJobInput, de
   return publicJob(job);
 }
 
-export function getNeteaseImportAuditJob(id: string) {
+export function getNeteaseImportAuditJob(ownerKey: string, id: string) {
   const job = jobs.get(id);
-  return job ? publicJob(job) : null;
+  return ownerKey && job?.ownerKey && job.ownerKey === ownerKey ? publicJob(job) : null;
 }
 
-export function cancelNeteaseImportAuditJob(id: string) {
+export function cancelNeteaseImportAuditJob(ownerKey: string, id: string) {
   const job = jobs.get(id);
-  if (!job) {
+  if (!ownerKey || !job?.ownerKey || job.ownerKey !== ownerKey) {
     return null;
   }
 

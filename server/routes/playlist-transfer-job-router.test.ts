@@ -44,8 +44,7 @@ const runJob: PlaylistTransferRunJob = {
   input: {
     sourceProvider: "qq",
     targetProvider: "netease",
-    playlistId: "source-list",
-    ownerKey: "server-owner"
+    playlistId: "source-list"
   },
   progress: {
     phase: "queued",
@@ -291,17 +290,18 @@ test("progress start does not convert a synchronous start failure", timeout, asy
   );
 });
 
-test("progress reads pass id, wrap existing jobs, return fixed 404, and never resolve owner", timeout, async () => {
-  const ids: string[] = [];
+test("progress reads pass server owner and id while hiding foreign and missing jobs behind the same 404", timeout, async () => {
+  const lookups: Array<[string, string]> = [];
   let ownerCalls = 0;
+  let currentOwner = "server-owner";
   const dependencies = createDependencies({
     getCurrentUserKey: async () => {
       ownerCalls += 1;
-      return "server-owner";
+      return currentOwner;
     },
-    getPlaylistTransferRunJob: (id) => {
-      ids.push(id);
-      return id === "run-1" ? runJob : null;
+    getPlaylistTransferRunJob: (ownerKey, id) => {
+      lookups.push([ownerKey, id]);
+      return ownerKey === "server-owner" && id === "run-1" ? runJob : null;
     }
   });
 
@@ -310,13 +310,50 @@ test("progress reads pass id, wrap existing jobs, return fixed 404, and never re
     assert.equal(found.status, 200);
     assert.deepEqual(found.body, { job: runJob });
 
+    currentOwner = "other-owner";
+    const foreign = await request("/api/playlist-transfer/jobs/progress/run-1");
+    assert.equal(foreign.status, 404);
+    assert.deepEqual(foreign.body, { message: "歌单互转进度任务不存在" });
+
+    currentOwner = "server-owner";
     const missing = await request("/api/playlist-transfer/jobs/progress/missing");
     assert.equal(missing.status, 404);
     assert.deepEqual(missing.body, { message: "歌单互转进度任务不存在" });
   });
 
-  assert.deepEqual(ids, ["run-1", "missing"]);
-  assert.equal(ownerCalls, 0);
+  assert.deepEqual(lookups, [
+    ["server-owner", "run-1"],
+    ["other-owner", "run-1"],
+    ["server-owner", "missing"]
+  ]);
+  assert.equal(ownerCalls, 3);
+});
+
+test("progress reads forward identity resolution failures to the error boundary", async () => {
+  const ownerError = new Error("owner lookup failed");
+  let lookups = 0;
+  let forwarded: unknown;
+  const router = createPlaylistTransferJobRouter(createDependencies({
+    getCurrentUserKey: async () => {
+      throw ownerError;
+    },
+    getPlaylistTransferRunJob: () => {
+      lookups += 1;
+      return runJob;
+    }
+  }));
+  const handler = getRouteHandler(router, "get", "/api/playlist-transfer/jobs/progress/:id");
+
+  await Promise.resolve(handler(
+    { params: { id: "run-1" } } as unknown as Request,
+    {} as Response,
+    (error) => {
+      forwarded = error;
+    }
+  ));
+
+  assert.equal(forwarded, ownerError);
+  assert.equal(lookups, 0);
 });
 
 test("persisted reads pass owner and id, return bare jobs, and use the fixed 404", timeout, async () => {
@@ -739,7 +776,8 @@ test("route boundaries distinguish progress and persisted ids and pass audit, co
   const calls = { progress: [] as string[], persisted: [] as string[] };
   const dependencies = createDependencies({
     getCurrentUserKey: async () => "server-owner",
-    getPlaylistTransferRunJob: (id) => {
+    getPlaylistTransferRunJob: (ownerKey, id) => {
+      assert.equal(ownerKey, "server-owner");
       calls.progress.push(id);
       return runJob;
     },

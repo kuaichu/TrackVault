@@ -10,6 +10,7 @@ import type {
   PlaylistCompareSide
 } from "../playlist-transfer/playlist-compare.js";
 import type { TransferExportFormat, TransferExportResult, TransferTrack } from "../playlist-transfer/types.js";
+import { getClientSessionId } from "../request-context.js";
 import {
   createPlaylistCompareRouter,
   type PlaylistCompareRouterDependencies
@@ -101,6 +102,7 @@ function createDependencies(
   overrides: Partial<PlaylistCompareRouterDependencies> = {}
 ): PlaylistCompareRouterDependencies {
   return {
+    getCurrentUserKey: async () => unexpectedDependency("getCurrentUserKey"),
     loadNeteasePlaylistTransferTracks: async () => unexpectedDependency("loadNeteasePlaylistTransferTracks"),
     loadQqPlaylistTransferTracks: async () => unexpectedDependency("loadQqPlaylistTransferTracks"),
     startPlaylistCompareJob: () => unexpectedDependency("startPlaylistCompareJob"),
@@ -127,10 +129,12 @@ function getPostHandler(router: Router, path: string): RequestHandler {
 }
 
 test("job start shares normalization, injects exact provider loading, and permits invalid providers", timeout, async () => {
+  const ownerKeys: string[] = [];
   const inputs: PlaylistCompareRequest[] = [];
   let loadSideTracks: ((provider: string, playlistId: string) => Promise<TransferTrack[]>) | undefined;
   const providerCalls: Array<[string, string]> = [];
   const dependencies = createDependencies({
+    getCurrentUserKey: async () => "trusted-owner",
     loadNeteasePlaylistTransferTracks: async (playlistId) => {
       providerCalls.push(["netease", playlistId]);
       return [leftTrack];
@@ -139,7 +143,8 @@ test("job start shares normalization, injects exact provider loading, and permit
       providerCalls.push(["qq", playlistId]);
       return [rightTrack];
     },
-    startPlaylistCompareJob: (input, jobDependencies) => {
+    startPlaylistCompareJob: (ownerKey, input, jobDependencies) => {
+      ownerKeys.push(ownerKey);
       inputs.push(input);
       loadSideTracks = jobDependencies.loadSideTracks;
       return queuedJob;
@@ -153,7 +158,8 @@ test("job start shares normalization, injects exact provider loading, and permit
       leftPlaylistName: " 左侧名称 ",
       rightProvider: " invalid-provider ",
       rightPlaylistId: " right-list ",
-      rightPlaylistName: "   "
+      rightPlaylistName: "   ",
+      ownerKey: "forged-owner"
     });
 
     assert.equal(response.status, 202);
@@ -188,6 +194,7 @@ test("job start shares normalization, injects exact provider loading, and permit
       rightPlaylistName: "右侧歌单 right-2"
     }
   ]);
+  assert.deepEqual(ownerKeys, ["trusted-owner", "trusted-owner"]);
 
   assert.ok(loadSideTracks);
   assert.deepEqual(await loadSideTracks("netease", " netease-id "), [leftTrack]);
@@ -205,8 +212,13 @@ test("job start shares normalization, injects exact provider loading, and permit
 });
 
 test("job start only rejects missing ids and leaves start errors to the next error boundary", timeout, async () => {
+  let identityReads = 0;
   let starts = 0;
   const dependencies = createDependencies({
+    getCurrentUserKey: async () => {
+      identityReads += 1;
+      return "server-owner";
+    },
     startPlaylistCompareJob: () => {
       starts += 1;
       throw new Error("start failed");
@@ -243,28 +255,49 @@ test("job start only rejects missing ids and leaves start errors to the next err
   });
 
   assert.equal(starts, 1);
+  assert.equal(identityReads, 1);
 });
 
-test("job lookup passes the id directly and keeps the owner-free 200/404 responses", timeout, async () => {
-  const ids: string[] = [];
+test("job lookup scopes ids to request identity and conceals cross-owner jobs as missing", timeout, async () => {
+  const lookups: Array<[string, string]> = [];
   const dependencies = createDependencies({
-    getPlaylistCompareJob: (id) => {
-      ids.push(id);
-      return id === queuedJob.id ? queuedJob : null;
+    getCurrentUserKey: async () => `guest:${getClientSessionId()}`,
+    getPlaylistCompareJob: (ownerKey, id) => {
+      lookups.push([ownerKey, id]);
+      return ownerKey === "guest:owner-a" && id === queuedJob.id ? queuedJob : null;
     }
   });
 
   await withTestRouter([createPlaylistCompareRouter(dependencies)], async ({ request }) => {
-    const found = await request(`/api/playlist-transfer/compare/jobs/${queuedJob.id}`);
+    const found = await request(`/api/playlist-transfer/compare/jobs/${queuedJob.id}`, {
+      headers: { "x-client-session-id": "owner-a" }
+    });
     assert.equal(found.status, 200);
     assert.deepEqual(found.body, { job: queuedJob });
 
-    const missing = await request("/api/playlist-transfer/compare/jobs/missing");
+    const concealed = await request(`/api/playlist-transfer/compare/jobs/${queuedJob.id}`, {
+      headers: { "x-client-session-id": "owner-b" }
+    });
+    assert.equal(concealed.status, 404);
+    assert.deepEqual(concealed.body, { message: "歌单对比进度任务不存在" });
+
+    const foundAfterIdentitySwitch = await request(`/api/playlist-transfer/compare/jobs/${queuedJob.id}?sid=owner-a`);
+    assert.equal(foundAfterIdentitySwitch.status, 200);
+    assert.deepEqual(foundAfterIdentitySwitch.body, { job: queuedJob });
+
+    const missing = await request("/api/playlist-transfer/compare/jobs/missing", {
+      headers: { "x-client-session-id": "owner-a" }
+    });
     assert.equal(missing.status, 404);
     assert.deepEqual(missing.body, { message: "歌单对比进度任务不存在" });
   });
 
-  assert.deepEqual(ids, [queuedJob.id, "missing"]);
+  assert.deepEqual(lookups, [
+    ["guest:owner-a", queuedJob.id],
+    ["guest:owner-b", queuedJob.id],
+    ["guest:owner-a", queuedJob.id],
+    ["guest:owner-a", "missing"]
+  ]);
 });
 
 test("sync compare starts both provider loads in parallel and forwards complete normalized sides", timeout, async () => {
