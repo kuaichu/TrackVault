@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { registerTerminalRoutes } from "./http-terminal-routes.js";
 import { getAlbumProfile } from "./album-provider.js";
 import { getCurrentUserKey, getSession, loginSession, logoutSession } from "./account-store.js";
 import { requireAdminAuth } from "./admin-auth.js";
@@ -59,9 +60,10 @@ import { comparePlaylists, formatPlaylistCompareExport } from "./playlist-transf
 import { getPlaylistTransferRunJob, startPlaylistTransferRunJob } from "./playlist-transfer/playlist-transfer-job.js";
 import { addNeteaseTrackIdsToExistingPlaylist, checkNeteaseProviderTrackAvailability, createNeteasePlaylistFromTrackIds, loadNeteasePlaylistAuditEntries, loadNeteasePlaylistTransferTracks, searchNeteaseProviderTracks, searchNeteaseProviderTracksByTitle } from "./playlist-transfer/netease-provider.js";
 import { loadQqPlaylistTransferTracks, searchQqProviderTracks } from "./playlist-transfer/qq-provider.js";
+import { createPlaylistTransferRuntime } from "./playlist-transfer/runtime.js";
 import { createPlaylistTransferJob, getNeteaseImportTrackIds, getQqImportTrackMids } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
-import type { MatchCandidate, TransferExportFormat, TransferImportRequest, TransferTargetProvider, TransferTrack } from "./playlist-transfer/types.js";
+import type { TransferExportFormat } from "./playlist-transfer/types.js";
 
 const app = express();
 const port = 3010;
@@ -223,65 +225,22 @@ app.use(createAccountRouter({
   loginWithNeteaseCellphone
 }));
 
-async function searchTransferTargetTracks(track: TransferTrack, targetProvider: TransferTargetProvider) {
-  if ((targetProvider === "netease" || targetProvider === "qq") && track.source === targetProvider && track.sourceTrackId) {
-    return [{
-      provider: targetProvider,
-      id: track.sourceTrackId,
-      title: track.title,
-      artists: track.artists,
-      album: track.album,
-      durationSeconds: track.durationSeconds
-    }];
-  }
-
-  if (targetProvider === "netease") {
-    return searchNeteaseProviderTracks(track);
-  }
-
-  if (targetProvider === "qq") {
-    return searchQqProviderTracks(track);
-  }
-
-  return [];
-}
-
-async function loadTransferSourceTracks(input: TransferImportRequest) {
-  if (input.sourceProvider === "netease") {
-    if (!input.playlistId) {
-      throw new Error("缺少网易云歌单 ID");
-    }
-
-    return loadNeteasePlaylistTransferTracks(input.playlistId);
-  }
-
-  if (input.sourceProvider === "qq") {
-    if (!input.playlistId) {
-      throw new Error("缺少 QQ 音乐歌单 ID");
-    }
-
-    return loadQqPlaylistTransferTracks(input.playlistId);
-  }
-
-  return [];
-}
-
-async function checkTransferTargetAvailability(candidate: MatchCandidate) {
-  if (candidate.provider === "netease") {
-    return checkNeteaseProviderTrackAvailability(candidate);
-  }
-
-  return null;
-}
+const playlistTransferRuntime = createPlaylistTransferRuntime({
+  searchNeteaseProviderTracks,
+  searchQqProviderTracks,
+  loadNeteasePlaylistTransferTracks,
+  loadQqPlaylistTransferTracks,
+  checkNeteaseProviderTrackAvailability
+});
 
 app.use(createPlaylistTransferJobRouter({
   getCurrentUserKey,
   listPlaylistTransferJobs,
   createPlaylistTransferJob,
   startPlaylistTransferRunJob,
-  loadSourceTracks: (input) => loadTransferSourceTracks(input),
-  searchTargetTracks: searchTransferTargetTracks,
-  checkAvailability: checkTransferTargetAvailability,
+  loadSourceTracks: playlistTransferRuntime.loadSourceTracks,
+  searchTargetTracks: playlistTransferRuntime.searchTargetTracks,
+  checkAvailability: playlistTransferRuntime.checkAvailability,
   saveJob: savePlaylistTransferJob,
   getPlaylistTransferRunJob,
   getPlaylistTransferJob,
@@ -314,14 +273,7 @@ app.use(createPlaylistCompareRouter({
   formatPlaylistCompareExport
 }));
 
-app.get("/assets/*", (_request, response) => {
-  response.status(404).json({ message: "静态资源不存在，请刷新页面获取最新版本。" });
-});
-
-app.get("*", (_request, response) => {
-  response.setHeader("Cache-Control", "no-store");
-  response.sendFile(path.join(clientDistDir, "index.html"));
-});
+registerTerminalRoutes(app, clientDistDir);
 
 app.listen(port, () => {
   console.log(`Server listening on http://localhost:${port}`);
