@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { NextFunction, Request, Response, Router } from "express";
 import type { NeteaseImportedPlaylistAudit } from "../playlist-transfer/netease-import-audit.js";
 import type { NeteaseImportAuditJob } from "../playlist-transfer/netease-import-audit-job.js";
 import type { MatchCandidate, TransferTrack } from "../playlist-transfer/types.js";
@@ -90,23 +89,6 @@ function createDependencies(
     createNeteasePlaylistFromTrackIds: async () => unexpectedDependency("createNeteasePlaylistFromTrackIds"),
     ...overrides
   };
-}
-
-type RouteLayer = {
-  route?: {
-    path: string;
-    methods: Record<string, boolean>;
-    stack: Array<{
-      handle: (request: Request, response: Response, next: NextFunction) => unknown;
-    }>;
-  };
-};
-
-function getRouteHandler(router: Router, method: string, path: string) {
-  const { stack } = router as unknown as { stack: RouteLayer[] };
-  const layer = stack.find((candidate) => candidate.route?.path === path && candidate.route.methods[method]);
-  assert.ok(layer?.route, `Expected ${method.toUpperCase()} ${path} route`);
-  return layer.route.stack[0].handle;
 }
 
 test("sync audit keeps direct Number conversion, defaults, and availability semantics", timeout, async () => {
@@ -345,12 +327,11 @@ test("job lookup and cancellation pass trusted owners with decoded ids", timeout
   });
 });
 
-test("all owner-protected audit routes forward identity failures without touching jobs", async () => {
-  const ownerError = new Error("owner lookup failed");
+test("all owner-protected audit routes return the same clear 4xx for identity failures", timeout, async () => {
   let jobCalls = 0;
   const router = createNeteaseImportAuditRouter(createDependencies({
     getCurrentUserKey: async () => {
-      throw ownerError;
+      throw new Error("owner lookup failed");
     },
     startNeteaseImportAuditJob: () => {
       jobCalls += 1;
@@ -365,27 +346,19 @@ test("all owner-protected audit routes forward identity failures without touchin
       return queuedJob;
     }
   }));
-  const routes = [
-    ["post", "/api/playlist-transfer/netease-import-audit/jobs"],
-    ["get", "/api/playlist-transfer/netease-import-audit/jobs/:id"],
-    ["post", "/api/playlist-transfer/netease-import-audit/jobs/:id/cancel"],
-    ["post", "/api/playlist-transfer/netease-import-audit/jobs/:id/export"],
-    ["post", "/api/playlist-transfer/netease-import-audit/jobs/:id/import/playable"]
-  ] as const;
-  const forwarded: unknown[] = [];
-
-  for (const [method, path] of routes) {
-    const handler = getRouteHandler(router, method, path);
-    await Promise.resolve(handler(
-      { body: { playlistId: "liked" }, params: { id: "job-1" } } as unknown as Request,
-      {} as Response,
-      (error) => {
-        forwarded.push(error);
-      }
-    ));
-  }
-
-  assert.deepEqual(forwarded, routes.map(() => ownerError));
+  await withTestRouter([router], async ({ request, requestJson }) => {
+    const responses = await Promise.all([
+      requestJson("POST", "/api/playlist-transfer/netease-import-audit/jobs", { playlistId: "liked" }),
+      request("/api/playlist-transfer/netease-import-audit/jobs/job-1"),
+      requestJson("POST", "/api/playlist-transfer/netease-import-audit/jobs/job-1/cancel", {}),
+      requestJson("POST", "/api/playlist-transfer/netease-import-audit/jobs/job-1/export", {}),
+      requestJson("POST", "/api/playlist-transfer/netease-import-audit/jobs/job-1/import/playable", {})
+    ]);
+    for (const response of responses) {
+      assert.equal(response.status, 400);
+      assert.deepEqual(response.body, { message: "无法确认后台任务所属身份。" });
+    }
+  });
   assert.equal(jobCalls, 0);
 });
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import { getDatabase, isSqliteAvailable, readJsonStore, updateJsonStore } from "./database.js";
 import { getClientSessionId } from "./request-context.js";
 import type { AdminConfig, AdminConfigUpdate, AdminConfigView, AppSettings, AppSettingsUpdate, PublicAppSettings } from "./types.js";
+import { clearStoredAccountSession } from "./account-session-snapshot.js";
 
 const dataDir = path.resolve(process.env.TRACKVAULT_DATA_DIR?.trim() || path.join(process.cwd(), "data"));
 const legacySettingsPath = path.join(dataDir, "settings.json");
@@ -190,6 +191,10 @@ export async function saveSettings(input: AppSettingsUpdate): Promise<AppSetting
   const settingsKey = getSettingsKey();
   const currentSettings = await getSettingsByKey(settingsKey);
   const nextSettings = mergeSettingsUpdate(currentSettings, input);
+
+  if (currentSettings.neteaseCookie !== nextSettings.neteaseCookie) {
+    await clearStoredAccountSession();
+  }
 
   if (!isSqliteAvailable()) {
     updateJsonStore((store) => {

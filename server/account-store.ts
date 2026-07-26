@@ -1,15 +1,17 @@
-import fs from "node:fs/promises";
 import { createRequire } from "node:module";
-import path from "node:path";
 import { getClientSessionId, runWithRequestContext } from "./request-context.js";
 import { clearNeteaseCookie, getSettings } from "./settings-store.js";
+import {
+  clearStoredAccountSession,
+  readStoredAccountSession,
+  writeStoredAccountSession
+} from "./account-session-snapshot.js";
 import { findMembershipExpireAt, formatMembershipExpireText } from "./membership-utils.js";
 import { invalidateCredentialWrites } from "./credential-write-guard.js";
 import type { AccountProfile, AuthSession } from "./types.js";
 
 const require = createRequire(import.meta.url);
 const { login_status, vip_info, vip_info_v2 } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
-const dataDir = path.resolve(process.env.TRACKVAULT_DATA_DIR?.trim() || path.join(process.cwd(), "data"));
 
 type LoginStatusBody = {
   data?: {
@@ -42,14 +44,6 @@ const emptySession: AuthSession = {
   loggedIn: false,
   profile: null
 };
-
-async function ensureDataDir() {
-  await fs.mkdir(dataDir, { recursive: true });
-}
-
-function getSessionPath() {
-  return path.join(dataDir, `account-session.${getClientSessionId()}.json`);
-}
 
 function isVip(vipType: number | undefined) {
   return typeof vipType === "number" && vipType > 0;
@@ -139,11 +133,10 @@ export async function getSessionForClientSessionId(clientSessionId: string): Pro
 }
 
 export async function getSession(): Promise<AuthSession> {
-  await ensureDataDir();
-
   try {
     const neteaseSession = await getNeteaseSession();
     if (neteaseSession) {
+      await writeStoredAccountSession(neteaseSession);
       return neteaseSession;
     }
   } catch (error) {
@@ -154,13 +147,7 @@ export async function getSession(): Promise<AuthSession> {
     // Without a Netease credential, the explicit local demo session remains valid.
   }
 
-  try {
-    const raw = await fs.readFile(getSessionPath(), "utf8");
-    return JSON.parse(raw) as AuthSession;
-  } catch {
-    await fs.writeFile(getSessionPath(), JSON.stringify(emptySession, null, 2), "utf8");
-    return emptySession;
-  }
+  return readStoredAccountSession();
 }
 
 export async function loginSession(input: {
@@ -186,16 +173,14 @@ export async function loginSession(input: {
     profile
   };
 
-  await ensureDataDir();
-  await fs.writeFile(getSessionPath(), JSON.stringify(session, null, 2), "utf8");
+  await writeStoredAccountSession(session);
   return session;
 }
 
 export async function logoutSession(): Promise<AuthSession> {
-  await ensureDataDir();
   await invalidateCredentialWrites("netease", async () => {
     await clearNeteaseCookie();
-    await fs.writeFile(getSessionPath(), JSON.stringify(emptySession, null, 2), "utf8");
+    await clearStoredAccountSession();
   });
   return emptySession;
 }

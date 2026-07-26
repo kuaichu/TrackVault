@@ -64,6 +64,7 @@ import { createPlaylistTransferRuntime } from "./playlist-transfer/runtime.js";
 import { createPlaylistTransferJob, getNeteaseImportTrackIds, getQqImportTrackMids } from "./playlist-transfer/service.js";
 import { getPlaylistTransferJob, listPlaylistTransferJobs, savePlaylistTransferJob } from "./playlist-transfer/store.js";
 import type { TransferExportFormat } from "./playlist-transfer/types.js";
+import { getBackgroundJobOwnerKey } from "./background-job-owner.js";
 
 const app = express();
 const port = 3010;
@@ -234,7 +235,7 @@ const playlistTransferRuntime = createPlaylistTransferRuntime({
 });
 
 app.use(createPlaylistTransferJobRouter({
-  getCurrentUserKey,
+  getCurrentUserKey: getBackgroundJobOwnerKey,
   listPlaylistTransferJobs,
   createPlaylistTransferJob,
   startPlaylistTransferRunJob,
@@ -253,7 +254,7 @@ app.use(createPlaylistTransferJobRouter({
 }));
 
 app.use(createNeteaseImportAuditRouter({
-  getCurrentUserKey,
+  getCurrentUserKey: getBackgroundJobOwnerKey,
   loadNeteasePlaylistAuditEntries,
   buildNeteaseImportedPlaylistAudit,
   searchNeteaseProviderTracksByTitle,
@@ -266,7 +267,7 @@ app.use(createNeteaseImportAuditRouter({
 }));
 
 app.use(createPlaylistCompareRouter({
-  getCurrentUserKey,
+  getCurrentUserKey: getBackgroundJobOwnerKey,
   loadNeteasePlaylistTransferTracks,
   loadQqPlaylistTransferTracks,
   startPlaylistCompareJob,

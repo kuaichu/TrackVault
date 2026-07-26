@@ -20,6 +20,7 @@ const {
 } = await import("./settings-store.js");
 const { runWithRequestContext } = await import("./request-context.js");
 const { getSession, loginSession, logoutSession } = await import("./account-store.js");
+const { readStoredAccountSession } = await import("./account-session-snapshot.js");
 const { clearOwnedQqQrSessions, getQqMusicCookieForStorage, logoutQqMusicSession } = await import("./qqmusic-auth.js");
 const { createQqMusicRuntimeController } = await import("./qqmusic-provider.js");
 const { CredentialWriteCancelledError, createCredentialWriteGuardRegistry } = await import("./credential-write-guard.js");
@@ -171,6 +172,21 @@ test("Netease logout clears the local session and only the current SID credentia
     const settings = await getSettings();
     assert.equal(settings.neteaseCookie, "MUSIC_U=keep-b");
     assert.equal(settings.qqMusicCookie, "uin=12; qm_keyst=keep-b");
+  });
+});
+
+test("replacing or clearing a Netease Cookie invalidates the local owner snapshot", async () => {
+  await runWithRequestContext("netease-owner-snapshot", async () => {
+    await loginSession({ accountName: "Old local owner", vipEnabled: false, note: "test" });
+    assert.equal((await readStoredAccountSession()).loggedIn, true);
+
+    await saveSettings({ neteaseCookie: "MUSIC_U=replacement" });
+    assert.deepEqual(await readStoredAccountSession(), { loggedIn: false, profile: null });
+
+    await loginSession({ accountName: "Temporary owner", vipEnabled: false, note: "test" });
+    assert.equal((await readStoredAccountSession()).loggedIn, true);
+    await saveSettings({ clearNeteaseCookie: true });
+    assert.deepEqual(await readStoredAccountSession(), { loggedIn: false, profile: null });
   });
 });
 

@@ -74,3 +74,26 @@ test("formatTransferExport creates a markdown report with matched and missing se
   assert.match(output.content, /## 未找到/);
   assert.match(output.content, /缺失歌 - 未知歌手/);
 });
+
+test("JSON export serializes only the public transfer DTO", () => {
+  const privateJob: PlaylistTransferJob = {
+    ...job,
+    ownerKey: "guest:secret-client-session",
+    tracks: job.tracks.map((track, index) => ({
+      ...track,
+      candidates: track.candidates.map((candidate) => ({
+        ...candidate,
+        raw: { credentialDigest: `candidate-secret-${index}` }
+      })),
+      selectedCandidate: track.selectedCandidate
+        ? { ...track.selectedCandidate, raw: { clientSessionId: "secret-client-session" } }
+        : undefined
+    }))
+  };
+
+  const output = formatTransferExport(privateJob, "json");
+  assert.equal(output.filename, "旧收藏-transfer-report.json");
+  assert.equal(output.contentType, "application/json; charset=utf-8");
+  assert.doesNotMatch(output.content, /ownerKey|secret-client-session|credentialDigest|\"raw\"/);
+  assert.equal((JSON.parse(output.content) as { summary: { total: number } }).summary.total, 2);
+});

@@ -570,7 +570,6 @@ export type TransferSummary = {
 
 export type PlaylistTransferJob = {
   id: string;
-  ownerKey?: string;
   sourceProvider: TransferSourceProvider;
   targetProvider: TransferTargetProvider;
   playlistName: string;
@@ -598,7 +597,7 @@ export type PlaylistTransferRunJob = {
     skipped: number;
     currentTitle?: string;
   };
-  result?: Omit<PlaylistTransferJob, "ownerKey">;
+  result?: PlaylistTransferJob;
   error?: string;
   createdAt: string;
   updatedAt: string;

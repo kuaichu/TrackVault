@@ -1,4 +1,4 @@
-import express, { type NextFunction } from "express";
+import express, { type Response } from "express";
 import type { buildNeteaseImportedPlaylistAudit } from "../playlist-transfer/netease-import-audit.js";
 import type {
   cancelNeteaseImportAuditJob,
@@ -13,6 +13,7 @@ import type {
   searchNeteaseProviderTracksByTitle
 } from "../playlist-transfer/netease-provider.js";
 import type { TransferExportFormat } from "../playlist-transfer/types.js";
+import { resolveBackgroundJobOwner } from "./background-job-owner.js";
 
 export type NeteaseImportAuditRouterDependencies = {
   getCurrentUserKey: () => Promise<string>;
@@ -46,13 +47,8 @@ async function withAuditTimeout<T>(operation: Promise<T>, timeoutMs: number, fal
 export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditRouterDependencies) {
   const router = express.Router();
 
-  async function resolveOwner(next: NextFunction) {
-    try {
-      return await dependencies.getCurrentUserKey();
-    } catch (error) {
-      next(error);
-      return null;
-    }
+  async function resolveOwner(response: Response) {
+    return resolveBackgroundJobOwner(dependencies.getCurrentUserKey, response);
   }
 
   router.post("/api/playlist-transfer/netease-import-audit", async (request, response) => {
@@ -90,7 +86,7 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
     }
   });
 
-  router.post("/api/playlist-transfer/netease-import-audit/jobs", async (request, response, next) => {
+  router.post("/api/playlist-transfer/netease-import-audit/jobs", async (request, response) => {
     const playlistId = typeof request.body?.playlistId === "string" ? request.body.playlistId.trim() : "";
     const playlistName = typeof request.body?.playlistName === "string" && request.body.playlistName.trim()
       ? request.body.playlistName.trim()
@@ -104,7 +100,7 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
       return;
     }
 
-    const ownerKey = await resolveOwner(next);
+    const ownerKey = await resolveOwner(response);
     if (ownerKey === null) {
       return;
     }
@@ -135,8 +131,8 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
     response.status(202).json({ job });
   });
 
-  router.get("/api/playlist-transfer/netease-import-audit/jobs/:id", async (request, response, next) => {
-    const ownerKey = await resolveOwner(next);
+  router.get("/api/playlist-transfer/netease-import-audit/jobs/:id", async (request, response) => {
+    const ownerKey = await resolveOwner(response);
     if (ownerKey === null) {
       return;
     }
@@ -149,8 +145,8 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
     response.json({ job });
   });
 
-  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/cancel", async (request, response, next) => {
-    const ownerKey = await resolveOwner(next);
+  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/cancel", async (request, response) => {
+    const ownerKey = await resolveOwner(response);
     if (ownerKey === null) {
       return;
     }
@@ -163,8 +159,8 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
     response.json({ job });
   });
 
-  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/export", async (request, response, next) => {
-    const ownerKey = await resolveOwner(next);
+  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/export", async (request, response) => {
+    const ownerKey = await resolveOwner(response);
     if (ownerKey === null) {
       return;
     }
@@ -183,8 +179,8 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
     response.json(dependencies.formatNeteaseImportAuditJobExport(job.result, format as TransferExportFormat));
   });
 
-  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/import/playable", async (request, response, next) => {
-    const ownerKey = await resolveOwner(next);
+  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/import/playable", async (request, response) => {
+    const ownerKey = await resolveOwner(response);
     if (ownerKey === null) {
       return;
     }

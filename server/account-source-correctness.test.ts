@@ -68,6 +68,12 @@ test("QQ UIN parsing supports wxuin login and data scopes expose no secrets", ()
   assert.doesNotMatch(scope, /synthetic-token-value|marker|guest-token/i);
 });
 
+test("QQ music identity rejects mixed or missing UIN values instead of merging them", () => {
+  assert.equal(extractQqMusicUin("uin=12abc34"), null);
+  assert.equal(extractQqMusicUin("uin=default"), null);
+  assert.equal(extractQqMusicUin("uin=o24680"), "24680");
+});
+
 test("provider mode cannot change the data owner", () => {
   const input = {
     session: { loggedIn: true, profile: { id: "10001", provider: "netease" as const } },

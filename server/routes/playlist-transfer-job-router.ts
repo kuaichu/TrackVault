@@ -2,6 +2,8 @@ import express from "express";
 import type { CreatePlaylistTransferDeps, CreatePlaylistTransferInput } from "../playlist-transfer/service.js";
 import type { PlaylistTransferRunJob } from "../playlist-transfer/playlist-transfer-job.js";
 import type { PlaylistTransferJob, TransferExportResult, TransferImportRequest } from "../playlist-transfer/types.js";
+import { toPublicPlaylistTransferJob } from "../playlist-transfer/public-dto.js";
+import { resolveBackgroundJobOwner } from "./background-job-owner.js";
 
 type PlaylistImportResult = {
   playlistId: string;
@@ -39,12 +41,19 @@ export function createPlaylistTransferJobRouter(dependencies: PlaylistTransferJo
   };
 
   router.get("/api/playlist-transfer/jobs", async (_request, response) => {
-    const ownerKey = await dependencies.getCurrentUserKey();
-    response.json({ jobs: await dependencies.listPlaylistTransferJobs(ownerKey) });
+    const ownerKey = await resolveBackgroundJobOwner(dependencies.getCurrentUserKey, response);
+    if (ownerKey === null) {
+      return;
+    }
+    const jobs = await dependencies.listPlaylistTransferJobs(ownerKey);
+    response.json({ jobs: jobs.map(toPublicPlaylistTransferJob) });
   });
 
   router.post("/api/playlist-transfer/jobs", async (request, response) => {
-    const ownerKey = await dependencies.getCurrentUserKey();
+    const ownerKey = await resolveBackgroundJobOwner(dependencies.getCurrentUserKey, response);
+    if (ownerKey === null) {
+      return;
+    }
     const payload = request.body as TransferImportRequest;
 
     try {
@@ -55,7 +64,7 @@ export function createPlaylistTransferJobRouter(dependencies: PlaylistTransferJo
         },
         createDependencies
       );
-      response.status(201).json(job);
+      response.status(201).json(toPublicPlaylistTransferJob(job));
     } catch (error) {
       response.status(400).json({
         message: error instanceof Error ? error.message : "创建歌单互转任务失败"
@@ -64,7 +73,10 @@ export function createPlaylistTransferJobRouter(dependencies: PlaylistTransferJo
   });
 
   router.post("/api/playlist-transfer/jobs/progress", async (request, response) => {
-    const ownerKey = await dependencies.getCurrentUserKey();
+    const ownerKey = await resolveBackgroundJobOwner(dependencies.getCurrentUserKey, response);
+    if (ownerKey === null) {
+      return;
+    }
     const payload = request.body as TransferImportRequest;
     const job = dependencies.startPlaylistTransferRunJob(
       {
@@ -79,7 +91,10 @@ export function createPlaylistTransferJobRouter(dependencies: PlaylistTransferJo
 
   router.get("/api/playlist-transfer/jobs/progress/:id", async (request, response, next) => {
     try {
-      const ownerKey = await dependencies.getCurrentUserKey();
+      const ownerKey = await resolveBackgroundJobOwner(dependencies.getCurrentUserKey, response);
+      if (ownerKey === null) {
+        return;
+      }
       const job = dependencies.getPlaylistTransferRunJob(ownerKey, request.params.id);
       if (!job) {
         response.status(404).json({ message: "歌单互转进度任务不存在" });
@@ -93,18 +108,24 @@ export function createPlaylistTransferJobRouter(dependencies: PlaylistTransferJo
   });
 
   router.get("/api/playlist-transfer/jobs/:id", async (request, response) => {
-    const ownerKey = await dependencies.getCurrentUserKey();
+    const ownerKey = await resolveBackgroundJobOwner(dependencies.getCurrentUserKey, response);
+    if (ownerKey === null) {
+      return;
+    }
     const job = await dependencies.getPlaylistTransferJob(ownerKey, request.params.id);
     if (!job) {
       response.status(404).json({ message: "歌单互转任务不存在" });
       return;
     }
 
-    response.json(job);
+    response.json(toPublicPlaylistTransferJob(job));
   });
 
   router.post("/api/playlist-transfer/jobs/:id/export", async (request, response) => {
-    const ownerKey = await dependencies.getCurrentUserKey();
+    const ownerKey = await resolveBackgroundJobOwner(dependencies.getCurrentUserKey, response);
+    if (ownerKey === null) {
+      return;
+    }
     const job = await dependencies.getPlaylistTransferJob(ownerKey, request.params.id);
     if (!job) {
       response.status(404).json({ message: "歌单互转任务不存在" });
@@ -116,7 +137,10 @@ export function createPlaylistTransferJobRouter(dependencies: PlaylistTransferJo
   });
 
   router.post("/api/playlist-transfer/jobs/:id/import/netease", async (request, response) => {
-    const ownerKey = await dependencies.getCurrentUserKey();
+    const ownerKey = await resolveBackgroundJobOwner(dependencies.getCurrentUserKey, response);
+    if (ownerKey === null) {
+      return;
+    }
     const job = await dependencies.getPlaylistTransferJob(ownerKey, request.params.id);
     if (!job) {
       response.status(404).json({ message: "歌单互转任务不存在" });
@@ -149,7 +173,10 @@ export function createPlaylistTransferJobRouter(dependencies: PlaylistTransferJo
   });
 
   router.post("/api/playlist-transfer/jobs/:id/import/qq", async (request, response) => {
-    const ownerKey = await dependencies.getCurrentUserKey();
+    const ownerKey = await resolveBackgroundJobOwner(dependencies.getCurrentUserKey, response);
+    if (ownerKey === null) {
+      return;
+    }
     const job = await dependencies.getPlaylistTransferJob(ownerKey, request.params.id);
     if (!job) {
       response.status(404).json({ message: "歌单互转任务不存在" });

@@ -80,6 +80,37 @@ export type PlaylistTransferJob = {
   updatedAt: string;
 };
 
+export type PublicMatchCandidate = {
+  provider: "netease" | "qq";
+  targetTrackId: string;
+  title: string;
+  artists: string[];
+  album?: string;
+  durationSeconds?: number;
+  availability?: ProviderTrack["availability"];
+  confidenceScore: number;
+  reasons: string[];
+};
+
+export type PublicTransferTrackResult = {
+  sourceTrack: TransferTrack;
+  status: TransferTrackStatus;
+  candidates: PublicMatchCandidate[];
+  selectedCandidate?: PublicMatchCandidate;
+  reason?: string;
+};
+
+export type PublicPlaylistTransferJob = {
+  id: string;
+  sourceProvider: TransferSourceProvider;
+  targetProvider: TransferTargetProvider;
+  playlistName: string;
+  tracks: PublicTransferTrackResult[];
+  summary: TransferSummary;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type TransferImportRequest = {
   sourceProvider: TransferSourceProvider;
   targetProvider: TransferTargetProvider;

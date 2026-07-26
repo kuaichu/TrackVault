@@ -300,6 +300,26 @@ test("job lookup scopes ids to request identity and conceals cross-owner jobs as
   ]);
 });
 
+test("compare progress polling returns a clear 4xx when owner identity cannot be resolved", timeout, async () => {
+  let lookups = 0;
+  const dependencies = createDependencies({
+    getCurrentUserKey: async () => {
+      throw new Error("owner lookup failed");
+    },
+    getPlaylistCompareJob: () => {
+      lookups += 1;
+      return queuedJob;
+    }
+  });
+
+  await withTestRouter([createPlaylistCompareRouter(dependencies)], async ({ request }) => {
+    const response = await request(`/api/playlist-transfer/compare/jobs/${queuedJob.id}`);
+    assert.equal(response.status, 400);
+    assert.deepEqual(response.body, { message: "无法确认后台任务所属身份。" });
+  });
+  assert.equal(lookups, 0);
+});
+
 test("sync compare starts both provider loads in parallel and forwards complete normalized sides", timeout, async () => {
   const leftDeferred = createDeferred<TransferTrack[]>();
   const rightDeferred = createDeferred<TransferTrack[]>();

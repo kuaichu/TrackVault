@@ -164,10 +164,13 @@ export async function importNeteaseCookie(cookie: string): Promise<NeteaseCookie
     return checkResult;
   }
 
-  await runCredentialWriteIfCurrent(credentialGuard, () => saveSettings({
-    providerMode: "netease",
-    neteaseCookie: cookie
-  }));
+  await runCredentialWriteIfCurrent(credentialGuard, async () => {
+    await saveSettings({
+      providerMode: "netease",
+      neteaseCookie: cookie
+    });
+    await getSession();
+  });
   return checkResult;
 }
 

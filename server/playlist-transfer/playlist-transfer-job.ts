@@ -6,7 +6,8 @@ import {
   type PlaylistTransferProgress,
   type PlaylistTransferProgressPhase
 } from "./service.js";
-import type { PlaylistTransferJob } from "./types.js";
+import { toPublicPlaylistTransferJob, toPublicTransferImportRequest } from "./public-dto.js";
+import type { PublicPlaylistTransferJob } from "./types.js";
 
 export type PlaylistTransferRunJobStatus = "queued" | "loading" | "running" | "saving" | "completed" | "failed";
 
@@ -21,7 +22,7 @@ export type PlaylistTransferRunJob = {
   status: PlaylistTransferRunJobStatus;
   input: Omit<CreatePlaylistTransferInput, "ownerKey">;
   progress: PlaylistTransferRunProgress;
-  result?: Omit<PlaylistTransferJob, "ownerKey">;
+  result?: PublicPlaylistTransferJob;
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -91,10 +92,9 @@ async function runJob(storedJob: StoredPlaylistTransferRunJob, deps: CreatePlayl
       }
     });
 
-    const { ownerKey: _resultOwnerKey, ...publicResult } = result;
     updateJob(job, {
       status: "completed",
-      result: publicResult,
+      result: toPublicPlaylistTransferJob(result),
       progress: {
         ...job.progress,
         phase: "completed",
@@ -116,7 +116,8 @@ async function runJob(storedJob: StoredPlaylistTransferRunJob, deps: CreatePlayl
 
 export function startPlaylistTransferRunJob(input: CreatePlaylistTransferInput, deps: CreatePlaylistTransferDeps) {
   const createdAt = nowIso();
-  const { ownerKey, ...publicInput } = input;
+  const { ownerKey } = input;
+  const publicInput = toPublicTransferImportRequest(input);
   const job: PlaylistTransferRunJob = {
     id: crypto.randomUUID(),
     status: "queued",

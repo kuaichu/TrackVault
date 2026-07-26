@@ -41,8 +41,8 @@ export function extractQqMusicUin(cookie: string) {
   const rawUin = Number(values.get("login_type")) === 2
     ? values.get("wxuin") || values.get("uin")
     : values.get("uin") || values.get("wxuin");
-  const digits = (rawUin || "").replace(/\D/g, "");
-  return digits || null;
+  const match = (rawUin || "").trim().match(/^o?(\d+)$/);
+  return match?.[1] ?? null;
 }
 
 export function resolveDataScopeId(input: {

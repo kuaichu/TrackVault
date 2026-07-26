@@ -9,6 +9,7 @@ import type {
 import type { loadNeteasePlaylistTransferTracks } from "../playlist-transfer/netease-provider.js";
 import type { loadQqPlaylistTransferTracks } from "../playlist-transfer/qq-provider.js";
 import type { TransferTrack } from "../playlist-transfer/types.js";
+import { resolveBackgroundJobOwner } from "./background-job-owner.js";
 
 export type PlaylistCompareRouterDependencies = {
   getCurrentUserKey: () => Promise<string>;
@@ -93,7 +94,10 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
     }
 
     try {
-      const ownerKey = await dependencies.getCurrentUserKey();
+      const ownerKey = await resolveBackgroundJobOwner(dependencies.getCurrentUserKey, response);
+      if (ownerKey === null) {
+        return;
+      }
       const job = dependencies.startPlaylistCompareJob(ownerKey, input, {
         loadSideTracks: loadCompareSideTracks
       });
@@ -106,7 +110,10 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
 
   router.get("/api/playlist-transfer/compare/jobs/:id", async (request, response, next) => {
     try {
-      const ownerKey = await dependencies.getCurrentUserKey();
+      const ownerKey = await resolveBackgroundJobOwner(dependencies.getCurrentUserKey, response);
+      if (ownerKey === null) {
+        return;
+      }
       const job = dependencies.getPlaylistCompareJob(ownerKey, request.params.id);
       if (!job) {
         response.status(404).json({ message: "歌单对比进度任务不存在" });

@@ -1,4 +1,5 @@
 import type { PlaylistTransferJob, TransferExportFormat, TransferExportResult, TransferTrackResult } from "./types.js";
+import { toPublicPlaylistTransferJob } from "./public-dto.js";
 
 function artistsText(artists: string[]) {
   return artists.length > 0 ? artists.join(" / ") : "未知歌手";
@@ -121,7 +122,7 @@ export function formatTransferExport(job: PlaylistTransferJob, format: TransferE
     return {
       filename: `${job.playlistName}-transfer-report.json`,
       contentType: "application/json; charset=utf-8",
-      content: JSON.stringify(job, null, 2)
+      content: JSON.stringify(toPublicPlaylistTransferJob(job), null, 2)
     };
   }
 

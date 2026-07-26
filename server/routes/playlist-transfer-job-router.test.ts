@@ -9,6 +9,8 @@ import {
   type PlaylistTransferJobRouterDependencies
 } from "./playlist-transfer-job-router.js";
 import { withTestRouter } from "./router-test-http.js";
+import { createBackgroundJobOwnerResolver } from "../background-job-owner.js";
+import { getRequiredClientSessionId } from "../request-context.js";
 
 const timeout = { timeout: 5_000 };
 
@@ -37,6 +39,8 @@ const qqJob: PlaylistTransferJob = {
   id: "job-qq",
   targetProvider: "qq"
 };
+
+const { ownerKey: _neteaseOwnerKey, ...publicNeteaseJob } = neteaseJob;
 
 const runJob: PlaylistTransferRunJob = {
   id: "run-1",
@@ -117,11 +121,14 @@ test("job list uses the current owner and returns only the jobs envelope", timeo
   });
 
   await withTestRouter([createPlaylistTransferJobRouter(dependencies)], async ({ request }) => {
-    const response = await request("/api/playlist-transfer/jobs?ownerKey=attacker", {
-      headers: { "x-owner-key": "header-attacker" }
+    const response = await request("/api/playlist-transfer/jobs?ownerKey=attacker&dataScopeId=account%3Anetease%3Aattacker", {
+      headers: {
+        "x-owner-key": "header-attacker",
+        "x-data-scope-id": "account:qqmusic:attacker"
+      }
     });
     assert.equal(response.status, 200);
-    assert.deepEqual(response.body, { jobs: [neteaseJob] });
+    assert.deepEqual(response.body, { jobs: [publicNeteaseJob] });
   });
 
   assert.deepEqual(owners, ["server-owner"]);
@@ -154,13 +161,14 @@ test("sync creation overwrites owner, preserves payload, and returns a bare job 
     sourceTrackIds: ["source-1"],
     text: "raw text",
     checkAvailability: true,
-    ownerKey: "attacker"
+    ownerKey: "attacker",
+    dataScopeId: "account:netease:attacker"
   };
 
   await withTestRouter([createPlaylistTransferJobRouter(dependencies)], async ({ requestJson }) => {
     const response = await requestJson("POST", "/api/playlist-transfer/jobs", payload);
     assert.equal(response.status, 201);
-    assert.deepEqual(response.body, neteaseJob);
+    assert.deepEqual(response.body, publicNeteaseJob);
     assert.equal(Object.prototype.hasOwnProperty.call(response.body, "job"), false);
   });
 
@@ -205,7 +213,7 @@ test("sync creation keeps Error and non-Error failures at 400", timeout, async (
   });
 });
 
-test("sync creation leaves current-owner failures outside its 400 conversion", timeout, async () => {
+test("sync creation reports current-owner failures as a clear 4xx", timeout, async () => {
   let createCalls = 0;
   const router = createPlaylistTransferJobRouter(createDependencies({
     getCurrentUserKey: async () => {
@@ -216,13 +224,39 @@ test("sync creation leaves current-owner failures outside its 400 conversion", t
       return neteaseJob;
     }
   }));
-  const handler = getRouteHandler(router, "post", "/api/playlist-transfer/jobs");
-
-  await assert.rejects(
-    Promise.resolve(handler({ body: {} } as Request, {} as Response, () => undefined)),
-    /owner lookup failed/
-  );
+  await withTestRouter([router], async ({ requestJson }) => {
+    const response = await requestJson("POST", "/api/playlist-transfer/jobs", {
+      sourceProvider: "qq",
+      targetProvider: "netease"
+    });
+    assert.equal(response.status, 400);
+    assert.deepEqual(response.body, { message: "无法确认后台任务所属身份。" });
+  });
   assert.equal(createCalls, 0);
+});
+
+test("protected transfer endpoints reject missing, default, and malformed client SIDs", timeout, async () => {
+  const getCurrentUserKey = createBackgroundJobOwnerResolver({
+    getClientSessionId: getRequiredClientSessionId,
+    readStoredSession: async () => ({ loggedIn: false, profile: null }),
+    getQqMusicCookie: async () => ""
+  });
+  const router = createPlaylistTransferJobRouter(createDependencies({
+    getCurrentUserKey,
+    listPlaylistTransferJobs: async () => []
+  }));
+
+  await withTestRouter([router], async ({ request }) => {
+    const responses = await Promise.all([
+      request("/api/playlist-transfer/jobs"),
+      request("/api/playlist-transfer/jobs", { headers: { "x-client-session-id": "default" } }),
+      request("/api/playlist-transfer/jobs", { headers: { "x-client-session-id": "bad!sid" } })
+    ]);
+    for (const response of responses) {
+      assert.equal(response.status, 400);
+      assert.deepEqual(response.body, { message: "缺少或无效的客户端会话标识。" });
+    }
+  });
 });
 
 test("progress start overwrites owner and returns the synchronously created job with 202", timeout, async () => {
@@ -329,30 +363,22 @@ test("progress reads pass server owner and id while hiding foreign and missing j
   assert.equal(ownerCalls, 3);
 });
 
-test("progress reads forward identity resolution failures to the error boundary", async () => {
-  const ownerError = new Error("owner lookup failed");
+test("progress reads report identity resolution failures as a clear 4xx", timeout, async () => {
   let lookups = 0;
-  let forwarded: unknown;
   const router = createPlaylistTransferJobRouter(createDependencies({
     getCurrentUserKey: async () => {
-      throw ownerError;
+      throw new Error("owner lookup failed");
     },
     getPlaylistTransferRunJob: () => {
       lookups += 1;
       return runJob;
     }
   }));
-  const handler = getRouteHandler(router, "get", "/api/playlist-transfer/jobs/progress/:id");
-
-  await Promise.resolve(handler(
-    { params: { id: "run-1" } } as unknown as Request,
-    {} as Response,
-    (error) => {
-      forwarded = error;
-    }
-  ));
-
-  assert.equal(forwarded, ownerError);
+  await withTestRouter([router], async ({ request }) => {
+    const response = await request("/api/playlist-transfer/jobs/progress/run-1");
+    assert.equal(response.status, 400);
+    assert.deepEqual(response.body, { message: "无法确认后台任务所属身份。" });
+  });
   assert.equal(lookups, 0);
 });
 
@@ -369,7 +395,7 @@ test("persisted reads pass owner and id, return bare jobs, and use the fixed 404
   await withTestRouter([createPlaylistTransferJobRouter(dependencies)], async ({ request }) => {
     const found = await request(`/api/playlist-transfer/jobs/${neteaseJob.id}`);
     assert.equal(found.status, 200);
-    assert.deepEqual(found.body, neteaseJob);
+    assert.deepEqual(found.body, publicNeteaseJob);
     assert.equal(Object.prototype.hasOwnProperty.call(found.body, "job"), false);
 
     const missing = await request("/api/playlist-transfer/jobs/missing");
@@ -794,7 +820,7 @@ test("route boundaries distinguish progress and persisted ids and pass audit, co
 
     const persisted = await request("/api/playlist-transfer/jobs/persisted-7");
     assert.equal(persisted.status, 200);
-    assert.deepEqual(persisted.body, neteaseJob);
+    assert.deepEqual(persisted.body, publicNeteaseJob);
 
     const passthroughRequests = [
       await requestJson("POST", "/api/playlist-transfer/netease-import-audit", {}),

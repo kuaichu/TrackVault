@@ -57,20 +57,50 @@ import { isMediaMemoryLimitExceededError, readResponseBytesWithLimit } from "./m
 const CLIENT_SESSION_STORAGE_KEY = "trackvault:client-session-id";
 const STREAM_URL_VERSION = "2";
 
-function getClientSessionId() {
-  try {
-    const existing = window.localStorage.getItem(CLIENT_SESSION_STORAGE_KEY);
-    if (existing) {
-      return existing;
+type ClientSessionIdAccessorDependencies = {
+  readStored: () => string | null;
+  writeStored: (value: string) => void;
+  randomUUID: () => string;
+};
+
+function isValidClientSessionId(value: string | null): value is string {
+  return value !== null
+    && /^[a-zA-Z0-9_-]{1,64}$/.test(value)
+    && value.toLowerCase() !== "default";
+}
+
+export function createClientSessionIdAccessor(dependencies: ClientSessionIdAccessorDependencies) {
+  let memorySessionId: string | null = null;
+  return function getClientSessionId() {
+    if (memorySessionId) {
+      return memorySessionId;
     }
 
-    const nextValue = crypto.randomUUID();
-    window.localStorage.setItem(CLIENT_SESSION_STORAGE_KEY, nextValue);
-    return nextValue;
-  } catch {
-    return "default";
-  }
+    try {
+      const existing = dependencies.readStored();
+      if (isValidClientSessionId(existing)) {
+        memorySessionId = existing;
+        return memorySessionId;
+      }
+    } catch {
+      // Use one in-memory identity for this page lifecycle.
+    }
+
+    memorySessionId = dependencies.randomUUID();
+    try {
+      dependencies.writeStored(memorySessionId);
+    } catch {
+      // The in-memory UUID remains stable even when storage is unavailable.
+    }
+    return memorySessionId;
+  };
 }
+
+const getClientSessionId = createClientSessionIdAccessor({
+  readStored: () => window.localStorage.getItem(CLIENT_SESSION_STORAGE_KEY),
+  writeStored: (value) => window.localStorage.setItem(CLIENT_SESSION_STORAGE_KEY, value),
+  randomUUID: () => crypto.randomUUID()
+});
 
 async function apiFetch(input: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers ?? {});

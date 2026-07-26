@@ -35,11 +35,17 @@ export async function savePlaylistTransferJob(job: PlaylistTransferJob) {
 }
 
 export async function listPlaylistTransferJobs(ownerKey: string) {
+  if (!ownerKey) {
+    return [];
+  }
   const jobs = await readJobs();
-  return jobs.filter((job) => job.ownerKey === ownerKey);
+  return jobs.filter((job) => Boolean(job.ownerKey) && job.ownerKey === ownerKey);
 }
 
 export async function getPlaylistTransferJob(ownerKey: string, jobId: string) {
+  if (!ownerKey) {
+    return null;
+  }
   const jobs = await readJobs();
-  return jobs.find((job) => job.ownerKey === ownerKey && job.id === jobId) ?? null;
+  return jobs.find((job) => Boolean(job.ownerKey) && job.ownerKey === ownerKey && job.id === jobId) ?? null;
 }

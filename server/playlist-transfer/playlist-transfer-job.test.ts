@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { getPlaylistTransferRunJob, startPlaylistTransferRunJob } from "./playlist-transfer-job.js";
+import type { PlaylistTransferJob } from "./types.js";
 
 async function waitForJob(ownerKey: string, id: string, status: "completed" | "failed") {
   for (let index = 0; index < 20; index += 1) {
@@ -15,6 +16,7 @@ async function waitForJob(ownerKey: string, id: string, status: "completed" | "f
 }
 
 test("startPlaylistTransferRunJob updates progress and stores completed result", async () => {
+  let persistedJob: PlaylistTransferJob | undefined;
   const job = startPlaylistTransferRunJob(
     {
       ownerKey: "session:test",
@@ -31,12 +33,16 @@ test("startPlaylistTransferRunJob updates progress and stores completed result",
                 provider: "netease",
                 id: "n1",
                 title: "非我",
-                artists: ["方山厨子Rex"]
+                artists: ["方山厨子Rex"],
+                raw: { credentialDigest: "provider-secret" }
               }
             ]
           : []
       ),
-      saveJob: async (nextJob) => nextJob
+      saveJob: async (nextJob) => {
+        persistedJob = nextJob;
+        return nextJob;
+      }
     }
   );
 
@@ -49,6 +55,9 @@ test("startPlaylistTransferRunJob updates progress and stores completed result",
   assert.equal(completed.progress.processed, 2);
   assert.equal(completed.result?.summary.matched, 1);
   assert.equal(completed.result?.summary.notFound, 1);
+  assert.equal(persistedJob?.ownerKey, "session:test");
+  assert.deepEqual(persistedJob?.tracks[0]?.candidates[0]?.raw, { credentialDigest: "provider-secret" });
+  assert.doesNotMatch(JSON.stringify(completed.result), /ownerKey|credentialDigest|\"raw\"/);
 });
 
 test("progress jobs remain bound to their server owner while running", async () => {
@@ -62,6 +71,8 @@ test("progress jobs remain bound to their server owner while running", async () 
   });
   const input = {
     ownerKey: "session:owner-a",
+    clientSessionId: "secret-client-session",
+    dataScopeId: "account:netease:attacker",
     sourceProvider: "text" as const,
     targetProvider: "netease" as const,
     playlistName: "归属隔离",
@@ -80,6 +91,8 @@ test("progress jobs remain bound to their server owner while running", async () 
   input.ownerKey = "session:owner-b";
 
   assert.equal("ownerKey" in job.input, false);
+  assert.equal("clientSessionId" in job.input, false);
+  assert.equal("dataScopeId" in job.input, false);
   assert.equal(getPlaylistTransferRunJob("session:owner-a", job.id), job);
   assert.equal(getPlaylistTransferRunJob("session:owner-b", job.id), null);
   assert.equal(getPlaylistTransferRunJob("session:owner-a", "missing"), null);
