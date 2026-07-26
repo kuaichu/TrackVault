@@ -7,6 +7,7 @@ import {
   createNeteaseImportAuditRouter,
   type NeteaseImportAuditRouterDependencies
 } from "./netease-import-audit-router.js";
+import { createBackgroundJobOwnerResolver } from "../background-job-owner.js";
 import { withTestRouter } from "./router-test-http.js";
 
 const timeout = { timeout: 5_000 };
@@ -295,7 +296,16 @@ test("job start rejects a missing id before starting a job", timeout, async () =
 
 test("job lookup and cancellation pass trusted owners with decoded ids", timeout, async () => {
   const calls = { get: [] as Array<[string, string]>, cancel: [] as Array<[string, string]> };
+  const resolveOwner = createBackgroundJobOwnerResolver({
+    getClientSessionId: () => "audit-client",
+    getCredentials: async () => ({ neteaseCookie: "", qqMusicCookie: "verified-cookie" }),
+    readVerifiedIdentityState: async () => ({
+      session: { loggedIn: false, profile: null },
+      qqMusicUin: "70001"
+    })
+  });
   const dependencies = createDependencies({
+    getCurrentUserKey: resolveOwner,
     getNeteaseImportAuditJob: (ownerKey, id) => {
       calls.get.push([ownerKey, id]);
       return id === "missing" ? null : queuedJob;
@@ -307,7 +317,16 @@ test("job lookup and cancellation pass trusted owners with decoded ids", timeout
   });
 
   await withTestRouter([createNeteaseImportAuditRouter(dependencies)], async ({ request, requestJson }) => {
-    const found = await request("/api/playlist-transfer/netease-import-audit/jobs/job%20id");
+    const found = await request(
+      "/api/playlist-transfer/netease-import-audit/jobs/job%20id?ownerKey=attacker&dataScopeId=account%3Aqqmusic%3A99999&uin=99999&profile=victim&provider=qqmusic",
+      {
+        headers: {
+          "x-owner-key": "header-attacker",
+          "x-data-scope-id": "account:netease:header-attacker",
+          "x-qq-uin": "88888"
+        }
+      }
+    );
     assert.equal(found.status, 200);
     assert.deepEqual(found.body, { job: queuedJob });
 
@@ -322,8 +341,8 @@ test("job lookup and cancellation pass trusted owners with decoded ids", timeout
   });
 
   assert.deepEqual(calls, {
-    get: [["owner-a", "job id"], ["owner-a", "missing"]],
-    cancel: [["owner-a", "job id"], ["owner-a", "missing"]]
+    get: [["account:qqmusic:70001", "job id"], ["account:qqmusic:70001", "missing"]],
+    cancel: [["account:qqmusic:70001", "job id"], ["account:qqmusic:70001", "missing"]]
   });
 });
 

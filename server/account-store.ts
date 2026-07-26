@@ -1,14 +1,22 @@
 import { createRequire } from "node:module";
 import { getClientSessionId, runWithRequestContext } from "./request-context.js";
-import { clearNeteaseCookie, getSettings } from "./settings-store.js";
+import { getSettings, saveSettingsWithinCredentialWrite } from "./settings-store.js";
 import {
   clearStoredAccountSession,
   readStoredAccountSession,
-  writeStoredAccountSession
+  writeStoredDemoAccountSession,
+  writeStoredNeteaseAccountSession
 } from "./account-session-snapshot.js";
 import { findMembershipExpireAt, formatMembershipExpireText } from "./membership-utils.js";
-import { invalidateCredentialWrites } from "./credential-write-guard.js";
-import type { AccountProfile, AuthSession } from "./types.js";
+import {
+  captureCredentialWriteGuard,
+  CredentialWriteCancelledError,
+  invalidateCredentialWrites,
+  isCredentialWriteGuardCurrent,
+  runCredentialWriteIfCurrent,
+  type CredentialWriteGuard
+} from "./credential-write-guard.js";
+import type { AccountProfile, AppSettings, AuthSession } from "./types.js";
 
 const require = createRequire(import.meta.url);
 const { login_status, vip_info, vip_info_v2 } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
@@ -49,72 +57,123 @@ function isVip(vipType: number | undefined) {
   return typeof vipType === "number" && vipType > 0;
 }
 
-async function getNeteaseVipExpireAt(accountId: number | undefined, cookie: string) {
-  if (!accountId) {
+type NeteaseApiResponse = { body: unknown };
+
+export type AccountSessionResolverDependencies = {
+  getSettings: () => Promise<AppSettings>;
+  loginStatus: (input: { cookie: string }) => Promise<NeteaseApiResponse>;
+  vipInfo: (input: { uid: number; cookie: string }) => Promise<NeteaseApiResponse>;
+  vipInfoV2: (input: { uid: number; cookie: string }) => Promise<NeteaseApiResponse>;
+  captureCredentialGuard: () => CredentialWriteGuard;
+  isCredentialGuardCurrent: (guard: CredentialWriteGuard) => boolean;
+  runCredentialWriteIfCurrent: typeof runCredentialWriteIfCurrent;
+  readStoredSession: (neteaseCookie: string) => Promise<AuthSession>;
+  writeVerifiedSession: (session: AuthSession, neteaseCookie: string) => Promise<void>;
+};
+
+export function createAccountSessionResolver(dependencies: AccountSessionResolverDependencies) {
+  async function getNeteaseVipExpireAt(accountId: number | undefined, cookie: string) {
+    if (!accountId) {
+      return undefined;
+    }
+
+    const query = { uid: accountId, cookie };
+    const responses = await Promise.allSettled([
+      dependencies.vipInfoV2(query),
+      dependencies.vipInfo(query)
+    ]);
+
+    for (const response of responses) {
+      if (response.status !== "fulfilled") {
+        continue;
+      }
+
+      const expireAt = findMembershipExpireAt(response.value.body);
+      if (expireAt) {
+        return expireAt;
+      }
+    }
+
     return undefined;
   }
 
-  const query = { uid: accountId, cookie };
-  const responses = await Promise.allSettled([
-    vip_info_v2(query),
-    vip_info(query)
-  ]);
+  async function getNeteaseSession(cookie: string): Promise<AuthSession> {
+    const response = await dependencies.loginStatus({ cookie });
+    const body = response.body as LoginStatusBody;
+    const accountId = body.data?.account?.id ?? body.account?.id ?? body.data?.profile?.userId ?? body.profile?.userId;
+    const nickname = body.data?.profile?.nickname ?? body.profile?.nickname;
 
-  for (const response of responses) {
-    if (response.status !== "fulfilled") {
-      continue;
+    if (!accountId) {
+      throw new Error("网易云登录态未返回稳定账号 ID");
     }
 
-    const expireAt = findMembershipExpireAt(response.value.body);
-    if (expireAt) {
-      return expireAt;
+    const vipType = body.data?.profile?.vipType ?? body.profile?.vipType ?? body.data?.account?.vipType ?? body.account?.vipType ?? body.data?.vipType ?? body.vipType ?? 0;
+    const displayName = nickname?.trim() || `UID ${accountId}`;
+    const vipExpireAt = await getNeteaseVipExpireAt(accountId, cookie).catch(() => undefined);
+    const vipExpireText = formatMembershipExpireText(vipExpireAt);
+
+    return {
+      loggedIn: true,
+      profile: {
+        id: String(accountId),
+        displayName,
+        level: isVip(vipType) ? 10 : 0,
+        vipEnabled: isVip(vipType),
+        vipType,
+        vipExpireAt,
+        vipExpireText,
+        avatarUrl: body.data?.profile?.avatarUrl ?? body.profile?.avatarUrl,
+        avatarSeed: displayName.slice(0, 2),
+        provider: "netease",
+        bio: "网易云 Cookie 登录态",
+        favoriteGenres: isVip(vipType) ? ["黑胶 VIP", "网易云音乐"] : ["网易云音乐"],
+        lastLoginAt: new Date().toLocaleString("zh-CN", { hour12: false })
+      }
+    };
+  }
+
+  return async function resolveSession(): Promise<AuthSession> {
+    const credentialGuard = dependencies.captureCredentialGuard();
+    const settings = await dependencies.getSettings();
+    const cookie = settings.neteaseCookie.trim();
+
+    if (!cookie) {
+      return dependencies.readStoredSession("");
     }
-  }
 
-  return undefined;
-}
-
-async function getNeteaseSession(): Promise<AuthSession | null> {
-  const settings = await getSettings();
-  const cookie = settings.neteaseCookie.trim();
-
-  if (!cookie) {
-    return null;
-  }
-
-  const response = await login_status({ cookie });
-  const body = response.body as LoginStatusBody;
-  const accountId = body.data?.account?.id ?? body.account?.id ?? body.data?.profile?.userId ?? body.profile?.userId;
-  const nickname = body.data?.profile?.nickname ?? body.profile?.nickname;
-
-  if (!accountId) {
-    throw new Error("网易云登录态未返回稳定账号 ID");
-  }
-
-  const vipType = body.data?.profile?.vipType ?? body.profile?.vipType ?? body.data?.account?.vipType ?? body.account?.vipType ?? body.data?.vipType ?? body.vipType ?? 0;
-  const displayName = nickname?.trim() || `UID ${accountId}`;
-  const vipExpireAt = await getNeteaseVipExpireAt(accountId, cookie).catch(() => undefined);
-  const vipExpireText = formatMembershipExpireText(vipExpireAt);
-
-  return {
-    loggedIn: true,
-    profile: {
-      id: String(accountId),
-      displayName,
-      level: isVip(vipType) ? 10 : 0,
-      vipEnabled: isVip(vipType),
-      vipType,
-      vipExpireAt,
-      vipExpireText,
-      avatarUrl: body.data?.profile?.avatarUrl ?? body.profile?.avatarUrl,
-      avatarSeed: displayName.slice(0, 2),
-      provider: "netease",
-      bio: "网易云 Cookie 登录态",
-      favoriteGenres: isVip(vipType) ? ["黑胶 VIP", "网易云音乐"] : ["网易云音乐"],
-      lastLoginAt: new Date().toLocaleString("zh-CN", { hour12: false })
+    try {
+      const neteaseSession = await getNeteaseSession(cookie);
+      await dependencies.runCredentialWriteIfCurrent(credentialGuard, async () => {
+        const currentCookie = (await dependencies.getSettings()).neteaseCookie.trim();
+        if (currentCookie !== cookie) {
+          throw new CredentialWriteCancelledError();
+        }
+        await dependencies.writeVerifiedSession(neteaseSession, cookie);
+      });
+      return neteaseSession;
+    } catch (error) {
+      const currentSettings = await dependencies.getSettings();
+      if (error instanceof CredentialWriteCancelledError
+        || !dependencies.isCredentialGuardCurrent(credentialGuard)
+        || currentSettings.neteaseCookie.trim() !== cookie) {
+        return dependencies.readStoredSession(currentSettings.neteaseCookie);
+      }
+      throw error;
     }
   };
 }
+
+const resolveSession = createAccountSessionResolver({
+  getSettings,
+  loginStatus: (input) => login_status(input),
+  vipInfo: (input) => vip_info(input),
+  vipInfoV2: (input) => vip_info_v2(input),
+  captureCredentialGuard: () => captureCredentialWriteGuard("netease"),
+  isCredentialGuardCurrent: isCredentialWriteGuardCurrent,
+  runCredentialWriteIfCurrent,
+  readStoredSession: readStoredAccountSession,
+  writeVerifiedSession: writeStoredNeteaseAccountSession
+});
 
 export async function getCurrentUserKey(): Promise<string> {
   const clientSessionId = getClientSessionId();
@@ -133,21 +192,7 @@ export async function getSessionForClientSessionId(clientSessionId: string): Pro
 }
 
 export async function getSession(): Promise<AuthSession> {
-  try {
-    const neteaseSession = await getNeteaseSession();
-    if (neteaseSession) {
-      await writeStoredAccountSession(neteaseSession);
-      return neteaseSession;
-    }
-  } catch (error) {
-    const settings = await getSettings();
-    if (settings.neteaseCookie.trim()) {
-      throw error;
-    }
-    // Without a Netease credential, the explicit local demo session remains valid.
-  }
-
-  return readStoredAccountSession();
+  return resolveSession();
 }
 
 export async function loginSession(input: {
@@ -173,13 +218,13 @@ export async function loginSession(input: {
     profile
   };
 
-  await writeStoredAccountSession(session);
+  await writeStoredDemoAccountSession(session);
   return session;
 }
 
 export async function logoutSession(): Promise<AuthSession> {
   await invalidateCredentialWrites("netease", async () => {
-    await clearNeteaseCookie();
+    await saveSettingsWithinCredentialWrite({ clearNeteaseCookie: true });
     await clearStoredAccountSession();
   });
   return emptySession;

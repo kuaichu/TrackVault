@@ -1,4 +1,5 @@
 import { getSession } from "./account-store.js";
+import { readStoredVerifiedIdentityState } from "./account-session-snapshot.js";
 import { getClientSessionId } from "./request-context.js";
 import { getSettings } from "./settings-store.js";
 import type { AccountState, AuthSession } from "./types.js";
@@ -47,7 +48,7 @@ export function extractQqMusicUin(cookie: string) {
 
 export function resolveDataScopeId(input: {
   session: DataScopeSession;
-  qqMusicCookie?: string;
+  qqMusicUin?: string | null;
   clientSessionId: string;
 }) {
   const profile = input.session.profile;
@@ -55,9 +56,8 @@ export function resolveDataScopeId(input: {
     return `account:${profile.provider}:${normalizeScopePart(profile.id, "unknown")}`;
   }
 
-  const qqUin = extractQqMusicUin(input.qqMusicCookie ?? "");
-  if (qqUin) {
-    return `account:qqmusic:${qqUin}`;
+  if (input.qqMusicUin && /^\d+$/.test(input.qqMusicUin)) {
+    return `account:qqmusic:${input.qqMusicUin}`;
   }
 
   return `guest:${normalizeScopePart(input.clientSessionId, "default")}`;
@@ -68,9 +68,13 @@ export async function getDataScopeId(sessionOverride?: AuthSession) {
     sessionOverride ? Promise.resolve(sessionOverride) : getSession(),
     getSettings()
   ]);
+  const identityState = await readStoredVerifiedIdentityState({
+    neteaseCookie: settings.neteaseCookie,
+    qqMusicCookie: settings.qqMusicCookie ?? ""
+  });
   return resolveDataScopeId({
     session,
-    qqMusicCookie: settings.qqMusicCookie,
+    qqMusicUin: identityState.qqMusicUin,
     clientSessionId: getClientSessionId()
   });
 }

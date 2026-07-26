@@ -5294,12 +5294,17 @@ export default function App() {
 
       const saved = await refreshSettings();
       if (!saved) {
-        throw new Error("QQ 音乐 Cookie 已验证，但读取保存状态失败。");
+        throw new Error("QQ 音乐 Cookie 已保存，但读取保存状态失败。");
       }
       setSettings(saved);
       setQqCookieInput("");
       await refreshSession();
       void refreshQqMusicAccountStatus(true);
+      if (!result.verified) {
+        setQqLoginMessage(result.message);
+        setMessage(result.message);
+        return;
+      }
       setMessage(result.message || `QQ 音乐 Cookie 已导入：${result.uin ?? "QQ 账号"}`);
       closeQqLogin();
     } catch (error) {

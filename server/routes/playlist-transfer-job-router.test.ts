@@ -238,8 +238,11 @@ test("sync creation reports current-owner failures as a clear 4xx", timeout, asy
 test("protected transfer endpoints reject missing, default, and malformed client SIDs", timeout, async () => {
   const getCurrentUserKey = createBackgroundJobOwnerResolver({
     getClientSessionId: getRequiredClientSessionId,
-    readStoredSession: async () => ({ loggedIn: false, profile: null }),
-    getQqMusicCookie: async () => ""
+    getCredentials: async () => ({ neteaseCookie: "", qqMusicCookie: "" }),
+    readVerifiedIdentityState: async () => ({
+      session: { loggedIn: false, profile: null },
+      qqMusicUin: null
+    })
   });
   const router = createPlaylistTransferJobRouter(createDependencies({
     getCurrentUserKey,
@@ -285,11 +288,19 @@ test("progress start overwrites owner and returns the synchronously created job 
     targetProvider: "netease",
     playlistId: "source-list",
     sourceTrackIds: ["source-1"],
-    ownerKey: "attacker"
+    ownerKey: "attacker",
+    dataScopeId: "account:qqmusic:attacker",
+    uin: "99999",
+    profile: { id: "victim", provider: "netease" },
+    provider: "qqmusic"
   };
 
   await withTestRouter([createPlaylistTransferJobRouter(dependencies)], async ({ requestJson }) => {
-    const response = await requestJson("POST", "/api/playlist-transfer/jobs/progress", payload);
+    const response = await requestJson("POST", "/api/playlist-transfer/jobs/progress", payload, {
+      "x-owner-key": "header-attacker",
+      "x-data-scope-id": "account:netease:header-attacker",
+      "x-qq-uin": "88888"
+    });
     assert.equal(returnedSynchronously, true);
     assert.equal(response.status, 202);
     assert.deepEqual(response.body, { job: runJob });
@@ -328,19 +339,36 @@ test("progress reads pass server owner and id while hiding foreign and missing j
   const lookups: Array<[string, string]> = [];
   let ownerCalls = 0;
   let currentOwner = "server-owner";
-  const dependencies = createDependencies({
-    getCurrentUserKey: async () => {
+  const resolveOwner = createBackgroundJobOwnerResolver({
+    getClientSessionId: () => currentOwner,
+    getCredentials: async () => {
       ownerCalls += 1;
-      return currentOwner;
+      return { neteaseCookie: "", qqMusicCookie: "unverified-cookie" };
     },
+    readVerifiedIdentityState: async () => ({
+      session: { loggedIn: false, profile: null },
+      qqMusicUin: null
+    })
+  });
+  const dependencies = createDependencies({
+    getCurrentUserKey: resolveOwner,
     getPlaylistTransferRunJob: (ownerKey, id) => {
       lookups.push([ownerKey, id]);
-      return ownerKey === "server-owner" && id === "run-1" ? runJob : null;
+      return ownerKey === "guest:server-owner" && id === "run-1" ? runJob : null;
     }
   });
 
   await withTestRouter([createPlaylistTransferJobRouter(dependencies)], async ({ request }) => {
-    const found = await request("/api/playlist-transfer/jobs/progress/run-1?ownerKey=attacker");
+    const found = await request(
+      "/api/playlist-transfer/jobs/progress/run-1?ownerKey=attacker&dataScopeId=account%3Aqqmusic%3A99999&uin=99999&provider=qqmusic&profile=victim",
+      {
+        headers: {
+          "x-owner-key": "header-attacker",
+          "x-data-scope-id": "account:netease:header-attacker",
+          "x-qq-uin": "88888"
+        }
+      }
+    );
     assert.equal(found.status, 200);
     assert.deepEqual(found.body, { job: runJob });
 
@@ -356,9 +384,9 @@ test("progress reads pass server owner and id while hiding foreign and missing j
   });
 
   assert.deepEqual(lookups, [
-    ["server-owner", "run-1"],
-    ["other-owner", "run-1"],
-    ["server-owner", "missing"]
+    ["guest:server-owner", "run-1"],
+    ["guest:other-owner", "run-1"],
+    ["guest:server-owner", "missing"]
   ]);
   assert.equal(ownerCalls, 3);
 });

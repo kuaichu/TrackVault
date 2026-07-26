@@ -26,18 +26,18 @@ function accountSession(provider: "demo" | "netease", id: string): AuthSession {
 
 test("background owner priority is local account, QQ UIN, then strict guest SID", async () => {
   let session = accountSession("netease", "10001");
-  let qqMusicCookie = "uin=o20001";
+  let qqMusicUin: string | null = "20001";
   let localReads = 0;
   let settingsReads = 0;
   const resolveOwner = createBackgroundJobOwnerResolver({
     getClientSessionId: getRequiredClientSessionId,
-    readStoredSession: async () => {
-      localReads += 1;
-      return session;
-    },
-    getQqMusicCookie: async () => {
+    getCredentials: async () => {
       settingsReads += 1;
-      return qqMusicCookie;
+      return { neteaseCookie: "netease", qqMusicCookie: "qq" };
+    },
+    readVerifiedIdentityState: async () => {
+      localReads += 1;
+      return { session, qqMusicUin };
     }
   });
   const resolveFor = (sid: string) => runWithRequestContext(sid, resolveOwner);
@@ -50,10 +50,10 @@ test("background owner priority is local account, QQ UIN, then strict guest SID"
 
   session = emptySession;
   assert.equal(await resolveFor("client-a"), "account:qqmusic:20001");
-  qqMusicCookie = "uin=o20002";
+  qqMusicUin = "20002";
   assert.equal(await resolveFor("client-a"), "account:qqmusic:20002");
 
-  qqMusicCookie = "";
+  qqMusicUin = null;
   assert.equal(await resolveFor("client-a"), "guest:client-a");
   assert.equal(await resolveFor("client-b"), "guest:client-b");
   assert.equal(localReads, 7);
@@ -63,8 +63,8 @@ test("background owner priority is local account, QQ UIN, then strict guest SID"
 test("background owner rejects missing, default, and malformed SIDs", async () => {
   const resolveOwner = createBackgroundJobOwnerResolver({
     getClientSessionId: getRequiredClientSessionId,
-    readStoredSession: async () => emptySession,
-    getQqMusicCookie: async () => ""
+    getCredentials: async () => ({ neteaseCookie: "", qqMusicCookie: "" }),
+    readVerifiedIdentityState: async () => ({ session: emptySession, qqMusicUin: null })
   });
 
   for (const sid of [undefined, "default", "bad!sid"]) {
@@ -76,11 +76,11 @@ test("background owner rejects missing, default, and malformed SIDs", async () =
 });
 
 test("QQ account switch cannot read a job created by the previous account", async () => {
-  let qqMusicCookie = "uin=o30001";
+  let qqMusicUin: string | null = "30001";
   const resolveOwner = createBackgroundJobOwnerResolver({
     getClientSessionId: getRequiredClientSessionId,
-    readStoredSession: async () => emptySession,
-    getQqMusicCookie: async () => qqMusicCookie
+    getCredentials: async () => ({ neteaseCookie: "", qqMusicCookie: "" }),
+    readVerifiedIdentityState: async () => ({ session: emptySession, qqMusicUin })
   });
   const resolveForCurrentAccount = () => runWithRequestContext("shared-browser", resolveOwner);
 
@@ -96,7 +96,7 @@ test("QQ account switch cannot read a job created by the previous account", asyn
     loadSideTracks: async () => []
   });
 
-  qqMusicCookie = "uin=o30002";
+  qqMusicUin = "30002";
   const ownerB = await resolveForCurrentAccount();
   assert.notEqual(ownerA, ownerB);
   assert.equal(getPlaylistCompareJob(ownerB, job.id), null);

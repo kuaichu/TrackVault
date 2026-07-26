@@ -3,7 +3,8 @@ import path from "node:path";
 import { getDatabase, isSqliteAvailable, readJsonStore, updateJsonStore } from "./database.js";
 import { getClientSessionId } from "./request-context.js";
 import type { AdminConfig, AdminConfigUpdate, AdminConfigView, AppSettings, AppSettingsUpdate, PublicAppSettings } from "./types.js";
-import { clearStoredAccountSession } from "./account-session-snapshot.js";
+import { clearStoredAccountSession, clearStoredQqMusicIdentity } from "./account-session-snapshot.js";
+import { invalidateCredentialWrites } from "./credential-write-guard.js";
 
 const dataDir = path.resolve(process.env.TRACKVAULT_DATA_DIR?.trim() || path.join(process.cwd(), "data"));
 const legacySettingsPath = path.join(dataDir, "settings.json");
@@ -30,6 +31,21 @@ const defaultAdminConfig: AdminConfig = {
 };
 
 let initialized = false;
+const settingsMutationQueues = new Map<string, Promise<void>>();
+
+async function enqueueSettingsMutation<T>(settingsKey: string, operation: () => Promise<T> | T): Promise<T> {
+  const previous = settingsMutationQueues.get(settingsKey) ?? Promise.resolve();
+  const result = previous.catch(() => undefined).then(operation);
+  const settled = result.then(() => undefined, () => undefined);
+  settingsMutationQueues.set(settingsKey, settled);
+  try {
+    return await result;
+  } finally {
+    if (settingsMutationQueues.get(settingsKey) === settled) {
+      settingsMutationQueues.delete(settingsKey);
+    }
+  }
+}
 
 function normalizeSettings(input: Partial<AppSettings>): AppSettings {
   return {
@@ -186,16 +202,7 @@ export async function getSettings(): Promise<AppSettings> {
   return normalizeSettings(JSON.parse(row.settings_json) as Partial<AppSettings>);
 }
 
-export async function saveSettings(input: AppSettingsUpdate): Promise<AppSettings> {
-  await initializeSettingsStore();
-  const settingsKey = getSettingsKey();
-  const currentSettings = await getSettingsByKey(settingsKey);
-  const nextSettings = mergeSettingsUpdate(currentSettings, input);
-
-  if (currentSettings.neteaseCookie !== nextSettings.neteaseCookie) {
-    await clearStoredAccountSession();
-  }
-
+async function persistSettings(settingsKey: string, nextSettings: AppSettings): Promise<AppSettings> {
   if (!isSqliteAvailable()) {
     updateJsonStore((store) => {
       store.app_settings ??= {};
@@ -215,6 +222,46 @@ export async function saveSettings(input: AppSettingsUpdate): Promise<AppSetting
 
   upsertStatement.run(settingsKey, JSON.stringify(nextSettings), Date.now());
   return nextSettings;
+}
+
+export async function saveSettingsWithinCredentialWrite(input: AppSettingsUpdate): Promise<AppSettings> {
+  await initializeSettingsStore();
+  const settingsKey = getSettingsKey();
+  return enqueueSettingsMutation(settingsKey, async () => {
+    const currentSettings = await getSettingsByKey(settingsKey);
+    const nextSettings = mergeSettingsUpdate(currentSettings, input);
+    return persistSettings(settingsKey, nextSettings);
+  });
+}
+
+export async function saveSettings(input: AppSettingsUpdate): Promise<AppSettings> {
+  await initializeSettingsStore();
+  const settingsKey = getSettingsKey();
+  const requestsNeteaseCredentialWrite = Boolean(input.neteaseCookie?.trim() || input.clearNeteaseCookie);
+  const requestsQqMusicCredentialWrite = Boolean(input.qqMusicCookie?.trim() || input.clearQqMusicCookie);
+
+  const persistUpdate = () => enqueueSettingsMutation(settingsKey, async () => {
+    const currentSettings = await getSettingsByKey(settingsKey);
+    const nextSettings = mergeSettingsUpdate(currentSettings, input);
+    if (currentSettings.neteaseCookie !== nextSettings.neteaseCookie) {
+      await clearStoredAccountSession();
+    }
+    if (currentSettings.qqMusicCookie !== nextSettings.qqMusicCookie) {
+      await clearStoredQqMusicIdentity();
+    }
+    return persistSettings(settingsKey, nextSettings);
+  });
+
+  if (requestsNeteaseCredentialWrite && requestsQqMusicCredentialWrite) {
+    return invalidateCredentialWrites("netease", () => invalidateCredentialWrites("qqmusic", persistUpdate));
+  }
+  if (requestsNeteaseCredentialWrite) {
+    return invalidateCredentialWrites("netease", persistUpdate);
+  }
+  if (requestsQqMusicCredentialWrite) {
+    return invalidateCredentialWrites("qqmusic", persistUpdate);
+  }
+  return persistUpdate();
 }
 
 export async function clearNeteaseCookie(): Promise<AppSettings> {

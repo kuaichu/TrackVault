@@ -1,7 +1,8 @@
 import { createRequire } from "node:module";
 import { getSession } from "./account-store.js";
-import { saveSettings } from "./settings-store.js";
-import { captureCredentialWriteGuard, isCredentialWriteGuardCurrent, runCredentialWriteIfCurrent, type CredentialWriteGuard } from "./credential-write-guard.js";
+import { clearStoredAccountSession } from "./account-session-snapshot.js";
+import { saveSettingsWithinCredentialWrite } from "./settings-store.js";
+import { beginCredentialWrite, isCredentialWriteGuardCurrent, runCredentialWriteIfCurrent, type CredentialWriteGuard } from "./credential-write-guard.js";
 import { getClientSessionId } from "./request-context.js";
 import { checkNeteaseCookie } from "./task-store.js";
 import type { NeteaseCookieCheckResult } from "./types.js";
@@ -147,36 +148,30 @@ function getNeteaseApiErrorMessage(error: unknown, fallback: string) {
 }
 
 async function persistNeteaseCookie(cookie: string, credentialGuard: CredentialWriteGuard) {
-  return runCredentialWriteIfCurrent(credentialGuard, async () => {
-    await saveSettings({
+  await runCredentialWriteIfCurrent(credentialGuard, async () => {
+    await saveSettingsWithinCredentialWrite({
       providerMode: "netease",
       neteaseCookie: cookie
     });
-
-    return getSession();
+    await clearStoredAccountSession();
   });
+  return getSession();
 }
 
 export async function importNeteaseCookie(cookie: string): Promise<NeteaseCookieCheckResult> {
-  const credentialGuard = captureCredentialWriteGuard("netease");
+  const credentialGuard = await beginCredentialWrite("netease");
   const checkResult = await checkNeteaseCookie(cookie);
   if (!checkResult.ok) {
     return checkResult;
   }
 
-  await runCredentialWriteIfCurrent(credentialGuard, async () => {
-    await saveSettings({
-      providerMode: "netease",
-      neteaseCookie: cookie
-    });
-    await getSession();
-  });
+  await persistNeteaseCookie(cookie, credentialGuard);
   return checkResult;
 }
 
 export async function startNeteaseQrLogin(): Promise<NeteaseQrStartResult> {
   cleanupNeteaseQrSessions();
-  const credentialGuard = captureCredentialWriteGuard("netease");
+  const credentialGuard = await beginCredentialWrite("netease");
   let keyResponse;
   try {
     keyResponse = await login_qr_key(withNeteaseRequestOptions() as any);
@@ -318,7 +313,7 @@ export async function loginWithNeteaseCellphone(phone: string, captcha: string, 
     throw new Error("请输入短信验证码。");
   }
 
-  const credentialGuard = captureCredentialWriteGuard("netease");
+  const credentialGuard = await beginCredentialWrite("netease");
 
   let response;
   try {

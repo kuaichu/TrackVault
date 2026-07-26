@@ -16,6 +16,7 @@ const {
   getSettings,
   mergeSettingsUpdate,
   saveSettings,
+  saveSettingsWithinCredentialWrite,
   toPublicSettings
 } = await import("./settings-store.js");
 const { runWithRequestContext } = await import("./request-context.js");
@@ -146,6 +147,27 @@ test("settings reads, patches, and clears remain isolated between client session
   assert.notEqual(settingsB.notes, "only-a");
 });
 
+test("ordinary settings patches preserve credential writes in either concurrent enqueue order", async () => {
+  await runWithRequestContext("settings-rmw-order", async () => {
+    await saveSettings({ neteaseCookie: "MUSIC_U=A" });
+    await Promise.all([
+      saveSettingsWithinCredentialWrite({ neteaseCookie: "MUSIC_U=B" }),
+      saveSettings({ notes: "ordinary-after-specialized" })
+    ]);
+    let settings = await getSettings();
+    assert.equal(settings.neteaseCookie, "MUSIC_U=B");
+    assert.equal(settings.notes, "ordinary-after-specialized");
+
+    await Promise.all([
+      saveSettings({ notes: "ordinary-before-specialized" }),
+      saveSettingsWithinCredentialWrite({ neteaseCookie: "MUSIC_U=C" })
+    ]);
+    settings = await getSettings();
+    assert.equal(settings.neteaseCookie, "MUSIC_U=C");
+    assert.equal(settings.notes, "ordinary-before-specialized");
+  });
+});
+
 test("Netease logout clears the local session and only the current SID credential", async () => {
   await runWithRequestContext("netease-b", () => saveSettings({
     neteaseCookie: "MUSIC_U=keep-b",
@@ -253,6 +275,7 @@ test("QQ runtime calls serialize SDK-internal cookie refreshes by client session
 test("QQ Cookie import stores the refreshed secret without exposing it in the public result", () => {
   const publicResult = {
     ok: true,
+    verified: true,
     uin: "22",
     message: "ok"
   };

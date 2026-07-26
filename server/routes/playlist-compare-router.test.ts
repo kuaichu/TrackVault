@@ -11,6 +11,8 @@ import type {
 } from "../playlist-transfer/playlist-compare.js";
 import type { TransferExportFormat, TransferExportResult, TransferTrack } from "../playlist-transfer/types.js";
 import { getClientSessionId } from "../request-context.js";
+import { getRequiredClientSessionId } from "../request-context.js";
+import { createBackgroundJobOwnerResolver } from "../background-job-owner.js";
 import {
   createPlaylistCompareRouter,
   type PlaylistCompareRouterDependencies
@@ -260,8 +262,16 @@ test("job start only rejects missing ids and leaves start errors to the next err
 
 test("job lookup scopes ids to request identity and conceals cross-owner jobs as missing", timeout, async () => {
   const lookups: Array<[string, string]> = [];
+  const resolveOwner = createBackgroundJobOwnerResolver({
+    getClientSessionId: getRequiredClientSessionId,
+    getCredentials: async () => ({ neteaseCookie: "", qqMusicCookie: "unverified-cookie" }),
+    readVerifiedIdentityState: async () => ({
+      session: { loggedIn: false, profile: null },
+      qqMusicUin: null
+    })
+  });
   const dependencies = createDependencies({
-    getCurrentUserKey: async () => `guest:${getClientSessionId()}`,
+    getCurrentUserKey: resolveOwner,
     getPlaylistCompareJob: (ownerKey, id) => {
       lookups.push([ownerKey, id]);
       return ownerKey === "guest:owner-a" && id === queuedJob.id ? queuedJob : null;
@@ -269,9 +279,17 @@ test("job lookup scopes ids to request identity and conceals cross-owner jobs as
   });
 
   await withTestRouter([createPlaylistCompareRouter(dependencies)], async ({ request }) => {
-    const found = await request(`/api/playlist-transfer/compare/jobs/${queuedJob.id}`, {
-      headers: { "x-client-session-id": "owner-a" }
-    });
+    const found = await request(
+      `/api/playlist-transfer/compare/jobs/${queuedJob.id}?ownerKey=attacker&dataScopeId=account%3Aqqmusic%3A99999&uin=99999&profile=victim&provider=qqmusic`,
+      {
+        headers: {
+          "x-client-session-id": "owner-a",
+          "x-owner-key": "header-attacker",
+          "x-data-scope-id": "account:netease:header-attacker",
+          "x-qq-uin": "88888"
+        }
+      }
+    );
     assert.equal(found.status, 200);
     assert.deepEqual(found.body, { job: queuedJob });
 

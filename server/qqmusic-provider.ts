@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { readStoredVerifiedIdentityState } from "./account-session-snapshot.js";
 import type { DownloadQualityLevel, DownloadQualityOption, LyricLine, PlaylistSongsPage, QqMusicAccountStatus, QqMusicCookieCheckResult, QqMusicProfileAlbum, QqMusicProfileSinger, QqMusicProfileUser, QqMusicUserProfile, Song, SongAudioProbe, SongAudioProbeMode, SongAvailability, SongComment, SongCommentRepliesPage, SongCommentsPage, SongLyrics, UserPlaylist } from "./types.js";
 import { getSettings } from "./settings-store.js";
 import { findMembershipExpireAt, formatMembershipExpireText } from "./membership-utils.js";
@@ -1208,78 +1209,113 @@ async function getOptionalQqCookie() {
   return cookie ? parseQqCookie(cookie) : {};
 }
 
-export async function checkQqMusicCookie(cookie: string): Promise<QqMusicCookieCheckResult> {
-  const trimmed = cookie.trim();
-  if (!trimmed) {
-    return {
-      ok: false,
-      uin: null,
-      message: "请先粘贴 QQ 音乐网页登录后的 Cookie。"
-    };
-  }
-
-  const cookieObj = parseQqCookie(trimmed);
-  if (!cookieObj.uin) {
-    return {
-      ok: false,
-      uin: null,
-      message: "QQ 音乐 Cookie 缺少 uin 或 wxuin，请从 y.qq.com 登录后的 Cookies 里完整复制。"
-    };
-  }
-
-  if (!cookieObj.qm_keyst && !cookieObj.qqmusic_key) {
-    return {
-      ok: false,
-      uin: cookieObj.uin,
-      message: "QQ 音乐 Cookie 缺少 qm_keyst 或 qqmusic_key，无法用于获取会员音源。"
-    };
-  }
-
-  try {
-    const refreshed = await callQqMusicApi<{ musickey?: string }>(cookieObj, "user/refresh");
-    const refreshedKey = refreshed.musickey?.trim();
-    const nextCookie: Record<string, string> = {
-      ...cookieObj,
-      ...(refreshedKey ? { qm_keyst: refreshedKey, qqmusic_key: refreshedKey } : {})
-    };
-
-    return {
-      ok: true,
-      uin: nextCookie.uin,
-      message: `QQ 音乐 Cookie 有效：${nextCookie.uin}`,
-      refreshedCookie: serializeQqCookie(nextCookie)
-    };
-  } catch (error) {
-    return {
-      ok: true,
-      uin: cookieObj.uin,
-      message: `QQ 音乐 Cookie 已保存，但刷新 key 失败：${getQqErrorMessage(error)}。如果试听/下载仍失败，请重新登录 QQ 音乐后再提取。`,
-      refreshedCookie: serializeQqCookie(cookieObj)
-    };
-  }
-}
-
-export async function getQqMusicAccountStatus(): Promise<QqMusicAccountStatus> {
+async function getVerifiedQqCookie() {
   const settings = await getSettings();
   const cookie = settings.qqMusicCookie?.trim() ?? "";
   if (!cookie) {
-    return {
-      ok: false,
-      uin: null,
-      displayName: null,
-      vipEnabled: false,
-      message: "未导入 QQ 音乐 Cookie。"
-    };
+    throw new Error("未导入 QQ 音乐 Cookie。");
+  }
+
+  const identityState = await readStoredVerifiedIdentityState({
+    neteaseCookie: settings.neteaseCookie,
+    qqMusicCookie: cookie
+  });
+  if (!identityState.qqMusicUin) {
+    throw new Error("QQ 音乐 Cookie 已保存但尚未通过服务端身份验证。");
   }
 
   const cookieObj = parseQqCookie(cookie);
-  if (!cookieObj.uin) {
+  if (cookieObj.uin !== identityState.qqMusicUin) {
+    throw new Error("QQ 音乐身份与当前 Cookie 不匹配，请重新验证。");
+  }
+  return cookieObj;
+}
+
+export function createQqMusicCookieChecker(
+  verifyCredential: (cookie: Record<string, string>) => Promise<{ uin?: string | null; musickey?: string }>
+) {
+  return async function checkCookie(cookie: string): Promise<QqMusicCookieCheckResult> {
+    const trimmed = cookie.trim();
+    if (!trimmed) {
+      return {
+        ok: false,
+        verified: false,
+        uin: null,
+        message: "请先粘贴 QQ 音乐网页登录后的 Cookie。"
+      };
+    }
+
+    const cookieObj = parseQqCookie(trimmed);
+    if (!cookieObj.uin) {
+      return {
+        ok: false,
+        verified: false,
+        uin: null,
+        message: "QQ 音乐 Cookie 缺少 uin 或 wxuin，请从 y.qq.com 登录后的 Cookies 里完整复制。"
+      };
+    }
+
+    if (!cookieObj.qm_keyst && !cookieObj.qqmusic_key) {
+      return {
+        ok: false,
+        verified: false,
+        uin: cookieObj.uin,
+        message: "QQ 音乐 Cookie 缺少 qm_keyst 或 qqmusic_key，无法用于获取会员音源。"
+      };
+    }
+
+    try {
+      const verifiedCredential = await verifyCredential(cookieObj);
+      const verifiedUin = verifiedCredential.uin?.trim() ?? "";
+      const refreshedKey = verifiedCredential.musickey?.trim();
+      if (!/^\d+$/.test(verifiedUin) || !refreshedKey) {
+        throw new Error("刷新结果缺少服务端验证的稳定账号或密钥");
+      }
+      const nextCookie: Record<string, string> = {
+        ...cookieObj,
+        uin: verifiedUin,
+        qm_keyst: refreshedKey,
+        qqmusic_key: refreshedKey
+      };
+
+      return {
+        ok: true,
+        verified: true,
+        uin: verifiedUin,
+        message: `QQ 音乐 Cookie 已验证：${verifiedUin}`,
+        refreshedCookie: serializeQqCookie(nextCookie)
+      };
+    } catch (error) {
+      return {
+        ok: true,
+        verified: false,
+        uin: cookieObj.uin,
+        message: `QQ 音乐 Cookie 已保存但未验证：${getQqErrorMessage(error)}。后台任务仍使用访客身份，请重新登录后再验证。`
+      };
+    }
+  };
+}
+
+export const checkQqMusicCookie = createQqMusicCookieChecker(
+  async (cookie) => {
+    const refreshed = await callQqMusicApi<{ musickey?: string }>(cookie, "user/refresh");
+    // QQLogin refresh issues a new key only after the submitted musicid/key pair authenticates.
+    // The accepted musicid is therefore the stable UIN attested by this server response.
+    return { uin: cookie.uin, musickey: refreshed.musickey };
+  }
+);
+
+export async function getQqMusicAccountStatus(): Promise<QqMusicAccountStatus> {
+  let cookieObj: Record<string, string>;
+  try {
+    cookieObj = await getVerifiedQqCookie();
+  } catch (error) {
     return {
       ok: false,
       uin: null,
       displayName: null,
       vipEnabled: false,
-      message: "QQ 音乐 Cookie 缺少 uin 或 wxuin。"
+      message: error instanceof Error ? error.message : "QQ 音乐身份尚未验证。"
     };
   }
 
@@ -1292,7 +1328,7 @@ export async function getQqMusicAccountStatus(): Promise<QqMusicAccountStatus> {
 }
 
 export async function getQqMusicUserProfile(): Promise<QqMusicUserProfile> {
-  const cookieObj = await getRequiredQqCookie();
+  const cookieObj = await getVerifiedQqCookie();
   const issues: QqMusicUserProfile["issues"] = [];
   const [detailResult, createdResult, collectedPlaylistsResult, collectedAlbumsResult, followSingersResult, followUsersResult, fansResult] =
     await Promise.allSettled([

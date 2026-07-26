@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
+import { clearStoredQqMusicIdentity, writeStoredQqMusicIdentity } from "./account-session-snapshot.js";
 import { checkQqMusicCookie, clearQqMusicRuntimeStateForCurrentSession } from "./qqmusic-provider.js";
-import { clearQqMusicCookie, saveSettings } from "./settings-store.js";
+import { saveSettingsWithinCredentialWrite } from "./settings-store.js";
 import { getClientSessionId } from "./request-context.js";
-import { captureCredentialWriteGuard, invalidateCredentialWrites, isCredentialWriteGuardCurrent, runCredentialWriteIfCurrent, type CredentialWriteGuard } from "./credential-write-guard.js";
+import { beginCredentialWrite, invalidateCredentialWrites, isCredentialWriteGuardCurrent, runCredentialWriteIfCurrent, type CredentialWriteGuard } from "./credential-write-guard.js";
 import type { QqMusicAccountStatus, QqMusicCookieCheckResult } from "./types.js";
 
 const QQ_LOGIN_APP_ID = "1006102";
@@ -165,7 +166,7 @@ async function fetchWithLoginHeaders(url: string, cookies?: Map<string, string>,
 
 export async function startQqMusicQrLogin(): Promise<QqMusicQrStartResult> {
   cleanupQrSessions();
-  const credentialGuard = captureCredentialWriteGuard("qqmusic");
+  const credentialGuard = await beginCredentialWrite("qqmusic");
 
   const cookies = new Map<string, string>();
   const xloginResponse = await fetchWithLoginHeaders(getXloginUrl(), cookies, {
@@ -236,27 +237,63 @@ async function followLoginRedirect(redirectUrl: string, cookies: Map<string, str
   }
 }
 
-async function persistQqCookie(cookie: string, credentialGuard: CredentialWriteGuard) {
-  const checkResult = await checkQqMusicCookie(cookie);
-  if (!checkResult.ok) {
+export type QqMusicCookiePersisterDependencies = {
+  checkCookie: (cookie: string) => Promise<QqMusicCookieCheckResult>;
+  beginCredentialWrite: () => Promise<CredentialWriteGuard>;
+  runCredentialWriteIfCurrent: typeof runCredentialWriteIfCurrent;
+  saveCredential: (cookie: string) => Promise<void>;
+  writeVerifiedIdentity: (uin: string, cookie: string) => Promise<void>;
+  clearVerifiedIdentity: () => Promise<void>;
+};
+
+export function createQqMusicCookiePersister(dependencies: QqMusicCookiePersisterDependencies) {
+  async function persist(cookie: string, credentialGuard: CredentialWriteGuard) {
+    const checkResult = await dependencies.checkCookie(cookie);
+    if (!checkResult.ok) {
+      return checkResult;
+    }
+
+    const storedCookie = getQqMusicCookieForStorage(cookie, checkResult);
+    await dependencies.runCredentialWriteIfCurrent(credentialGuard, async () => {
+      await dependencies.saveCredential(storedCookie);
+      if (checkResult.verified && checkResult.uin) {
+        await dependencies.writeVerifiedIdentity(checkResult.uin, storedCookie);
+      } else {
+        await dependencies.clearVerifiedIdentity();
+      }
+    });
+
     return checkResult;
   }
 
-  await runCredentialWriteIfCurrent(credentialGuard, () => saveSettings({
-    qqMusicCookie: getQqMusicCookieForStorage(cookie, checkResult)
-  }));
-
-  return checkResult;
+  return {
+    persist,
+    async importCookie(cookie: string) {
+      return persist(cookie, await dependencies.beginCredentialWrite());
+    }
+  };
 }
+
+const qqMusicCookiePersister = createQqMusicCookiePersister({
+  checkCookie: checkQqMusicCookie,
+  beginCredentialWrite: () => beginCredentialWrite("qqmusic"),
+  runCredentialWriteIfCurrent,
+  saveCredential: async (cookie) => {
+    await saveSettingsWithinCredentialWrite({ qqMusicCookie: cookie });
+  },
+  writeVerifiedIdentity: writeStoredQqMusicIdentity,
+  clearVerifiedIdentity: clearStoredQqMusicIdentity
+});
 
 export function getQqMusicCookieForStorage(cookie: string, checkResult: QqMusicCookieCheckResult) {
   return checkResult.refreshedCookie?.trim() || cookie.trim();
 }
 
 export async function importQqMusicCookie(cookie: string): Promise<QqMusicCookieCheckResult> {
-  const checkResult = await persistQqCookie(cookie, captureCredentialWriteGuard("qqmusic"));
+  const checkResult = await qqMusicCookiePersister.importCookie(cookie);
   return {
     ok: checkResult.ok,
+    verified: checkResult.verified,
     uin: checkResult.uin,
     message: checkResult.message
   };
@@ -264,9 +301,9 @@ export async function importQqMusicCookie(cookie: string): Promise<QqMusicCookie
 
 function toQqMusicAccountStatus(checkResult: QqMusicCookieCheckResult): QqMusicAccountStatus {
   return {
-    ok: true,
-    uin: checkResult.uin,
-    displayName: checkResult.uin ? `QQ ${checkResult.uin}` : null,
+    ok: checkResult.verified,
+    uin: checkResult.verified ? checkResult.uin : null,
+    displayName: checkResult.verified && checkResult.uin ? `QQ ${checkResult.uin}` : null,
     vipEnabled: false,
     message: checkResult.message
   };
@@ -321,8 +358,8 @@ export async function checkQqMusicQrLogin(key: string): Promise<QqMusicQrCheckRe
   qrSessions.delete(key.trim());
 
   const cookie = cookiePairs(session.cookies);
-  const checkResult = await persistQqCookie(cookie, session.credentialGuard);
-  if (!checkResult.ok) {
+  const checkResult = await qqMusicCookiePersister.persist(cookie, session.credentialGuard);
+  if (!checkResult.verified) {
     throw new Error(checkResult.message);
   }
   return {
@@ -334,7 +371,8 @@ export async function checkQqMusicQrLogin(key: string): Promise<QqMusicQrCheckRe
 
 export async function logoutQqMusicSession(): Promise<QqMusicAccountStatus> {
   return invalidateCredentialWrites("qqmusic", async () => {
-    await clearQqMusicCookie();
+    await saveSettingsWithinCredentialWrite({ clearQqMusicCookie: true });
+    await clearStoredQqMusicIdentity();
     clearQqMusicQrSessionsForCurrentClient();
     await clearQqMusicRuntimeStateForCurrentSession();
     return {

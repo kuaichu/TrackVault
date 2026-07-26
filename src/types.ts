@@ -397,6 +397,7 @@ export type NeteaseCookieCheckResult = {
 
 export type QqMusicCookieCheckResult = {
   ok: boolean;
+  verified: boolean;
   uin: string | null;
   message: string;
 };

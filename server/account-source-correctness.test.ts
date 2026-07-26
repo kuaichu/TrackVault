@@ -21,22 +21,22 @@ const emptySession = { loggedIn: false, profile: null } as const;
 test("Netease and demo accounts receive stable distinct data scopes", () => {
   const neteaseA = resolveDataScopeId({
     session: { loggedIn: true, profile: { id: "10001", provider: "netease" } },
-    qqMusicCookie: "uin=99999",
+    qqMusicUin: "99999",
     clientSessionId: "client-a"
   });
   const neteaseB = resolveDataScopeId({
     session: { loggedIn: true, profile: { id: "10002", provider: "netease" } },
-    qqMusicCookie: "uin=99999",
+    qqMusicUin: "99999",
     clientSessionId: "client-b"
   });
   const sameNeteaseOnAnotherClient = resolveDataScopeId({
     session: { loggedIn: true, profile: { id: "10001", provider: "netease" } },
-    qqMusicCookie: "",
+    qqMusicUin: null,
     clientSessionId: "another-client"
   });
   const demo = resolveDataScopeId({
     session: { loggedIn: true, profile: { id: "demo-uuid", provider: "demo" } },
-    qqMusicCookie: "uin=99999",
+    qqMusicUin: "99999",
     clientSessionId: "client-a"
   });
 
@@ -47,10 +47,10 @@ test("Netease and demo accounts receive stable distinct data scopes", () => {
 });
 
 test("QQ-only accounts use UIN while guest scopes stay client-session bound", () => {
-  const qqA = resolveDataScopeId({ session: emptySession, qqMusicCookie: "uin=o12345", clientSessionId: "client-a" });
-  const qqB = resolveDataScopeId({ session: emptySession, qqMusicCookie: "uin=67890", clientSessionId: "client-a" });
-  const guestA = resolveDataScopeId({ session: emptySession, qqMusicCookie: "", clientSessionId: "client-a" });
-  const guestB = resolveDataScopeId({ session: emptySession, qqMusicCookie: "", clientSessionId: "client-b" });
+  const qqA = resolveDataScopeId({ session: emptySession, qqMusicUin: "12345", clientSessionId: "client-a" });
+  const qqB = resolveDataScopeId({ session: emptySession, qqMusicUin: "67890", clientSessionId: "client-a" });
+  const guestA = resolveDataScopeId({ session: emptySession, qqMusicUin: null, clientSessionId: "client-a" });
+  const guestB = resolveDataScopeId({ session: emptySession, qqMusicUin: null, clientSessionId: "client-b" });
 
   assert.equal(qqA, "account:qqmusic:12345");
   assert.equal(qqB, "account:qqmusic:67890");
@@ -61,7 +61,7 @@ test("QQ-only accounts use UIN while guest scopes stay client-session bound", ()
 
 test("QQ UIN parsing supports wxuin login and data scopes expose no secrets", () => {
   const cookie = "login_type=2; wxuin=o24680; marker=synthetic-token-value";
-  const scope = resolveDataScopeId({ session: emptySession, qqMusicCookie: cookie, clientSessionId: "guest-token" });
+  const scope = resolveDataScopeId({ session: emptySession, qqMusicUin: extractQqMusicUin(cookie), clientSessionId: "guest-token" });
 
   assert.equal(extractQqMusicUin(cookie), "24680");
   assert.equal(scope, "account:qqmusic:24680");
@@ -77,7 +77,7 @@ test("QQ music identity rejects mixed or missing UIN values instead of merging t
 test("provider mode cannot change the data owner", () => {
   const input = {
     session: { loggedIn: true, profile: { id: "10001", provider: "netease" as const } },
-    qqMusicCookie: "uin=24680",
+    qqMusicUin: "24680",
     clientSessionId: "client-a"
   };
   const modes = ["netease", "qq", "aggregate", "demo"];

@@ -121,7 +121,7 @@ test("platform cookie routes preserve platform-specific normalization and stored
     },
     importQqMusicCookie: async (cookie: string) => {
       importedQq.push(cookie);
-      return { ok: true, uin: "10001", message: "imported" };
+      return { ok: true, verified: true, uin: "10001", message: "imported" };
     }
   } satisfies PlatformCookieRouterDependencies;
 

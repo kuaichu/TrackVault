@@ -46,6 +46,14 @@ export function createCredentialWriteGuardRegistry() {
     isCurrent(guard: CredentialWriteGuard) {
       return guard.revision === getRevision(guard.platform, guard.clientSessionId);
     },
+    begin(platform: CredentialPlatform, clientSessionId: string) {
+      const key = getKey(platform, clientSessionId);
+      return enqueue(key, () => {
+        const revision = getRevision(platform, clientSessionId) + 1;
+        revisions.set(key, revision);
+        return { platform, clientSessionId, revision } satisfies CredentialWriteGuard;
+      });
+    },
     runIfCurrent<T>(guard: CredentialWriteGuard, operation: () => Promise<T> | T) {
       const key = getKey(guard.platform, guard.clientSessionId);
       return enqueue(key, () => {
@@ -69,6 +77,10 @@ const credentialWriteGuards = createCredentialWriteGuardRegistry();
 
 export function captureCredentialWriteGuard(platform: CredentialPlatform): CredentialWriteGuard {
   return credentialWriteGuards.capture(platform, getClientSessionId());
+}
+
+export function beginCredentialWrite(platform: CredentialPlatform): Promise<CredentialWriteGuard> {
+  return credentialWriteGuards.begin(platform, getClientSessionId());
 }
 
 export function isCredentialWriteGuardCurrent(guard: CredentialWriteGuard) {
