@@ -6,6 +6,7 @@ import {
   type PlaylistCompareResult
 } from "./playlist-compare.js";
 import type { TransferTrack } from "./types.js";
+import { toPublicPlaylistCompareJob } from "./playlist-compare-public-dto.js";
 
 export type PlaylistCompareJobStatus = "queued" | "loading" | "running" | "completed" | "failed";
 
@@ -138,7 +139,7 @@ export function startPlaylistCompareJob(
   setTimeout(() => {
     void runJob(job, deps);
   }, 0);
-  return job;
+  return toPublicPlaylistCompareJob(job);
 }
 
 export function getPlaylistCompareJob(ownerKey: string, id: string) {
@@ -147,5 +148,5 @@ export function getPlaylistCompareJob(ownerKey: string, id: string) {
     return null;
   }
 
-  return stored.job;
+  return toPublicPlaylistCompareJob(stored.job);
 }

@@ -3,6 +3,7 @@ import type {
   PlaylistTransferJob,
   PublicMatchCandidate,
   PublicPlaylistTransferJob,
+  PublicTransferTrack,
   PublicTransferTrackResult,
   TransferTrack,
   TransferImportRequest,
@@ -10,7 +11,7 @@ import type {
 } from "./types.js";
 import { parseTransferImportRequest } from "./transfer-import-request.js";
 
-function toPublicTransferTrack(track: TransferTrack): TransferTrack {
+export function toPublicTransferTrack(track: TransferTrack): PublicTransferTrack {
   return {
     source: track.source,
     ...(track.sourceTrackId === undefined ? {} : { sourceTrackId: track.sourceTrackId }),
@@ -22,7 +23,7 @@ function toPublicTransferTrack(track: TransferTrack): TransferTrack {
   };
 }
 
-function toPublicMatchCandidate(candidate: MatchCandidate): PublicMatchCandidate {
+export function toPublicMatchCandidate(candidate: MatchCandidate): PublicMatchCandidate {
   return {
     provider: candidate.provider,
     targetTrackId: candidate.targetTrackId,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { comparePlaylists, formatPlaylistCompareExport } from "./playlist-compare.js";
 import type { TransferTrack } from "./types.js";
+import { assertPublicDtoSafe } from "./assert-public-dto-safe.js";
 
 const leftTracks: TransferTrack[] = [
   { source: "netease", sourceTrackId: "l1", title: "晴天", artists: ["周杰伦"], album: "叶惠美" },
@@ -92,4 +93,50 @@ test("comparePlaylists reports progress while comparing left tracks", () => {
   assert.ok(progress.some((item) => item.processed === 1 && item.currentTitle === "晴天"));
   assert.equal(progress[progress.length - 1].phase, "completed");
   assert.equal(progress[progress.length - 1].processed, leftTracks.length);
+});
+
+test("compare JSON formatter allowlists nested fields without changing filename, summary, or item order", () => {
+  const secret = "compare-export-secret-sentinel";
+  const result = comparePlaylists({
+    left: { provider: "netease", playlistId: "left", playlistName: "左歌单", tracks: leftTracks },
+    right: { provider: "qq", playlistId: "right", playlistName: "右歌单", tracks: rightTracks }
+  });
+  Object.assign(result, { ownerKey: secret });
+  Object.assign(result.left, { clientSessionId: secret });
+  Object.assign(result.summary, { generation: secret });
+  Object.assign(result.items[0], { cancelRequested: true });
+  Object.assign(result.items[0].leftTrack!, { raw: { SID: secret, credentialDigest: secret } });
+
+  const output = formatPlaylistCompareExport(result, "json", [
+    "exact",
+    "same_title_different_artist",
+    "similar_title",
+    "left_only",
+    "right_only"
+  ]);
+  const parsed = JSON.parse(output.content) as {
+    items: Array<{
+      status: string;
+      leftTrack?: { sourceTrackId?: string };
+      rightTrack?: { sourceTrackId?: string };
+    }>;
+    summary: { totalLeft: number; totalRight: number };
+  };
+
+  assert.equal(output.filename, "左歌单-vs-右歌单-compare.json");
+  assert.equal(output.contentType, "application/json; charset=utf-8");
+  assertPublicDtoSafe(parsed, secret);
+  assert.deepEqual(
+    parsed.items.map((item) => [item.status, item.leftTrack?.sourceTrackId, item.rightTrack?.sourceTrackId]),
+    result.items.map((item) => [item.status, item.leftTrack?.sourceTrackId, item.rightTrack?.sourceTrackId])
+  );
+  assert.deepEqual(parsed.summary, {
+    totalLeft: result.summary.totalLeft,
+    totalRight: result.summary.totalRight,
+    exact: result.summary.exact,
+    sameTitleDifferentArtist: result.summary.sameTitleDifferentArtist,
+    similarTitle: result.summary.similarTitle,
+    leftOnly: result.summary.leftOnly,
+    rightOnly: result.summary.rightOnly
+  });
 });

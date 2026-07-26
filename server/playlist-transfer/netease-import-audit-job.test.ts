@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { cancelNeteaseImportAuditJob, formatNeteaseImportAuditJobExport, getNeteaseImportAuditJob, startNeteaseImportAuditJob } from "./netease-import-audit-job.js";
+import { assertPublicDtoSafe } from "./assert-public-dto-safe.js";
 
 const unavailableTrack = {
   id: "song-1",
@@ -193,4 +194,59 @@ test("formatNeteaseImportAuditJobExport includes normal playable text playlist",
   assert.match(exported.content, /# 正常可播文字歌单/);
   assert.match(exported.content, /正常歌曲 - 正常歌手/);
   assert.match(exported.content, /替代歌曲 - 替代歌手/);
+});
+
+test("audit jobs keep candidate raw internally while all returned and exported DTOs stay detached", async () => {
+  const secret = "audit-job-secret-sentinel";
+  let availabilityRaw: unknown;
+  const started = startNeteaseImportAuditJob(
+    "owner-private",
+    {
+      playlistId: "liked-private",
+      playlistName: "私有审计",
+      maxTracks: 1,
+      candidateLimit: 1,
+      checkAvailability: true
+    },
+    {
+      loadEntries: async () => [{
+        track: unavailableTrack,
+        privilege: { id: "song-1", st: -200, pl: 0, dl: 0 }
+      }],
+      searchCandidates: async () => [{
+        provider: "netease",
+        id: "replacement-private",
+        title: "缺音源",
+        artists: ["原歌手"],
+        raw: {
+          cookie: secret,
+          nested: { SID: secret, credentialFingerprint: secret }
+        }
+      }],
+      checkCandidateAvailability: async (candidate) => {
+        availabilityRaw = candidate.raw;
+        return null;
+      }
+    }
+  );
+
+  assertPublicDtoSafe(started, secret);
+  const completed = await waitForJob("owner-private", started.id, "completed");
+  assert.equal(started.status, "queued", "a returned start DTO must not be mutated by job completion");
+  assert.deepEqual(availabilityRaw, {
+    cookie: secret,
+    nested: { SID: secret, credentialFingerprint: secret }
+  });
+  assertPublicDtoSafe(completed, secret);
+
+  const cancelledAfterCompletion = cancelNeteaseImportAuditJob("owner-private", started.id);
+  assert.ok(cancelledAfterCompletion);
+  assertPublicDtoSafe(cancelledAfterCompletion, secret);
+  const exported = formatNeteaseImportAuditJobExport(completed.result!, "json");
+  assert.equal(exported.contentType, "application/json; charset=utf-8");
+  assertPublicDtoSafe(JSON.parse(exported.content) as unknown, secret);
+
+  completed.result?.items[0]?.candidates[0]?.artists.push("公共突变");
+  const reread = getNeteaseImportAuditJob("owner-private", started.id);
+  assert.deepEqual(reread?.result?.items[0]?.candidates[0]?.artists, ["原歌手"]);
 });

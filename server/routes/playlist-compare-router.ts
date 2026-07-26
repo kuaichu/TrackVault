@@ -9,6 +9,11 @@ import type {
 import type { loadNeteasePlaylistTransferTracks } from "../playlist-transfer/netease-provider.js";
 import type { loadQqPlaylistTransferTracks } from "../playlist-transfer/qq-provider.js";
 import type { TransferTrack } from "../playlist-transfer/types.js";
+import {
+  parsePublicPlaylistCompareResult,
+  toPublicPlaylistCompareJob,
+  toPublicPlaylistCompareResult
+} from "../playlist-transfer/playlist-compare-public-dto.js";
 import { resolveBackgroundJobOwner } from "./background-job-owner.js";
 
 export type PlaylistCompareRouterDependencies = {
@@ -102,7 +107,7 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
         loadSideTracks: loadCompareSideTracks
       });
 
-      response.status(202).json({ job });
+      response.status(202).json({ job: toPublicPlaylistCompareJob(job) });
     } catch (error) {
       next(error);
     }
@@ -120,7 +125,7 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
         return;
       }
 
-      response.json({ job });
+      response.json({ job: toPublicPlaylistCompareJob(job) });
     } catch (error) {
       next(error);
     }
@@ -139,7 +144,7 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
         loadCompareSideTracks(input.leftProvider, input.leftPlaylistId),
         loadCompareSideTracks(input.rightProvider, input.rightPlaylistId)
       ]);
-      response.json(dependencies.comparePlaylists({
+      response.json(toPublicPlaylistCompareResult(dependencies.comparePlaylists({
         left: {
           provider: input.leftProvider,
           playlistId: input.leftPlaylistId,
@@ -152,7 +157,7 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
           playlistName: input.rightPlaylistName,
           tracks: rightTracks
         }
-      }));
+      })));
     } catch (error) {
       response.status(400).json({
         message: error instanceof Error ? error.message : "歌单对比失败"
@@ -161,11 +166,11 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
   });
 
   router.post("/api/playlist-transfer/compare/export", async (request, response) => {
-    const result = request.body?.result as PlaylistCompareResult | undefined;
+    const result = parsePublicPlaylistCompareResult(request.body?.result);
     const format = typeof request.body?.format === "string" ? request.body.format : "markdown";
     const statuses = normalizeCompareStatuses(request.body?.statuses);
 
-    if (!result?.left || !result?.right || !Array.isArray(result.items)) {
+    if (!result) {
       response.status(400).json({ message: "缺少有效的歌单对比结果。" });
       return;
     }

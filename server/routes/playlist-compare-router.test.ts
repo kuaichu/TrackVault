@@ -18,6 +18,8 @@ import {
   type PlaylistCompareRouterDependencies
 } from "./playlist-compare-router.js";
 import { withTestRouter } from "./router-test-http.js";
+import { assertPublicDtoSafe } from "../playlist-transfer/assert-public-dto-safe.js";
+import { formatPlaylistCompareExport } from "../playlist-transfer/playlist-compare.js";
 
 const timeout = { timeout: 5_000 };
 
@@ -564,6 +566,121 @@ test("export filters NaN and Infinity and leaves formatter rejection unconverted
   });
   assert.deepEqual(calls[1], { itemIndexes: undefined, preferredProvider: undefined });
   assert.equal(payloads.length, 1);
+});
+
+test("compare sync and job HTTP responses deeply sanitize dependency results", timeout, async () => {
+  const secret = "compare-http-secret-sentinel";
+  const privateResult: PlaylistCompareResult & { ownerKey: string } = {
+    ...compareResult,
+    left: Object.assign({ ...compareResult.left }, { clientSessionId: secret }),
+    right: Object.assign({ ...compareResult.right }, { SID: secret }),
+    items: compareResult.items.map((item) => ({
+      ...item,
+      leftTrack: item.leftTrack
+        ? Object.assign({ ...item.leftTrack, artists: [...item.leftTrack.artists] }, { raw: { credentialDigest: secret } })
+        : undefined,
+      rightTrack: item.rightTrack
+        ? Object.assign({ ...item.rightTrack, artists: [...item.rightTrack.artists] }, { token: secret })
+        : undefined,
+      reasons: [...item.reasons],
+      cancelRequested: true
+    })),
+    summary: Object.assign({ ...compareResult.summary }, { generation: secret }),
+    ownerKey: secret
+  };
+  const privateJob: PlaylistCompareJob & { ownerKey: string; guard: string } = {
+    ...queuedJob,
+    input: Object.assign({ ...queuedJob.input }, { credentialFingerprint: secret }),
+    progress: Object.assign({ ...queuedJob.progress }, { clientSessionId: secret }),
+    result: privateResult,
+    ownerKey: secret,
+    guard: secret
+  };
+  const dependencies = createDependencies({
+    getCurrentUserKey: async () => "owner-private",
+    loadNeteasePlaylistTransferTracks: async () => [leftTrack],
+    loadQqPlaylistTransferTracks: async () => [rightTrack],
+    comparePlaylists: () => privateResult,
+    startPlaylistCompareJob: () => privateJob,
+    getPlaylistCompareJob: () => privateJob
+  });
+
+  await withTestRouter([createPlaylistCompareRouter(dependencies)], async ({ request, requestJson }) => {
+    const sync = await requestJson("POST", "/api/playlist-transfer/compare", {
+      leftProvider: "netease",
+      leftPlaylistId: "left-list",
+      rightProvider: "qq",
+      rightPlaylistId: "right-list"
+    });
+    const started = await requestJson("POST", "/api/playlist-transfer/compare/jobs", {
+      leftProvider: "netease",
+      leftPlaylistId: "left-list",
+      rightProvider: "qq",
+      rightPlaylistId: "right-list"
+    });
+    const found = await request("/api/playlist-transfer/compare/jobs/private-job");
+
+    assert.equal(sync.status, 200);
+    assert.equal(started.status, 202);
+    assert.equal(found.status, 200);
+    assertPublicDtoSafe(sync.body, secret);
+    assertPublicDtoSafe(started.body, secret);
+    assertPublicDtoSafe(found.body, secret);
+    assert.deepEqual((sync.body as PlaylistCompareResult).summary, compareResult.summary);
+  });
+});
+
+test("compare export validates untrusted input, strips unknown fields, and never formats invalid structures", timeout, async () => {
+  const secret = "compare-export-http-secret-sentinel";
+  const forgedResult = {
+    ...compareResult,
+    ownerKey: secret,
+    left: { ...compareResult.left, SID: secret },
+    items: compareResult.items.map((item) => ({
+      ...item,
+      credentialDigest: secret,
+      leftTrack: item.leftTrack ? { ...item.leftTrack, raw: { cookie: secret } } : undefined,
+      rightTrack: item.rightTrack ? { ...item.rightTrack, clientSessionId: secret } : undefined
+    })),
+    summary: { ...compareResult.summary, guard: secret }
+  };
+  let formatterCalls = 0;
+  const dependencies = createDependencies({
+    formatPlaylistCompareExport: (result, format, statuses, options) => {
+      formatterCalls += 1;
+      assertPublicDtoSafe(result, secret);
+      return formatPlaylistCompareExport(result, format, statuses, options);
+    }
+  });
+
+  await withTestRouter([createPlaylistCompareRouter(dependencies)], async ({ requestJson }) => {
+    const valid = await requestJson("POST", "/api/playlist-transfer/compare/export", {
+      result: forgedResult,
+      format: "json",
+      statuses: ["exact", "left_only", "right_only"]
+    });
+    assert.equal(valid.status, 200);
+    const exported = valid.body as TransferExportResult;
+    assert.equal(exported.filename, "左侧歌单-vs-右侧歌单-compare.json");
+    assert.equal(exported.contentType, "application/json; charset=utf-8");
+    assertPublicDtoSafe(JSON.parse(exported.content) as unknown, secret);
+
+    const invalidResults: unknown[] = [
+      { ...forgedResult, items: null },
+      { ...forgedResult, createdAt: 1 },
+      { ...forgedResult, summary: { ...compareResult.summary, exact: "1" } },
+      { ...forgedResult, items: [{ ...compareResult.items[0], score: Number.NaN }] },
+      { ...forgedResult, items: [{ ...compareResult.items[0], reasons: "invalid" }] },
+      { ...forgedResult, left: { ...compareResult.left, total: -1 } }
+    ];
+    for (const result of invalidResults) {
+      const invalid = await requestJson("POST", "/api/playlist-transfer/compare/export", { result, format: "json" });
+      assert.equal(invalid.status, 400);
+      assert.deepEqual(invalid.body, { message: "缺少有效的歌单对比结果。" });
+    }
+  });
+
+  assert.equal(formatterCalls, 1);
 });
 
 test("unknown, unsupported, core job, and audit routes pass to later handlers", timeout, async () => {

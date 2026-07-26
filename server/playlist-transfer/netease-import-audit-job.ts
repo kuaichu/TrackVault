@@ -6,6 +6,10 @@ import {
   type NeteaseImportedPlaylistAudit
 } from "./netease-import-audit.js";
 import type { MatchCandidate, ProviderTrack, TransferExportFormat, TransferExportResult, TransferTrack } from "./types.js";
+import {
+  toPublicNeteaseImportedPlaylistAudit,
+  toPublicNeteaseImportAuditJob
+} from "./netease-import-audit-public-dto.js";
 
 export type NeteaseImportAuditJobStatus = "queued" | "loading" | "running" | "cancelling" | "cancelled" | "completed" | "failed";
 
@@ -48,8 +52,7 @@ function nowIso() {
 }
 
 function publicJob(job: InternalJob): NeteaseImportAuditJob {
-  const { cancelRequested: _cancelRequested, ownerKey: _ownerKey, ...rest } = job;
-  return rest;
+  return toPublicNeteaseImportAuditJob(job);
 }
 
 function updateJob(job: InternalJob, patch: Partial<NeteaseImportAuditJob>) {
@@ -226,6 +229,7 @@ function formatText(audit: NeteaseImportedPlaylistAudit) {
 }
 
 export function formatNeteaseImportAuditJobExport(audit: NeteaseImportedPlaylistAudit, format: TransferExportFormat): TransferExportResult {
+  audit = toPublicNeteaseImportedPlaylistAudit(audit);
   const baseName = `${audit.playlistName}-导入歌单清理`;
 
   if (format === "json") {

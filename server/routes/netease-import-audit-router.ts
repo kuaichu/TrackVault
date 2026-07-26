@@ -13,6 +13,10 @@ import type {
   searchNeteaseProviderTracksByTitle
 } from "../playlist-transfer/netease-provider.js";
 import type { TransferExportFormat } from "../playlist-transfer/types.js";
+import {
+  toPublicNeteaseImportedPlaylistAudit,
+  toPublicNeteaseImportAuditJob
+} from "../playlist-transfer/netease-import-audit-public-dto.js";
 import { resolveBackgroundJobOwner } from "./background-job-owner.js";
 
 export type NeteaseImportAuditRouterDependencies = {
@@ -78,7 +82,7 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
           : undefined
       });
 
-      response.json(audit);
+      response.json(toPublicNeteaseImportedPlaylistAudit(audit));
     } catch (error) {
       response.status(502).json({
         message: error instanceof Error ? error.message : "网易云导入歌单清理失败"
@@ -128,7 +132,7 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
       }
     );
 
-    response.status(202).json({ job });
+    response.status(202).json({ job: toPublicNeteaseImportAuditJob(job) });
   });
 
   router.get("/api/playlist-transfer/netease-import-audit/jobs/:id", async (request, response) => {
@@ -142,7 +146,7 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
       return;
     }
 
-    response.json({ job });
+    response.json({ job: toPublicNeteaseImportAuditJob(job) });
   });
 
   router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/cancel", async (request, response) => {
@@ -156,7 +160,7 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
       return;
     }
 
-    response.json({ job });
+    response.json({ job: toPublicNeteaseImportAuditJob(job) });
   });
 
   router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/export", async (request, response) => {
@@ -208,7 +212,10 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
     try {
       const result = await dependencies.createNeteasePlaylistFromTrackIds(name, trackIds);
       response.json({
-        ...result,
+        playlistId: result.playlistId,
+        playlistName: result.playlistName,
+        playlistUrl: result.playlistUrl,
+        addedCount: result.addedCount,
         skippedCount: Math.max(0, job.result.scannedCount - trackIds.length)
       });
     } catch (error) {

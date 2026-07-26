@@ -3,6 +3,7 @@ import test from "node:test";
 import { toPublicPlaylistTransferJob, toPublicTransferImportRequest } from "./public-dto.js";
 import { TransferImportRequestValidationError } from "./transfer-import-request.js";
 import type { PlaylistTransferJob } from "./types.js";
+import { assertPublicDtoSafe } from "./assert-public-dto-safe.js";
 
 const internalJob: PlaylistTransferJob & { internalAuthorization: string } = {
   id: "job-private",
@@ -61,6 +62,7 @@ test("public transfer DTO allowlists fields deeply without mutating persisted re
   const publicJob = toPublicPlaylistTransferJob(internalJob);
   const serialized = JSON.stringify(publicJob);
 
+  assertPublicDtoSafe(publicJob, "candidate-secret");
   assert.equal("ownerKey" in publicJob, false);
   assert.doesNotMatch(serialized, /ownerKey|secret-client-session|credential-digest|candidate-secret|internalAuthorization|\"raw\"/);
   assert.equal(publicJob.tracks[0]?.candidates[0]?.availability?.status, "available");
@@ -69,6 +71,21 @@ test("public transfer DTO allowlists fields deeply without mutating persisted re
     pay: { payplay: 1 },
     credentialDigest: "candidate-secret"
   });
+  assert.notEqual(publicJob.tracks, internalJob.tracks);
+  assert.notEqual(publicJob.summary, internalJob.summary);
+  assert.notEqual(publicJob.tracks[0], internalJob.tracks[0]);
+  assert.notEqual(publicJob.tracks[0].sourceTrack, internalJob.tracks[0].sourceTrack);
+  assert.notEqual(publicJob.tracks[0].candidates, internalJob.tracks[0].candidates);
+  assert.notEqual(publicJob.tracks[0].candidates[0], internalJob.tracks[0].candidates[0]);
+  assert.notEqual(publicJob.tracks[0].candidates[0].availability, internalJob.tracks[0].candidates[0].availability);
+  publicJob.tracks[0].candidates[0].artists.push("public mutation");
+  publicJob.tracks[0].candidates[0].availability!.reason = "public reason";
+  publicJob.summary.total = 99;
+  internalJob.tracks[0].candidates[0].reasons.push("internal mutation");
+  assert.deepEqual(internalJob.tracks[0].candidates[0].artists, ["Artist"]);
+  assert.equal(internalJob.tracks[0].candidates[0].availability?.reason, "internal check");
+  assert.equal(internalJob.summary.total, 1);
+  assert.deepEqual(publicJob.tracks[0].candidates[0].reasons, ["exact"]);
 });
 
 test("public transfer input DTO rejects invalid internal structures with a validation error", () => {

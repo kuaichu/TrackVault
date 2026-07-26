@@ -9,6 +9,8 @@ import {
 } from "./netease-import-audit-router.js";
 import { createBackgroundJobOwnerResolver } from "../background-job-owner.js";
 import { withTestRouter } from "./router-test-http.js";
+import { assertPublicDtoSafe } from "../playlist-transfer/assert-public-dto-safe.js";
+import { formatNeteaseImportAuditJobExport } from "../playlist-transfer/netease-import-audit-job.js";
 
 const timeout = { timeout: 5_000 };
 
@@ -571,6 +573,91 @@ test("all follow-up job operations hide foreign, missing, and legacy-unowned rec
   assert.equal(cancelMutations, 0);
   assert.equal(formatCalls, 0);
   assert.equal(playlistWrites, 0);
+});
+
+test("audit sync, job, export, and playable-import HTTP boundaries deeply sanitize results", timeout, async () => {
+  const secret = "audit-http-secret-sentinel";
+  const privateCandidate: MatchCandidate & { ownerKey: string; clientSessionId: string } = {
+    provider: "netease",
+    targetTrackId: "replacement-private",
+    title: "替代歌曲",
+    artists: ["替代歌手"],
+    confidenceScore: 99,
+    reasons: ["歌名一致"],
+    raw: { cookie: secret, nested: { SID: secret, credentialDigest: secret } },
+    ownerKey: secret,
+    clientSessionId: secret
+  };
+  const privateAudit: NeteaseImportedPlaylistAudit & { ownerKey: string; guard: string } = {
+    ...audit,
+    items: [{
+      originalTrackId: "broken-1",
+      sourceTrack: Object.assign({
+        source: "netease" as const,
+        sourceTrackId: "broken-1",
+        title: "失效歌曲",
+        artists: ["原歌手"]
+      }, { raw: { token: secret }, credentialFingerprint: secret }),
+      unusableReason: "无音源",
+      status: "replaceable",
+      candidates: [privateCandidate],
+      selectedCandidate: privateCandidate,
+      reason: "已找到替代"
+    }],
+    summary: Object.assign({ ...audit.summary }, { generation: secret }),
+    ownerKey: secret,
+    guard: secret
+  };
+  const privateJob: NeteaseImportAuditJob & { ownerKey: string; cancelRequested: boolean } = {
+    ...completedJob,
+    input: Object.assign({ ...completedJob.input }, { credentialDigest: secret }),
+    progress: Object.assign({ ...completedJob.progress }, { clientSessionId: secret }),
+    result: privateAudit,
+    ownerKey: secret,
+    cancelRequested: true
+  };
+  const dependencies = createDependencies({
+    loadNeteasePlaylistAuditEntries: async () => [],
+    buildNeteaseImportedPlaylistAudit: async () => privateAudit,
+    searchNeteaseProviderTracksByTitle: async () => [],
+    checkNeteaseProviderTrackAvailability: async () => null,
+    startNeteaseImportAuditJob: () => privateJob,
+    getNeteaseImportAuditJob: () => privateJob,
+    cancelNeteaseImportAuditJob: () => privateJob,
+    formatNeteaseImportAuditJobExport: formatNeteaseImportAuditJobExport,
+    createNeteasePlaylistFromTrackIds: async (name, trackIds) => Object.assign({
+      playlistId: "new-private",
+      playlistName: name,
+      playlistUrl: "https://music.163.com/playlist?id=new-private",
+      addedCount: trackIds.length
+    }, { raw: { cookie: secret }, credentialDigest: secret })
+  });
+
+  await withTestRouter([createNeteaseImportAuditRouter(dependencies)], async ({ request, requestJson }) => {
+    const sync = await requestJson("POST", "/api/playlist-transfer/netease-import-audit", { playlistId: "liked" });
+    const started = await requestJson("POST", "/api/playlist-transfer/netease-import-audit/jobs", { playlistId: "liked" });
+    const found = await request("/api/playlist-transfer/netease-import-audit/jobs/private");
+    const cancelled = await requestJson("POST", "/api/playlist-transfer/netease-import-audit/jobs/private/cancel", {});
+    const exportedResponse = await requestJson("POST", "/api/playlist-transfer/netease-import-audit/jobs/private/export", { format: "json" });
+    const imported = await requestJson("POST", "/api/playlist-transfer/netease-import-audit/jobs/private/import/playable", {});
+
+    for (const response of [sync, started, found, cancelled, imported]) {
+      assert.ok(response.status >= 200 && response.status < 300);
+      assertPublicDtoSafe(response.body, secret);
+    }
+    assert.equal(exportedResponse.status, 200);
+    const exported = exportedResponse.body as { content: string; filename: string; contentType: string };
+    assert.equal(exported.filename, "我喜欢的音乐-导入歌单清理.json");
+    assert.equal(exported.contentType, "application/json; charset=utf-8");
+    assertPublicDtoSafe(JSON.parse(exported.content) as unknown, secret);
+    assert.deepEqual(imported.body, {
+      playlistId: "new-private",
+      playlistName: "我喜欢的音乐 - 正常歌曲",
+      playlistUrl: "https://music.163.com/playlist?id=new-private",
+      addedCount: 2,
+      skippedCount: 3
+    });
+  });
 });
 
 test("unknown paths, unsupported methods, and compare routes pass to later handlers", timeout, async () => {

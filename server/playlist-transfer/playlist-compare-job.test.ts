@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getPlaylistCompareJob, startPlaylistCompareJob } from "./playlist-compare-job.js";
 import type { TransferTrack } from "./types.js";
+import { assertPublicDtoSafe } from "./assert-public-dto-safe.js";
 
 const leftTracks: TransferTrack[] = [
   { source: "netease", sourceTrackId: "l1", title: "晴天", artists: ["周杰伦"] },
@@ -32,6 +33,17 @@ function createDeferred() {
 
 function nextEventLoopTurn() {
   return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+async function waitForCompareJob(ownerKey: string, id: string) {
+  for (let index = 0; index < 30; index += 1) {
+    const job = getPlaylistCompareJob(ownerKey, id);
+    if (job?.status === "completed" || job?.status === "failed") {
+      return job;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("compare job did not finish");
 }
 
 test("startPlaylistCompareJob updates progress and stores completed result", async () => {
@@ -72,7 +84,44 @@ test("startPlaylistCompareJob updates progress and stores completed result", asy
   assert.equal(completed?.result?.summary.rightOnly, 1);
   assert.equal(getPlaylistCompareJob("owner-b", job.id), null);
   assert.equal(getPlaylistCompareJob("owner-a", "missing"), null);
-  assert.equal(getPlaylistCompareJob("owner-a", job.id), completed);
+  assert.deepEqual(getPlaylistCompareJob("owner-a", job.id), completed);
+  assert.notEqual(getPlaylistCompareJob("owner-a", job.id), completed);
+});
+
+test("compare jobs return detached deep public DTOs at start and after completion", async () => {
+  const secret = "compare-job-secret-sentinel";
+  const privateLeft = [{
+    source: "netease" as const,
+    sourceTrackId: "private-left",
+    title: "同一首歌",
+    artists: ["歌手"],
+    raw: { credentialDigest: secret },
+    ownerKey: secret
+  }];
+  const privateRight = [{
+    source: "qq" as const,
+    sourceTrackId: "private-right",
+    title: "同一首歌",
+    artists: ["歌手"],
+    clientSessionId: secret
+  }];
+  const input = Object.assign({ ...compareInput }, { ownerKey: secret, generation: 3 });
+  const started = startPlaylistCompareJob("owner-private", input, {
+    loadSideTracks: async (provider) => provider === "netease" ? privateLeft : privateRight
+  });
+
+  assert.equal(started.status, "queued");
+  assertPublicDtoSafe(started, secret);
+  const completed = await waitForCompareJob("owner-private", started.id);
+  assert.equal(started.status, "queued", "a returned start DTO must not grow the internal result later");
+
+  assert.equal(completed?.status, "completed");
+  assert.ok(completed?.result);
+  assertPublicDtoSafe(completed, secret);
+  completed.result.items[0].leftTrack?.artists.push("公共突变");
+  const reread = getPlaylistCompareJob("owner-private", started.id);
+  assert.deepEqual(reread?.result?.items[0].leftTrack?.artists, ["歌手"]);
+  assert.equal(privateLeft[0].raw.credentialDigest, secret);
 });
 
 test("legacy ownerless jobs remain inaccessible to every identity", async () => {

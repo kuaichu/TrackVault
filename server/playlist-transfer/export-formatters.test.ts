@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { formatTransferExport } from "./export-formatters.js";
 import type { PlaylistTransferJob } from "./types.js";
+import { assertPublicDtoSafe } from "./assert-public-dto-safe.js";
 
 const job: PlaylistTransferJob = {
   id: "job-1",
@@ -94,6 +95,7 @@ test("JSON export serializes only the public transfer DTO", () => {
   const output = formatTransferExport(privateJob, "json");
   assert.equal(output.filename, "旧收藏-transfer-report.json");
   assert.equal(output.contentType, "application/json; charset=utf-8");
+  assertPublicDtoSafe(JSON.parse(output.content) as unknown, "secret-client-session");
   assert.doesNotMatch(output.content, /ownerKey|secret-client-session|credentialDigest|\"raw\"/);
   assert.equal((JSON.parse(output.content) as { summary: { total: number } }).summary.total, 2);
 });

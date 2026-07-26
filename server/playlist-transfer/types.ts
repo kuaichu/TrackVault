@@ -23,6 +23,16 @@ export type TransferTrack = {
   rawText?: string;
 };
 
+export type PublicTransferTrack = {
+  source: TransferSourceProvider;
+  sourceTrackId?: string;
+  title: string;
+  artists: string[];
+  album?: string;
+  durationSeconds?: number;
+  rawText?: string;
+};
+
 export type ProviderTrack = {
   provider: "netease" | "qq";
   id: string;
@@ -93,7 +103,7 @@ export type PublicMatchCandidate = {
 };
 
 export type PublicTransferTrackResult = {
-  sourceTrack: TransferTrack;
+  sourceTrack: PublicTransferTrack;
   status: TransferTrackStatus;
   candidates: PublicMatchCandidate[];
   selectedCandidate?: PublicMatchCandidate;

@@ -3,7 +3,7 @@ import test from "node:test";
 import type { ErrorRequestHandler, RequestHandler } from "express";
 import type { PlaylistTransferRunJob } from "../playlist-transfer/playlist-transfer-job.js";
 import type { CreatePlaylistTransferDeps, CreatePlaylistTransferInput } from "../playlist-transfer/service.js";
-import type { PlaylistTransferJob } from "../playlist-transfer/types.js";
+import type { PlaylistTransferJob, TransferExportFormat } from "../playlist-transfer/types.js";
 import {
   createPlaylistTransferJobRouter,
   type PlaylistTransferJobRouterDependencies
@@ -11,6 +11,8 @@ import {
 import { withTestRouter } from "./router-test-http.js";
 import { createBackgroundJobOwnerResolver } from "../background-job-owner.js";
 import { getRequiredClientSessionId } from "../request-context.js";
+import { assertPublicDtoSafe } from "../playlist-transfer/assert-public-dto-safe.js";
+import { formatTransferExport } from "../playlist-transfer/export-formatters.js";
 
 const timeout = { timeout: 5_000 };
 
@@ -1033,6 +1035,72 @@ test("QQ provider Error and non-Error failures remain 400", timeout, async () =>
     );
     assert.equal(fallback.status, 400);
     assert.deepEqual(fallback.body, { message: "导入 QQ 音乐歌单失败" });
+  });
+});
+
+test("persisted list, create, get, and JSON export keep the existing deep public DTO boundary", timeout, async () => {
+  const secret = "transfer-regression-secret-sentinel";
+  const privateJob: PlaylistTransferJob & { credentialDigest: string } = {
+    ...neteaseJob,
+    ownerKey: secret,
+    credentialDigest: secret,
+    tracks: [{
+      sourceTrack: Object.assign({
+        source: "qq" as const,
+        sourceTrackId: "source-private",
+        title: "歌曲",
+        artists: ["歌手"]
+      }, { raw: { SID: secret }, clientSessionId: secret }),
+      status: "matched",
+      candidates: [{
+        provider: "netease",
+        targetTrackId: "target-private",
+        title: "歌曲",
+        artists: ["歌手"],
+        confidenceScore: 100,
+        reasons: ["完全一致"],
+        raw: { cookie: secret, ownerKey: secret }
+      }],
+      selectedCandidate: {
+        provider: "netease",
+        targetTrackId: "target-private",
+        title: "歌曲",
+        artists: ["歌手"],
+        confidenceScore: 100,
+        reasons: ["完全一致"],
+        raw: { credentialFingerprint: secret }
+      }
+    }]
+  };
+  const dependencies = createDependencies({
+    getCurrentUserKey: async () => "server-owner",
+    listPlaylistTransferJobs: async () => [privateJob],
+    createPlaylistTransferJob: async () => privateJob,
+    getPlaylistTransferJob: async () => privateJob,
+    formatTransferExport: (job, format) => formatTransferExport(job, format as TransferExportFormat)
+  });
+
+  await withTestRouter([createPlaylistTransferJobRouter(dependencies)], async ({ request, requestJson }) => {
+    const listed = await request("/api/playlist-transfer/jobs");
+    const created = await requestJson("POST", "/api/playlist-transfer/jobs", {
+      sourceProvider: "qq",
+      targetProvider: "netease",
+      playlistId: "source-list"
+    });
+    const found = await request("/api/playlist-transfer/jobs/private");
+    const exportedResponse = await requestJson("POST", "/api/playlist-transfer/jobs/private/export", { format: "json" });
+
+    assert.equal(listed.status, 200);
+    assert.equal(created.status, 201);
+    assert.equal(found.status, 200);
+    assert.equal(exportedResponse.status, 200);
+    assertPublicDtoSafe(listed.body, secret);
+    assertPublicDtoSafe(created.body, secret);
+    assertPublicDtoSafe(found.body, secret);
+    const exported = exportedResponse.body as { filename: string; contentType: string; content: string };
+    assert.equal(exported.filename, "源歌单-transfer-report.json");
+    assert.equal(exported.contentType, "application/json; charset=utf-8");
+    assertPublicDtoSafe(JSON.parse(exported.content) as unknown, secret);
   });
 });
 

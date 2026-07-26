@@ -1,4 +1,5 @@
 import type { TransferExportFormat, TransferExportResult, TransferSourceProvider, TransferTrack } from "./types.js";
+import { toPublicPlaylistCompareResult } from "./playlist-compare-public-dto.js";
 
 export type PlaylistCompareStatus =
   | "exact"
@@ -406,6 +407,7 @@ export function formatPlaylistCompareExport(
   statuses: PlaylistCompareStatus[],
   options: PlaylistCompareExportOptions = {}
 ): TransferExportResult {
+  result = toPublicPlaylistCompareResult(result);
   const defaultStatuses: PlaylistCompareStatus[] = ["exact", "same_title_different_artist", "similar_title", "left_only", "right_only"];
   const safeStatuses = statuses.length > 0 ? statuses : defaultStatuses;
   const providerSuffix = options.preferredProvider ? `-${options.preferredProvider}` : "";
@@ -417,8 +419,11 @@ export function formatPlaylistCompareExport(
       filename: `${baseName}.json`,
       contentType: "application/json; charset=utf-8",
       content: JSON.stringify({
-        ...result,
+        left: result.left,
+        right: result.right,
         items: selectedItems.map(({ item }) => item),
+        summary: result.summary,
+        createdAt: result.createdAt,
         preferredProvider: options.preferredProvider
       }, null, 2)
     };
