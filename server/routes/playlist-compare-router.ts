@@ -14,6 +14,12 @@ import {
   toPublicPlaylistCompareJob,
   toPublicPlaylistCompareResult
 } from "../playlist-transfer/playlist-compare-public-dto.js";
+import {
+  assertPlaylistCompareExportResultWithinLimits,
+  assertPlaylistCompareExportSelectorsWithinLimits,
+  PlaylistCompareExportLimitError,
+  toPlaylistCompareExportLimitResponse
+} from "../playlist-transfer/playlist-compare-export-policy.js";
 import { resolveBackgroundJobOwner } from "./background-job-owner.js";
 
 export type PlaylistCompareRouterDependencies = {
@@ -165,27 +171,37 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
     }
   });
 
-  router.post("/api/playlist-transfer/compare/export", async (request, response) => {
-    const result = parsePublicPlaylistCompareResult(request.body?.result);
-    const format = typeof request.body?.format === "string" ? request.body.format : "markdown";
-    const statuses = normalizeCompareStatuses(request.body?.statuses);
+  router.post("/api/playlist-transfer/compare/export", (request, response, next) => {
+    try {
+      assertPlaylistCompareExportResultWithinLimits(request.body?.result);
+      const result = parsePublicPlaylistCompareResult(request.body?.result);
+      const format = typeof request.body?.format === "string" ? request.body.format : "markdown";
 
-    if (!result) {
-      response.status(400).json({ message: "缺少有效的歌单对比结果。" });
-      return;
+      if (!result) {
+        response.status(400).json({ message: "缺少有效的歌单对比结果。" });
+        return;
+      }
+
+      const statuses = normalizeCompareStatuses(request.body?.statuses);
+      assertPlaylistCompareExportSelectorsWithinLimits(statuses, request.body?.itemIndexes);
+      const itemIndexes = normalizeCompareItemIndexes(request.body?.itemIndexes, result.items.length);
+      const preferredProvider = request.body?.preferredProvider === "netease" || request.body?.preferredProvider === "qq"
+        ? request.body.preferredProvider
+        : undefined;
+
+      response.json(dependencies.formatPlaylistCompareExport(
+        result,
+        format as "markdown" | "text" | "csv" | "json",
+        statuses,
+        { itemIndexes, preferredProvider }
+      ));
+    } catch (error) {
+      if (error instanceof PlaylistCompareExportLimitError) {
+        response.status(413).json(toPlaylistCompareExportLimitResponse(error));
+        return;
+      }
+      next(error);
     }
-
-    const itemIndexes = normalizeCompareItemIndexes(request.body?.itemIndexes, result.items.length);
-    const preferredProvider = request.body?.preferredProvider === "netease" || request.body?.preferredProvider === "qq"
-      ? request.body.preferredProvider
-      : undefined;
-
-    response.json(dependencies.formatPlaylistCompareExport(
-      result,
-      format as "markdown" | "text" | "csv" | "json",
-      statuses,
-      { itemIndexes, preferredProvider }
-    ));
   });
 
   return router;

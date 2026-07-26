@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { comparePlaylists, formatPlaylistCompareExport } from "./playlist-compare.js";
+import {
+  comparePlaylists,
+  formatPlaylistCompareExport,
+  type PlaylistCompareResult
+} from "./playlist-compare.js";
+import {
+  PLAYLIST_COMPARE_EXPORT_LIMITS,
+  PlaylistCompareExportLimitError
+} from "./playlist-compare-export-policy.js";
 import type { TransferTrack } from "./types.js";
 import { assertPublicDtoSafe } from "./assert-public-dto-safe.js";
 
@@ -139,4 +147,181 @@ test("compare JSON formatter allowlists nested fields without changing filename,
     leftOnly: result.summary.leftOnly,
     rightOnly: result.summary.rightOnly
   });
+});
+
+function createLargeCompareResult(itemCount: number): PlaylistCompareResult {
+  const item = {
+    status: "exact" as const,
+    leftTrack: leftTracks[0],
+    rightTrack: rightTracks[0],
+    score: 1,
+    reasons: ["完全一致"]
+  };
+  return {
+    left: { provider: "netease", playlistId: "left", playlistName: "左歌单", total: itemCount },
+    right: { provider: "qq", playlistId: "right", playlistName: "右歌单", total: itemCount },
+    items: Array.from({ length: itemCount }, () => item),
+    summary: {
+      totalLeft: itemCount,
+      totalRight: itemCount,
+      exact: itemCount,
+      sameTitleDifferentArtist: 0,
+      similarTitle: 0,
+      leftOnly: 0,
+      rightOnly: 0
+    },
+    createdAt: "2026-07-27T00:00:00.000Z"
+  };
+}
+
+function createTextBudgetResult(textBytes: number): PlaylistCompareResult {
+  return {
+    left: { provider: "netease", playlistName: "", total: 1 },
+    right: { provider: "qq", playlistName: "", total: 0 },
+    items: [{
+      status: "left_only",
+      leftTrack: { source: "netease", title: "x".repeat(textBytes), artists: [] },
+      score: 0,
+      reasons: []
+    }],
+    summary: {
+      totalLeft: 1,
+      totalRight: 0,
+      exact: 0,
+      sameTitleDifferentArtist: 0,
+      similarTitle: 0,
+      leftOnly: 1,
+      rightOnly: 0
+    },
+    createdAt: ""
+  };
+}
+
+test("compare formatter enforces shared collection limits for direct callers", () => {
+  const atLimit = createLargeCompareResult(PLAYLIST_COMPARE_EXPORT_LIMITS.items);
+  const withinLimit = formatPlaylistCompareExport(
+    atLimit,
+    "json",
+    Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.statuses }, () => "exact"),
+    { itemIndexes: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.itemIndexes }, () => 0) }
+  );
+  assert.equal(JSON.parse(withinLimit.content).items.length, 1);
+  const largeText = formatPlaylistCompareExport(atLimit, "text", ["exact"]);
+  assert.equal(largeText.content.split("晴天 - 周杰伦 - 叶惠美").length - 1, PLAYLIST_COMPARE_EXPORT_LIMITS.items);
+
+  const nestedAtLimit = createLargeCompareResult(1);
+  nestedAtLimit.items[0] = {
+    ...nestedAtLimit.items[0],
+    leftTrack: {
+      ...nestedAtLimit.items[0].leftTrack!,
+      artists: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.artistsPerTrack }, () => "歌手")
+    },
+    reasons: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.reasonsPerItem }, () => "原因")
+  };
+  assert.equal(formatPlaylistCompareExport(nestedAtLimit, "text", ["exact"]).contentType, "text/plain; charset=utf-8");
+  assert.equal(
+    formatPlaylistCompareExport(
+      createTextBudgetResult(PLAYLIST_COMPARE_EXPORT_LIMITS.textBytes),
+      "text",
+      ["left_only"]
+    ).contentType,
+    "text/plain; charset=utf-8"
+  );
+
+  const overLimitCases: Array<{
+    expectedResource: string;
+    result: PlaylistCompareResult;
+    statuses: Array<"exact">;
+    itemIndexes?: number[];
+  }> = [
+    {
+      expectedResource: "items",
+      result: createLargeCompareResult(PLAYLIST_COMPARE_EXPORT_LIMITS.items + 1),
+      statuses: ["exact"]
+    },
+    {
+      expectedResource: "statuses",
+      result: createLargeCompareResult(1),
+      statuses: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.statuses + 1 }, () => "exact")
+    },
+    {
+      expectedResource: "itemIndexes",
+      result: createLargeCompareResult(1),
+      statuses: ["exact"],
+      itemIndexes: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.itemIndexes + 1 }, () => 0)
+    },
+    {
+      expectedResource: "artistsPerTrack",
+      result: {
+        ...createLargeCompareResult(1),
+        items: [{
+          ...createLargeCompareResult(1).items[0],
+          leftTrack: {
+            ...leftTracks[0],
+            artists: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.artistsPerTrack + 1 }, () => "歌手")
+          }
+        }]
+      },
+      statuses: ["exact"]
+    },
+    {
+      expectedResource: "reasonsPerItem",
+      result: {
+        ...createLargeCompareResult(1),
+        items: [{
+          ...createLargeCompareResult(1).items[0],
+          reasons: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.reasonsPerItem + 1 }, () => "原因")
+        }]
+      },
+      statuses: ["exact"]
+    },
+    {
+      expectedResource: "textBytes",
+      result: createTextBudgetResult(PLAYLIST_COMPARE_EXPORT_LIMITS.textBytes + 1),
+      statuses: ["exact"]
+    }
+  ];
+
+  for (const testCase of overLimitCases) {
+    assert.throws(
+      () => formatPlaylistCompareExport(testCase.result, "json", testCase.statuses, {
+        itemIndexes: testCase.itemIndexes
+      }),
+      (error) => error instanceof PlaylistCompareExportLimitError && error.resource === testCase.expectedResource
+    );
+  }
+});
+
+test("compare formatter keeps order and bounded duplicate-status semantics across all formats", () => {
+  const result = comparePlaylists({
+    left: { provider: "netease", playlistId: "left", playlistName: "左歌单", tracks: leftTracks },
+    right: { provider: "qq", playlistId: "right", playlistName: "右歌单", tracks: rightTracks }
+  });
+  const formats = ["markdown", "text", "csv", "json"] as const;
+
+  for (const format of formats) {
+    const single = formatPlaylistCompareExport(result, format, ["exact"], { itemIndexes: [2, 0, 2] });
+    const duplicate = formatPlaylistCompareExport(result, format, ["exact", "exact"], { itemIndexes: [2, 0, 2] });
+    assert.equal(single.filename.endsWith(format === "markdown" ? ".md" : format === "text" ? ".txt" : `.${format}`), true);
+    assert.match(single.contentType, format === "json" ? /^application\/json/ : format === "csv" ? /^text\/csv/ : format === "text" ? /^text\/plain/ : /^text\/markdown/);
+    if (format === "markdown" || format === "text") {
+      assert.equal(duplicate.content.split("晴天 - 周杰伦").length - 1, format === "markdown" ? 4 : 2);
+    } else {
+      assert.equal(duplicate.content, single.content);
+    }
+  }
+
+  const ordered = createLargeCompareResult(3);
+  ordered.items = ordered.items.map((item, index) => ({
+    ...item,
+    leftTrack: { ...item.leftTrack!, title: `左侧-${index}` },
+    rightTrack: { ...item.rightTrack!, title: `右侧-${index}` }
+  }));
+  const selected = formatPlaylistCompareExport(ordered, "json", ["exact"], {
+    itemIndexes: [2, 0, 2]
+  });
+  assert.deepEqual(
+    JSON.parse(selected.content).items.map((item: { leftTrack: { title: string } }) => item.leftTrack.title),
+    ["左侧-0", "左侧-2"]
+  );
 });

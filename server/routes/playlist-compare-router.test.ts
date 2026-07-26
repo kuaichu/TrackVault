@@ -20,6 +20,7 @@ import {
 import { withTestRouter } from "./router-test-http.js";
 import { assertPublicDtoSafe } from "../playlist-transfer/assert-public-dto-safe.js";
 import { formatPlaylistCompareExport } from "../playlist-transfer/playlist-compare.js";
+import { PLAYLIST_COMPARE_EXPORT_LIMITS } from "../playlist-transfer/playlist-compare-export-policy.js";
 
 const timeout = { timeout: 5_000 };
 
@@ -527,7 +528,148 @@ test("export validates result before formatting and defaults format and statuses
   });
 });
 
-test("export filters NaN and Infinity and leaves formatter rejection unconverted", timeout, async () => {
+test("export rejects collection limits before formatting without reflecting request data", timeout, async () => {
+  const secret = "compare-export-limit-secret-sentinel";
+  let formatterCalls = 0;
+  const dependencies = createDependencies({
+    formatPlaylistCompareExport: () => {
+      formatterCalls += 1;
+      return exportResult;
+    }
+  });
+  const handler = getPostHandler(createPlaylistCompareRouter(dependencies), "/api/playlist-transfer/compare/export");
+  const atLimitResult: PlaylistCompareResult = {
+    ...compareResult,
+    items: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.items }, () => compareResult.items[0])
+  };
+
+  async function invoke(body: unknown) {
+    let status = 200;
+    let payload: unknown;
+    const response = {
+      status: (nextStatus: number) => {
+        status = nextStatus;
+        return response;
+      },
+      json: (nextPayload: unknown) => {
+        payload = nextPayload;
+        return response;
+      }
+    } as unknown as Response;
+    const next = ((error?: unknown) => {
+      if (error !== undefined) {
+        throw error;
+      }
+    }) as NextFunction;
+    await Promise.resolve(handler({ body } as Request, response, next));
+    return { status, payload };
+  }
+
+  const accepted = await invoke({
+    result: atLimitResult,
+    statuses: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.statuses }, () => "exact"),
+    itemIndexes: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.itemIndexes }, () => 0)
+  });
+  assert.equal(accepted.status, 200);
+  assert.deepEqual(accepted.payload, exportResult);
+  assert.equal(formatterCalls, 1);
+
+  const oversizedItem = {
+    ...compareResult.items[0],
+    leftTrack: { ...leftTrack, title: secret }
+  };
+  const overLimitCases = [
+    {
+      resource: "items",
+      body: {
+      result: {
+        ...compareResult,
+        items: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.items + 1 }, () => oversizedItem)
+      },
+      statuses: ["exact"]
+      }
+    },
+    {
+      resource: "statuses",
+      body: {
+      result: compareResult,
+      statuses: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.statuses + 1 }, () => "exact")
+      }
+    },
+    {
+      resource: "itemIndexes",
+      body: {
+      result: compareResult,
+      statuses: ["exact"],
+      itemIndexes: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.itemIndexes + 1 }, () => 0)
+      }
+    },
+    {
+      resource: "artistsPerTrack",
+      body: {
+        result: {
+          ...compareResult,
+          items: [{
+            ...compareResult.items[0],
+            leftTrack: {
+              ...leftTrack,
+              title: secret,
+              artists: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.artistsPerTrack + 1 }, () => "歌手")
+            }
+          }]
+        },
+        statuses: ["exact"]
+      }
+    },
+    {
+      resource: "reasonsPerItem",
+      body: {
+        result: {
+          ...compareResult,
+          items: [{
+            ...compareResult.items[0],
+            leftTrack: { ...leftTrack, title: secret },
+            reasons: Array.from({ length: PLAYLIST_COMPARE_EXPORT_LIMITS.reasonsPerItem + 1 }, () => "原因")
+          }]
+        },
+        statuses: ["exact"]
+      }
+    },
+    {
+      resource: "textBytes",
+      body: {
+        result: {
+          ...compareResult,
+          items: [{
+            ...compareResult.items[0],
+            leftTrack: {
+              ...leftTrack,
+              title: `${secret}${"x".repeat(PLAYLIST_COMPARE_EXPORT_LIMITS.textBytes)}`
+            }
+          }]
+        },
+        statuses: ["exact"]
+      }
+    }
+  ];
+
+  for (const { resource, body } of overLimitCases) {
+    const rejected = await invoke(body);
+    assert.equal(rejected.status, 413);
+    assert.equal(formatterCalls, 1);
+    assert.equal(JSON.stringify(rejected.payload).includes(secret), false);
+    assert.deepEqual(rejected.payload, {
+      code: "PLAYLIST_COMPARE_EXPORT_LIMIT_EXCEEDED",
+      message: "歌单对比导出数据超过允许上限。",
+      limit: {
+        resource,
+        maximum: PLAYLIST_COMPARE_EXPORT_LIMITS[resource as keyof typeof PLAYLIST_COMPARE_EXPORT_LIMITS]
+      }
+    });
+  }
+});
+
+test("export filters NaN and Infinity and forwards formatter failures", timeout, async () => {
   const calls: PlaylistCompareExportOptions[] = [];
   const dependencies = createDependencies({
     formatPlaylistCompareExport: (_result, _format, _statuses, options) => {
@@ -547,7 +689,10 @@ test("export filters NaN and Infinity and leaves formatter rejection unconverted
       return response;
     }
   } as unknown as Response;
-  const next = (() => assert.fail("The export handler must not call next")) as NextFunction;
+  const forwarded: unknown[] = [];
+  const next = ((error?: unknown) => {
+    forwarded.push(error);
+  }) as NextFunction;
 
   await Promise.resolve(handler({
     body: {
@@ -559,13 +704,53 @@ test("export filters NaN and Infinity and leaves formatter rejection unconverted
   assert.deepEqual(payloads, [exportResult]);
   assert.deepEqual(calls[0], { itemIndexes: [0, 2], preferredProvider: undefined });
 
-  await assert.rejects(Promise.resolve(handler({
+  await Promise.resolve(handler({
     body: { result: compareResult, preferredProvider: 123 }
-  } as Request, response, next)), {
-    message: "formatter failed"
-  });
+  } as Request, response, next));
   assert.deepEqual(calls[1], { itemIndexes: undefined, preferredProvider: undefined });
   assert.equal(payloads.length, 1);
+  assert.equal((forwarded[0] as Error).message, "formatter failed");
+});
+
+test("export sends formatter throws through the real Express error boundary without unhandled rejection", timeout, async () => {
+  const unhandledRejections: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown) => {
+    unhandledRejections.push(reason);
+  };
+  const errorBoundary: ErrorRequestHandler = (error, _request, response, _next) => {
+    response.status(599).json({ message: error instanceof Error ? error.message : "unknown" });
+  };
+  const thrownValues = [new Error("formatter failed"), "non-error formatter failure"];
+
+  process.on("unhandledRejection", onUnhandledRejection);
+  try {
+    for (const thrownValue of thrownValues) {
+      const router = createPlaylistCompareRouter(createDependencies({
+        formatPlaylistCompareExport: () => {
+          throw thrownValue;
+        }
+      }));
+      await withTestRouter([
+        router,
+        errorBoundary as unknown as RequestHandler
+      ], async ({ request }) => {
+        const response = await request("/api/playlist-transfer/compare/export", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ result: compareResult, statuses: ["exact"] }),
+          signal: AbortSignal.timeout(1_000)
+        });
+        assert.equal(response.status, 599);
+        assert.deepEqual(response.body, {
+          message: thrownValue instanceof Error ? thrownValue.message : "unknown"
+        });
+      });
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(unhandledRejections, []);
+  } finally {
+    process.removeListener("unhandledRejection", onUnhandledRejection);
+  }
 });
 
 test("compare sync and job HTTP responses deeply sanitize dependency results", timeout, async () => {

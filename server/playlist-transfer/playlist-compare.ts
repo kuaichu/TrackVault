@@ -1,5 +1,6 @@
 import type { TransferExportFormat, TransferExportResult, TransferSourceProvider, TransferTrack } from "./types.js";
 import { toPublicPlaylistCompareResult } from "./playlist-compare-public-dto.js";
+import { assertPlaylistCompareExportWithinLimits } from "./playlist-compare-export-policy.js";
 
 export type PlaylistCompareStatus =
   | "exact"
@@ -315,9 +316,10 @@ function selectCompareItems(
   itemIndexes: number[] | undefined
 ) {
   const selectedIndexes = itemIndexes ? new Set(itemIndexes) : null;
-  return result.items
-    .map((item, index) => ({ item, index }))
-    .filter(({ item, index }) => statuses.includes(item.status) && (!selectedIndexes || selectedIndexes.has(index)));
+  const selectedStatuses = new Set(statuses);
+  return result.items.filter((item, index) =>
+    selectedStatuses.has(item.status) && (!selectedIndexes || selectedIndexes.has(index))
+  );
 }
 
 function csvValue(value: string | number | undefined) {
@@ -343,14 +345,14 @@ function formatMarkdown(result: PlaylistCompareResult, statuses: PlaylistCompare
   ];
 
   for (const status of statuses) {
-    const matches = selectedItems.filter(({ item }) => item.status === status);
+    const matches = selectedItems.filter((item) => item.status === status);
     lines.push(`## ${statusLabel(status)}`);
     if (matches.length === 0) {
       lines.push("无", "");
       continue;
     }
 
-    matches.forEach(({ item }, index) => {
+    matches.forEach((item, index) => {
       const exportTrack = getExportTrack(item, options.preferredProvider);
       const pairedTrack = exportTrack === item.leftTrack ? item.rightTrack : item.leftTrack;
       const pair = pairedTrack ? ` -> ${trackText(pairedTrack)}` : "";
@@ -366,13 +368,13 @@ function formatText(result: PlaylistCompareResult, statuses: PlaylistCompareStat
   const selectedItems = selectCompareItems(result, statuses, options.itemIndexes);
   const lines: string[] = [];
   for (const status of statuses) {
-    const matches = selectedItems.filter(({ item }) => item.status === status);
+    const matches = selectedItems.filter((item) => item.status === status);
     if (matches.length === 0) {
       continue;
     }
 
     lines.push(`# ${statusLabel(status)}`);
-    matches.forEach(({ item }) => {
+    matches.forEach((item) => {
       lines.push(trackText(getExportTrack(item, options.preferredProvider)));
     });
     lines.push("");
@@ -384,7 +386,7 @@ function formatText(result: PlaylistCompareResult, statuses: PlaylistCompareStat
 function formatCsv(result: PlaylistCompareResult, statuses: PlaylistCompareStatus[], options: PlaylistCompareExportOptions) {
   const rows = [["status", "left_title", "left_artists", "left_album", "right_title", "right_artists", "right_album", "score", "reasons"]];
 
-  for (const { item } of selectCompareItems(result, statuses, options.itemIndexes)) {
+  for (const item of selectCompareItems(result, statuses, options.itemIndexes)) {
     rows.push([
       statusLabel(item.status),
       item.leftTrack?.title ?? "",
@@ -407,21 +409,26 @@ export function formatPlaylistCompareExport(
   statuses: PlaylistCompareStatus[],
   options: PlaylistCompareExportOptions = {}
 ): TransferExportResult {
+  assertPlaylistCompareExportWithinLimits({
+    result,
+    statuses,
+    itemIndexes: options.itemIndexes
+  });
   result = toPublicPlaylistCompareResult(result);
   const defaultStatuses: PlaylistCompareStatus[] = ["exact", "same_title_different_artist", "similar_title", "left_only", "right_only"];
   const safeStatuses = statuses.length > 0 ? statuses : defaultStatuses;
   const providerSuffix = options.preferredProvider ? `-${options.preferredProvider}` : "";
   const baseName = `${result.left.playlistName}-vs-${result.right.playlistName}-compare${providerSuffix}`;
-  const selectedItems = selectCompareItems(result, safeStatuses, options.itemIndexes);
 
   if (format === "json") {
+    const selectedItems = selectCompareItems(result, safeStatuses, options.itemIndexes);
     return {
       filename: `${baseName}.json`,
       contentType: "application/json; charset=utf-8",
       content: JSON.stringify({
         left: result.left,
         right: result.right,
-        items: selectedItems.map(({ item }) => item),
+        items: selectedItems,
         summary: result.summary,
         createdAt: result.createdAt,
         preferredProvider: options.preferredProvider
