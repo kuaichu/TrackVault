@@ -8,6 +8,7 @@ import type {
   TransferImportRequest,
   TransferTrackResult
 } from "./types.js";
+import { parseTransferImportRequest } from "./transfer-import-request.js";
 
 function toPublicTransferTrack(track: TransferTrack): TransferTrack {
   return {
@@ -73,17 +74,6 @@ export function toPublicPlaylistTransferJob(job: PlaylistTransferJob): PublicPla
   };
 }
 
-export function toPublicTransferImportRequest(input: TransferImportRequest): TransferImportRequest {
-  return {
-    sourceProvider: input.sourceProvider,
-    targetProvider: input.targetProvider,
-    ...(input.playlistName === undefined ? {} : { playlistName: input.playlistName }),
-    ...(input.playlistId === undefined ? {} : { playlistId: input.playlistId }),
-    ...(input.sourceTrackIds === undefined ? {} : { sourceTrackIds: [...input.sourceTrackIds] }),
-    ...(input.sourceTracks === undefined
-      ? {}
-      : { sourceTracks: input.sourceTracks.map(toPublicTransferTrack) }),
-    ...(input.text === undefined ? {} : { text: input.text }),
-    ...(input.checkAvailability === undefined ? {} : { checkAvailability: input.checkAvailability })
-  };
+export function toPublicTransferImportRequest(input: unknown): TransferImportRequest {
+  return parseTransferImportRequest(input);
 }

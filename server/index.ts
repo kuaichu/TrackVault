@@ -73,6 +73,10 @@ const __dirname = path.dirname(__filename);
 const clientDistDir = path.resolve(__dirname, "../dist");
 
 app.use(cors());
+app.post([
+  "/api/playlist-transfer/jobs",
+  "/api/playlist-transfer/jobs/progress"
+], express.json({ limit: "2mb", strict: false }));
 app.use(express.json({ limit: "2mb" }));
 app.use((request, response, next) => {
   const headerSessionId = typeof request.headers["x-client-session-id"] === "string" ? request.headers["x-client-session-id"] : "";

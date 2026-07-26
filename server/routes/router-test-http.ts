@@ -16,6 +16,10 @@ export type TestHttpClient = {
   requestJson: (method: "POST" | "PUT", path: string, body: unknown, headers?: HeadersInit) => Promise<TestHttpResponse>;
 };
 
+export type TestRouterOptions = {
+  jsonStrict?: boolean;
+};
+
 async function closeServer(server: Server) {
   if (!server.listening) {
     return;
@@ -34,10 +38,11 @@ async function closeServer(server: Server) {
 
 export async function withTestRouter(
   handlers: RequestHandler[],
-  callback: (client: TestHttpClient) => Promise<void>
+  callback: (client: TestHttpClient) => Promise<void>,
+  options: TestRouterOptions = {}
 ) {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ strict: options.jsonStrict ?? true }));
   app.use((request, _response, next) => {
     const headerSessionId = request.get("x-client-session-id");
     const querySessionId = typeof request.query.sid === "string" ? request.query.sid : undefined;

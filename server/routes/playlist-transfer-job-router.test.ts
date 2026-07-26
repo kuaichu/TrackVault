@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { NextFunction, Request, RequestHandler, Response, Router } from "express";
+import type { ErrorRequestHandler, RequestHandler } from "express";
 import type { PlaylistTransferRunJob } from "../playlist-transfer/playlist-transfer-job.js";
 import type { CreatePlaylistTransferDeps, CreatePlaylistTransferInput } from "../playlist-transfer/service.js";
 import type { PlaylistTransferJob } from "../playlist-transfer/types.js";
@@ -93,23 +93,6 @@ function createDependencies(
   };
 }
 
-type RouteLayer = {
-  route?: {
-    path: string;
-    methods: Record<string, boolean>;
-    stack: Array<{
-      handle: (request: Request, response: Response, next: NextFunction) => unknown;
-    }>;
-  };
-};
-
-function getRouteHandler(router: Router, method: string, path: string) {
-  const { stack } = router as unknown as { stack: RouteLayer[] };
-  const layer = stack.find((candidate) => candidate.route?.path === path && candidate.route.methods[method]);
-  assert.ok(layer?.route, `Expected ${method.toUpperCase()} ${path} route`);
-  return layer.route.stack[0].handle;
-}
-
 test("job list uses the current owner and returns only the jobs envelope", timeout, async () => {
   const owners: string[] = [];
   const dependencies = createDependencies({
@@ -158,7 +141,17 @@ test("sync creation overwrites owner, preserves payload, and returns a bare job 
     targetProvider: "netease",
     playlistName: "  原样名称  ",
     playlistId: "source-list",
-    sourceTrackIds: ["source-1"],
+    sourceTrackIds: ["source-1", "source-1", ""],
+    sourceTracks: [{
+      source: "qq",
+      sourceTrackId: "source-1",
+      title: "  原样标题  ",
+      artists: ["歌手 A", ""],
+      album: "  原样专辑  ",
+      durationSeconds: 123,
+      rawText: "raw track",
+      providerIds: { qq: "source-1" }
+    }],
     text: "raw text",
     checkAvailability: true,
     ownerKey: "attacker",
@@ -172,7 +165,25 @@ test("sync creation overwrites owner, preserves payload, and returns a bare job 
     assert.equal(Object.prototype.hasOwnProperty.call(response.body, "job"), false);
   });
 
-  assert.deepEqual(inputs, [{ ...payload, ownerKey: "server-owner" }]);
+  assert.deepEqual(inputs, [{
+    sourceProvider: "qq",
+    targetProvider: "netease",
+    playlistName: "  原样名称  ",
+    playlistId: "source-list",
+    sourceTrackIds: ["source-1", "source-1", ""],
+    sourceTracks: [{
+      source: "qq",
+      sourceTrackId: "source-1",
+      title: "  原样标题  ",
+      artists: ["歌手 A", ""],
+      album: "  原样专辑  ",
+      durationSeconds: 123,
+      rawText: "raw track"
+    }],
+    text: "raw text",
+    checkAvailability: true,
+    ownerKey: "server-owner"
+  }]);
   assert.equal(dependencyArguments.length, 1);
   assert.deepEqual(dependencyArguments[0], {
     loadSourceTracks,
@@ -262,7 +273,112 @@ test("protected transfer endpoints reject missing, default, and malformed client
   });
 });
 
-test("progress start overwrites owner and returns the synchronously created job with 202", timeout, async () => {
+test("creation endpoints reject non-object JSON bodies before creating a task", timeout, async () => {
+  let createCalls = 0;
+  let startCalls = 0;
+  const taskMap = new Map<string, CreatePlaylistTransferInput>();
+  const dependencies = createDependencies({
+    getCurrentUserKey: async () => "server-owner",
+    createPlaylistTransferJob: async (input) => {
+      createCalls += 1;
+      taskMap.set(`create-${createCalls}`, input);
+      return neteaseJob;
+    },
+    startPlaylistTransferRunJob: (input) => {
+      startCalls += 1;
+      taskMap.set(`start-${startCalls}`, input);
+      return runJob;
+    }
+  });
+  const cases: Array<{ name: string; body: unknown }> = [
+    { name: "null", body: null },
+    { name: "array", body: [] },
+    { name: "string", body: "invalid" }
+  ];
+  const paths = ["/api/playlist-transfer/jobs", "/api/playlist-transfer/jobs/progress"];
+
+  await withTestRouter([createPlaylistTransferJobRouter(dependencies)], async ({ requestJson }) => {
+    for (const { name, body } of cases) {
+      for (const path of paths) {
+        const response = await requestJson("POST", path, body);
+        assert.equal(response.status, 400, `${path} should reject ${name}`);
+        assert.deepEqual(response.body, { message: "歌单互转任务输入格式无效。" });
+      }
+    }
+  }, { jsonStrict: false });
+
+  assert.equal(createCalls, 0);
+  assert.equal(startCalls, 0);
+  assert.equal(taskMap.size, 0);
+});
+
+test("creation endpoints share scalar, array, and nested track validation", timeout, async () => {
+  let createCalls = 0;
+  let startCalls = 0;
+  const taskMap = new Map<string, CreatePlaylistTransferInput>();
+  const dependencies = createDependencies({
+    getCurrentUserKey: async () => "server-owner",
+    createPlaylistTransferJob: async (input) => {
+      createCalls += 1;
+      taskMap.set(`create-${createCalls}`, input);
+      return neteaseJob;
+    },
+    startPlaylistTransferRunJob: (input) => {
+      startCalls += 1;
+      taskMap.set(`start-${startCalls}`, input);
+      return runJob;
+    }
+  });
+  const base = { sourceProvider: "qq", targetProvider: "netease" };
+  const track = { source: "qq", title: "title", artists: ["artist"] };
+  const cases: Array<{ name: string; body: unknown }> = [
+    { name: "missing sourceProvider", body: { targetProvider: "netease" } },
+    { name: "invalid sourceProvider", body: { ...base, sourceProvider: "spotify" } },
+    { name: "invalid targetProvider", body: { ...base, targetProvider: {} } },
+    { name: "null sourceTrackIds", body: { ...base, sourceTrackIds: null } },
+    { name: "object sourceTrackIds", body: { ...base, sourceTrackIds: {} } },
+    { name: "string sourceTrackIds", body: { ...base, sourceTrackIds: "source-1" } },
+    { name: "mixed sourceTrackIds", body: { ...base, sourceTrackIds: ["source-1", 2] } },
+    { name: "null sourceTracks", body: { ...base, sourceTracks: null } },
+    { name: "object sourceTracks", body: { ...base, sourceTracks: {} } },
+    { name: "string sourceTracks", body: { ...base, sourceTracks: "track" } },
+    { name: "null track", body: { ...base, sourceTracks: [null] } },
+    { name: "number track", body: { ...base, sourceTracks: [2] } },
+    { name: "string track", body: { ...base, sourceTracks: ["track"] } },
+    { name: "missing track source", body: { ...base, sourceTracks: [{ title: "title", artists: ["artist"] }] } },
+    { name: "invalid track source", body: { ...base, sourceTracks: [{ ...track, source: [] }] } },
+    { name: "invalid track title", body: { ...base, sourceTracks: [{ ...track, title: null }] } },
+    { name: "null track artists", body: { ...base, sourceTracks: [{ ...track, artists: null }] } },
+    { name: "object track artists", body: { ...base, sourceTracks: [{ ...track, artists: {} }] } },
+    { name: "string track artists", body: { ...base, sourceTracks: [{ ...track, artists: "artist" }] } },
+    { name: "mixed track artists", body: { ...base, sourceTracks: [{ ...track, artists: ["artist", 2] }] } },
+    { name: "invalid sourceTrackId", body: { ...base, sourceTracks: [{ ...track, sourceTrackId: 1 }] } },
+    { name: "invalid album", body: { ...base, sourceTracks: [{ ...track, album: [] }] } },
+    { name: "invalid durationSeconds", body: { ...base, sourceTracks: [{ ...track, durationSeconds: "123" }] } },
+    { name: "invalid rawText", body: { ...base, sourceTracks: [{ ...track, rawText: false }] } },
+    { name: "invalid playlistName", body: { ...base, playlistName: 1 } },
+    { name: "invalid playlistId", body: { ...base, playlistId: null } },
+    { name: "invalid text", body: { ...base, text: {} } },
+    { name: "invalid checkAvailability", body: { ...base, checkAvailability: "true" } }
+  ];
+  const paths = ["/api/playlist-transfer/jobs", "/api/playlist-transfer/jobs/progress"];
+
+  await withTestRouter([createPlaylistTransferJobRouter(dependencies)], async ({ requestJson }) => {
+    for (const { name, body } of cases) {
+      for (const path of paths) {
+        const response = await requestJson("POST", path, body);
+        assert.equal(response.status, 400, `${path} should reject ${name}`);
+        assert.deepEqual(response.body, { message: "歌单互转任务输入格式无效。" });
+      }
+    }
+  });
+
+  assert.equal(createCalls, 0);
+  assert.equal(startCalls, 0);
+  assert.equal(taskMap.size, 0);
+});
+
+test("progress start accepts minimum, empty, and complete inputs, overwrites owner, and returns 202", timeout, async () => {
   const inputs: CreatePlaylistTransferInput[] = [];
   const dependencyArguments: CreatePlaylistTransferDeps[] = [];
   const loadSourceTracks: NonNullable<CreatePlaylistTransferDeps["loadSourceTracks"]> = async () => [];
@@ -286,8 +402,21 @@ test("progress start overwrites owner and returns the synchronously created job 
   const payload = {
     sourceProvider: "qq",
     targetProvider: "netease",
+    playlistName: "  原样名称  ",
     playlistId: "source-list",
-    sourceTrackIds: ["source-1"],
+    sourceTrackIds: ["source-1", "source-1", ""],
+    sourceTracks: [{
+      source: "netease",
+      sourceTrackId: "source-1",
+      title: "  原样标题  ",
+      artists: ["歌手 A", ""],
+      album: "  原样专辑  ",
+      durationSeconds: 123,
+      rawText: "raw track",
+      providerIds: { netease: "source-1" }
+    }],
+    text: "raw text",
+    checkAvailability: false,
     ownerKey: "attacker",
     dataScopeId: "account:qqmusic:attacker",
     uin: "99999",
@@ -296,6 +425,22 @@ test("progress start overwrites owner and returns the synchronously created job 
   };
 
   await withTestRouter([createPlaylistTransferJobRouter(dependencies)], async ({ requestJson }) => {
+    const minimum = await requestJson("POST", "/api/playlist-transfer/jobs/progress", {
+      sourceProvider: "text",
+      targetProvider: "qq"
+    });
+    assert.equal(minimum.status, 202);
+    assert.deepEqual(minimum.body, { job: runJob });
+
+    const emptyTracks = await requestJson("POST", "/api/playlist-transfer/jobs/progress", {
+      sourceProvider: "text",
+      targetProvider: "qq",
+      sourceTracks: [],
+      text: "fallback text"
+    });
+    assert.equal(emptyTracks.status, 202);
+    assert.deepEqual(emptyTracks.body, { job: runJob });
+
     const response = await requestJson("POST", "/api/playlist-transfer/jobs/progress", payload, {
       "x-owner-key": "header-attacker",
       "x-data-scope-id": "account:netease:header-attacker",
@@ -306,8 +451,36 @@ test("progress start overwrites owner and returns the synchronously created job 
     assert.deepEqual(response.body, { job: runJob });
   });
 
-  assert.deepEqual(inputs, [{ ...payload, ownerKey: "server-owner" }]);
-  assert.equal(dependencyArguments.length, 1);
+  assert.deepEqual(inputs, [
+    { sourceProvider: "text", targetProvider: "qq", ownerKey: "server-owner" },
+    {
+      sourceProvider: "text",
+      targetProvider: "qq",
+      sourceTracks: [],
+      text: "fallback text",
+      ownerKey: "server-owner"
+    },
+    {
+      sourceProvider: "qq",
+      targetProvider: "netease",
+      playlistName: "  原样名称  ",
+      playlistId: "source-list",
+      sourceTrackIds: ["source-1", "source-1", ""],
+      sourceTracks: [{
+        source: "netease",
+        sourceTrackId: "source-1",
+        title: "  原样标题  ",
+        artists: ["歌手 A", ""],
+        album: "  原样专辑  ",
+        durationSeconds: 123,
+        rawText: "raw track"
+      }],
+      text: "raw text",
+      checkAvailability: false,
+      ownerKey: "server-owner"
+    }
+  ]);
+  assert.equal(dependencyArguments.length, 3);
   assert.deepEqual(dependencyArguments[0], {
     loadSourceTracks,
     searchTargetTracks,
@@ -320,19 +493,56 @@ test("progress start overwrites owner and returns the synchronously created job 
   assert.equal(dependencyArguments[0].saveJob, saveJob);
 });
 
-test("progress start does not convert a synchronous start failure", timeout, async () => {
-  const router = createPlaylistTransferJobRouter(createDependencies({
-    getCurrentUserKey: async () => "server-owner",
-    startPlaylistTransferRunJob: () => {
-      throw new Error("start failed");
+test("progress start forwards synchronous and asynchronous failures without unhandled rejections", timeout, async () => {
+  const unhandledRejections: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown) => {
+    unhandledRejections.push(reason);
+  };
+  const errorBoundary: ErrorRequestHandler = (error, _request, response, _next) => {
+    response.status(599).json({ message: error instanceof Error ? error.message : "unknown" });
+  };
+  const starts: Array<{
+    start: PlaylistTransferJobRouterDependencies["startPlaylistTransferRunJob"];
+    message: string;
+  }> = [
+    {
+      start: () => {
+        throw new Error("sync start failed");
+      },
+      message: "sync start failed"
+    },
+    {
+      start: () => Promise.reject(new Error("async start failed")),
+      message: "async start failed"
     }
-  }));
-  const handler = getRouteHandler(router, "post", "/api/playlist-transfer/jobs/progress");
+  ];
 
-  await assert.rejects(
-    Promise.resolve(handler({ body: {} } as Request, {} as Response, () => undefined)),
-    /start failed/
-  );
+  process.on("unhandledRejection", onUnhandledRejection);
+  try {
+    for (const { start: startPlaylistTransferRunJob, message } of starts) {
+      const router = createPlaylistTransferJobRouter(createDependencies({
+        getCurrentUserKey: async () => "server-owner",
+        startPlaylistTransferRunJob
+      }));
+      await withTestRouter([
+        router,
+        errorBoundary as unknown as RequestHandler
+      ], async ({ request }) => {
+        const response = await request("/api/playlist-transfer/jobs/progress", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sourceProvider: "qq", targetProvider: "netease" }),
+          signal: AbortSignal.timeout(1_000)
+        });
+        assert.equal(response.status, 599);
+        assert.deepEqual(response.body, { message });
+      });
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(unhandledRejections, []);
+  } finally {
+    process.removeListener("unhandledRejection", onUnhandledRejection);
+  }
 });
 
 test("progress reads pass server owner and id while hiding foreign and missing jobs behind the same 404", timeout, async () => {

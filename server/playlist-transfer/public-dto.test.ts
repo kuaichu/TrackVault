@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { toPublicPlaylistTransferJob } from "./public-dto.js";
+import { toPublicPlaylistTransferJob, toPublicTransferImportRequest } from "./public-dto.js";
+import { TransferImportRequestValidationError } from "./transfer-import-request.js";
 import type { PlaylistTransferJob } from "./types.js";
 
 const internalJob: PlaylistTransferJob & { internalAuthorization: string } = {
@@ -68,4 +69,16 @@ test("public transfer DTO allowlists fields deeply without mutating persisted re
     pay: { payplay: 1 },
     credentialDigest: "candidate-secret"
   });
+});
+
+test("public transfer input DTO rejects invalid internal structures with a validation error", () => {
+  assert.throws(
+    () => toPublicTransferImportRequest({
+      sourceProvider: "qq",
+      targetProvider: "netease",
+      sourceTracks: [null]
+    }),
+    (error) => error instanceof TransferImportRequestValidationError
+      && error.message === "歌单互转任务输入格式无效。"
+  );
 });

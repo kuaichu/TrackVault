@@ -1,8 +1,12 @@
 import express from "express";
 import type { CreatePlaylistTransferDeps, CreatePlaylistTransferInput } from "../playlist-transfer/service.js";
 import type { PlaylistTransferRunJob } from "../playlist-transfer/playlist-transfer-job.js";
-import type { PlaylistTransferJob, TransferExportResult, TransferImportRequest } from "../playlist-transfer/types.js";
+import type { PlaylistTransferJob, TransferExportResult } from "../playlist-transfer/types.js";
 import { toPublicPlaylistTransferJob } from "../playlist-transfer/public-dto.js";
+import {
+  parseTransferImportRequest,
+  TransferImportRequestValidationError
+} from "../playlist-transfer/transfer-import-request.js";
 import { resolveBackgroundJobOwner } from "./background-job-owner.js";
 
 type PlaylistImportResult = {
@@ -16,7 +20,10 @@ export type PlaylistTransferJobRouterDependencies = {
   getCurrentUserKey: () => Promise<string>;
   listPlaylistTransferJobs: (ownerKey: string) => Promise<PlaylistTransferJob[]>;
   createPlaylistTransferJob: (input: CreatePlaylistTransferInput, deps: CreatePlaylistTransferDeps) => Promise<PlaylistTransferJob>;
-  startPlaylistTransferRunJob: (input: CreatePlaylistTransferInput, deps: CreatePlaylistTransferDeps) => PlaylistTransferRunJob;
+  startPlaylistTransferRunJob: (
+    input: CreatePlaylistTransferInput,
+    deps: CreatePlaylistTransferDeps
+  ) => PlaylistTransferRunJob | Promise<PlaylistTransferRunJob>;
   loadSourceTracks: NonNullable<CreatePlaylistTransferDeps["loadSourceTracks"]>;
   searchTargetTracks: CreatePlaylistTransferDeps["searchTargetTracks"];
   checkAvailability: NonNullable<CreatePlaylistTransferDeps["checkAvailability"]>;
@@ -54,9 +61,8 @@ export function createPlaylistTransferJobRouter(dependencies: PlaylistTransferJo
     if (ownerKey === null) {
       return;
     }
-    const payload = request.body as TransferImportRequest;
-
     try {
+      const payload = parseTransferImportRequest(request.body);
       const job = await dependencies.createPlaylistTransferJob(
         {
           ...payload,
@@ -72,21 +78,29 @@ export function createPlaylistTransferJobRouter(dependencies: PlaylistTransferJo
     }
   });
 
-  router.post("/api/playlist-transfer/jobs/progress", async (request, response) => {
-    const ownerKey = await resolveBackgroundJobOwner(dependencies.getCurrentUserKey, response);
-    if (ownerKey === null) {
-      return;
-    }
-    const payload = request.body as TransferImportRequest;
-    const job = dependencies.startPlaylistTransferRunJob(
-      {
-        ...payload,
-        ownerKey
-      },
-      createDependencies
-    );
+  router.post("/api/playlist-transfer/jobs/progress", async (request, response, next) => {
+    try {
+      const ownerKey = await resolveBackgroundJobOwner(dependencies.getCurrentUserKey, response);
+      if (ownerKey === null) {
+        return;
+      }
+      const payload = parseTransferImportRequest(request.body);
+      const job = await dependencies.startPlaylistTransferRunJob(
+        {
+          ...payload,
+          ownerKey
+        },
+        createDependencies
+      );
 
-    response.status(202).json({ job });
+      response.status(202).json({ job });
+    } catch (error) {
+      if (error instanceof TransferImportRequestValidationError) {
+        response.status(400).json({ message: error.message });
+        return;
+      }
+      next(error);
+    }
   });
 
   router.get("/api/playlist-transfer/jobs/progress/:id", async (request, response, next) => {
