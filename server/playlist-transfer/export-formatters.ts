@@ -1,16 +1,22 @@
-import type { PlaylistTransferJob, TransferExportFormat, TransferExportResult, TransferTrackResult } from "./types.js";
+import type {
+  PlaylistTransferJob,
+  PublicPlaylistTransferJob,
+  PublicTransferTrackResult,
+  TransferExportFormat,
+  TransferExportResult
+} from "./types.js";
 import { toPublicPlaylistTransferJob } from "./public-dto.js";
 
 function artistsText(artists: string[]) {
   return artists.length > 0 ? artists.join(" / ") : "未知歌手";
 }
 
-function sourceTrackText(result: TransferTrackResult) {
+function sourceTrackText(result: PublicTransferTrackResult) {
   const album = result.sourceTrack.album ? ` - ${result.sourceTrack.album}` : "";
   return `${result.sourceTrack.title} - ${artistsText(result.sourceTrack.artists)}${album}`;
 }
 
-function selectedTrackText(result: TransferTrackResult) {
+function selectedTrackText(result: PublicTransferTrackResult) {
   if (!result.selectedCandidate) {
     return "";
   }
@@ -19,7 +25,7 @@ function selectedTrackText(result: TransferTrackResult) {
   return `${result.selectedCandidate.title} - ${artistsText(result.selectedCandidate.artists)}${album}`;
 }
 
-function statusLabel(result: TransferTrackResult) {
+function statusLabel(result: PublicTransferTrackResult) {
   switch (result.status) {
     case "matched":
       return "已匹配";
@@ -42,7 +48,7 @@ function statusLabel(result: TransferTrackResult) {
   }
 }
 
-function formatMarkdown(job: PlaylistTransferJob) {
+function formatMarkdown(job: PublicPlaylistTransferJob) {
   const matched = job.tracks.filter((track) => track.status === "matched");
   const review = job.tracks.filter((track) => track.status === "manual_review" || track.status === "metadata_conflict");
   const missing = job.tracks.filter((track) => track.status === "not_found");
@@ -77,7 +83,7 @@ function formatMarkdown(job: PlaylistTransferJob) {
   return `${lines.join("\n")}\n`;
 }
 
-function formatMarkdownList(items: TransferTrackResult[], includeTarget: boolean) {
+function formatMarkdownList(items: PublicTransferTrackResult[], includeTarget: boolean) {
   if (items.length === 0) {
     return ["无"];
   }
@@ -94,7 +100,7 @@ function csvValue(value: string | number | undefined) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-function formatCsv(job: PlaylistTransferJob) {
+function formatCsv(job: PublicPlaylistTransferJob) {
   const rows = [["source_title", "source_artists", "source_album", "status", "target_title", "target_artists", "confidence", "reason"]];
 
   for (const result of job.tracks) {
@@ -113,16 +119,17 @@ function formatCsv(job: PlaylistTransferJob) {
   return `${rows.map((row) => row.map(csvValue).join(",")).join("\n")}\n`;
 }
 
-function formatText(job: PlaylistTransferJob) {
+function formatText(job: PublicPlaylistTransferJob) {
   return job.tracks.map((result, index) => `${index + 1}. ${sourceTrackText(result)} [${statusLabel(result)}]`).join("\n") + "\n";
 }
 
 export function formatTransferExport(job: PlaylistTransferJob, format: TransferExportFormat): TransferExportResult {
+  const publicJob = toPublicPlaylistTransferJob(job);
   if (format === "json") {
     return {
       filename: `${job.playlistName}-transfer-report.json`,
       contentType: "application/json; charset=utf-8",
-      content: JSON.stringify(toPublicPlaylistTransferJob(job), null, 2)
+      content: JSON.stringify(publicJob, null, 2)
     };
   }
 
@@ -130,7 +137,7 @@ export function formatTransferExport(job: PlaylistTransferJob, format: TransferE
     return {
       filename: `${job.playlistName}-transfer-report.csv`,
       contentType: "text/csv; charset=utf-8",
-      content: formatCsv(job)
+      content: formatCsv(publicJob)
     };
   }
 
@@ -138,13 +145,13 @@ export function formatTransferExport(job: PlaylistTransferJob, format: TransferE
     return {
       filename: `${job.playlistName}-transfer-report.txt`,
       contentType: "text/plain; charset=utf-8",
-      content: formatText(job)
+      content: formatText(publicJob)
     };
   }
 
   return {
     filename: `${job.playlistName}-transfer-report.md`,
     contentType: "text/markdown; charset=utf-8",
-    content: formatMarkdown(job)
+    content: formatMarkdown(publicJob)
   };
 }

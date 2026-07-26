@@ -120,3 +120,27 @@ test("legacy ownerless progress jobs fail closed", () => {
   assert.equal(getPlaylistTransferRunJob("session:owner-a", job.id), null);
   assert.equal(getPlaylistTransferRunJob("", job.id), null);
 });
+
+test("failed progress jobs expose only the stable action error", async () => {
+  const secret = "transfer-job-error-secret-sentinel";
+  const job = startPlaylistTransferRunJob(
+    {
+      ownerKey: "session:failure",
+      sourceProvider: "text",
+      targetProvider: "netease",
+      text: "失败歌曲 - 歌手"
+    },
+    {
+      searchTargetTracks: async () => {
+        throw Object.assign(new Error(secret), { cause: { token: secret } });
+      },
+      saveJob: async (nextJob) => nextJob
+    }
+  );
+
+  const failed = await waitForJob("session:failure", job.id, "failed");
+  assert.equal(failed.error, "歌单互转失败");
+  assert.doesNotMatch(JSON.stringify(failed), new RegExp(secret));
+  assert.equal("stack" in failed, false);
+  assert.equal("cause" in failed, false);
+});

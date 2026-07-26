@@ -57,6 +57,7 @@ test("Netease audit public DTO deeply allowlists fields and isolates mutable ref
 
   const publicAudit = toPublicNeteaseImportedPlaylistAudit(audit);
   assertPublicDtoSafe(publicAudit, secret);
+  assert.equal(publicAudit.items[0].candidates[0].availability?.reason, "目标歌曲当前可用");
   assert.notEqual(publicAudit.summary, audit.summary);
   assert.notEqual(publicAudit.playableTrackIds, audit.playableTrackIds);
   assert.notEqual(publicAudit.items, audit.items);

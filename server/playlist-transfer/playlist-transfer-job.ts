@@ -8,6 +8,7 @@ import {
 } from "./service.js";
 import { toPublicPlaylistTransferJob, toPublicTransferImportRequest } from "./public-dto.js";
 import type { PublicPlaylistTransferJob } from "./types.js";
+import { PUBLIC_ERROR_MESSAGES } from "../public-error.js";
 
 export type PlaylistTransferRunJobStatus = "queued" | "loading" | "running" | "saving" | "completed" | "failed";
 
@@ -102,10 +103,10 @@ async function runJob(storedJob: StoredPlaylistTransferRunJob, deps: CreatePlayl
         total: result.summary.total
       }
     });
-  } catch (error) {
+  } catch {
     updateJob(job, {
       status: "failed",
-      error: error instanceof Error ? error.message : "歌单互转失败",
+      error: PUBLIC_ERROR_MESSAGES.playlistTransferRun,
       progress: {
         ...job.progress,
         phase: "failed"

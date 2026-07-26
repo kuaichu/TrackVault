@@ -18,6 +18,11 @@ import {
   toPublicNeteaseImportAuditJob
 } from "../playlist-transfer/netease-import-audit-public-dto.js";
 import { resolveBackgroundJobOwner } from "./background-job-owner.js";
+import {
+  PUBLIC_ERROR_MESSAGES,
+  publicErrorResponse,
+  toExpressError
+} from "../public-error.js";
 
 export type NeteaseImportAuditRouterDependencies = {
   getCurrentUserKey: () => Promise<string>;
@@ -83,14 +88,12 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
       });
 
       response.json(toPublicNeteaseImportedPlaylistAudit(audit));
-    } catch (error) {
-      response.status(502).json({
-        message: error instanceof Error ? error.message : "网易云导入歌单清理失败"
-      });
+    } catch {
+      response.status(502).json(publicErrorResponse(PUBLIC_ERROR_MESSAGES.neteaseImportAudit));
     }
   });
 
-  router.post("/api/playlist-transfer/netease-import-audit/jobs", async (request, response) => {
+  router.post("/api/playlist-transfer/netease-import-audit/jobs", async (request, response, next) => {
     const playlistId = typeof request.body?.playlistId === "string" ? request.body.playlistId.trim() : "";
     const playlistName = typeof request.body?.playlistName === "string" && request.body.playlistName.trim()
       ? request.body.playlistName.trim()
@@ -104,124 +107,142 @@ export function createNeteaseImportAuditRouter(dependencies: NeteaseImportAuditR
       return;
     }
 
-    const ownerKey = await resolveOwner(response);
-    if (ownerKey === null) {
-      return;
-    }
-    const job = dependencies.startNeteaseImportAuditJob(
-      ownerKey,
-      {
-        playlistId,
-        playlistName,
-        maxTracks,
-        candidateLimit,
-        checkAvailability
-      },
-      {
-        loadEntries: dependencies.loadNeteasePlaylistAuditEntries,
-        searchCandidates: (track) => withAuditTimeout(
-          dependencies.searchNeteaseProviderTracksByTitle(track),
-          12000,
-          []
-        ),
-        checkCandidateAvailability: (candidate) => withAuditTimeout(
-          dependencies.checkNeteaseProviderTrackAvailability(candidate),
-          8000,
-          null
-        )
-      }
-    );
-
-    response.status(202).json({ job: toPublicNeteaseImportAuditJob(job) });
-  });
-
-  router.get("/api/playlist-transfer/netease-import-audit/jobs/:id", async (request, response) => {
-    const ownerKey = await resolveOwner(response);
-    if (ownerKey === null) {
-      return;
-    }
-    const job = dependencies.getNeteaseImportAuditJob(ownerKey, request.params.id);
-    if (!job) {
-      response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
-      return;
-    }
-
-    response.json({ job: toPublicNeteaseImportAuditJob(job) });
-  });
-
-  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/cancel", async (request, response) => {
-    const ownerKey = await resolveOwner(response);
-    if (ownerKey === null) {
-      return;
-    }
-    const job = dependencies.cancelNeteaseImportAuditJob(ownerKey, request.params.id);
-    if (!job) {
-      response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
-      return;
-    }
-
-    response.json({ job: toPublicNeteaseImportAuditJob(job) });
-  });
-
-  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/export", async (request, response) => {
-    const ownerKey = await resolveOwner(response);
-    if (ownerKey === null) {
-      return;
-    }
-    const job = dependencies.getNeteaseImportAuditJob(ownerKey, request.params.id);
-    if (!job) {
-      response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
-      return;
-    }
-
-    if (job.status !== "completed" || !job.result) {
-      response.status(400).json({ message: "任务尚未完成，不能导出。" });
-      return;
-    }
-
-    const format = typeof request.body?.format === "string" ? request.body.format : "text";
-    response.json(dependencies.formatNeteaseImportAuditJobExport(job.result, format as TransferExportFormat));
-  });
-
-  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/import/playable", async (request, response) => {
-    const ownerKey = await resolveOwner(response);
-    if (ownerKey === null) {
-      return;
-    }
-    const job = dependencies.getNeteaseImportAuditJob(ownerKey, request.params.id);
-    if (!job) {
-      response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
-      return;
-    }
-
-    if (job.status !== "completed" || !job.result) {
-      response.status(400).json({ message: "任务尚未完成，不能创建正常歌曲新歌单。" });
-      return;
-    }
-
-    const trackIds = job.result.playableTrackIds;
-    if (trackIds.length === 0) {
-      response.status(400).json({ message: "扫描结果里没有正常可播歌曲，不能创建新歌单。" });
-      return;
-    }
-
-    const name = typeof request.body?.name === "string" && request.body.name.trim()
-      ? request.body.name.trim()
-      : `${job.result.playlistName} - 正常歌曲`;
-
     try {
-      const result = await dependencies.createNeteasePlaylistFromTrackIds(name, trackIds);
-      response.json({
-        playlistId: result.playlistId,
-        playlistName: result.playlistName,
-        playlistUrl: result.playlistUrl,
-        addedCount: result.addedCount,
-        skippedCount: Math.max(0, job.result.scannedCount - trackIds.length)
-      });
+      const ownerKey = await resolveOwner(response);
+      if (ownerKey === null) {
+        return;
+      }
+      const job = dependencies.startNeteaseImportAuditJob(
+        ownerKey,
+        {
+          playlistId,
+          playlistName,
+          maxTracks,
+          candidateLimit,
+          checkAvailability
+        },
+        {
+          loadEntries: dependencies.loadNeteasePlaylistAuditEntries,
+          searchCandidates: (track) => withAuditTimeout(
+            dependencies.searchNeteaseProviderTracksByTitle(track),
+            12000,
+            []
+          ),
+          checkCandidateAvailability: (candidate) => withAuditTimeout(
+            dependencies.checkNeteaseProviderTrackAvailability(candidate),
+            8000,
+            null
+          )
+        }
+      );
+
+      response.status(202).json({ job: toPublicNeteaseImportAuditJob(job) });
     } catch (error) {
-      response.status(400).json({
-        message: error instanceof Error ? error.message : "创建正常歌曲新歌单失败"
-      });
+      next(toExpressError(error, "Failed to start Netease import audit job"));
+    }
+  });
+
+  router.get("/api/playlist-transfer/netease-import-audit/jobs/:id", async (request, response, next) => {
+    try {
+      const ownerKey = await resolveOwner(response);
+      if (ownerKey === null) {
+        return;
+      }
+      const job = dependencies.getNeteaseImportAuditJob(ownerKey, request.params.id);
+      if (!job) {
+        response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
+        return;
+      }
+
+      response.json({ job: toPublicNeteaseImportAuditJob(job) });
+    } catch (error) {
+      next(toExpressError(error, "Failed to read Netease import audit job"));
+    }
+  });
+
+  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/cancel", async (request, response, next) => {
+    try {
+      const ownerKey = await resolveOwner(response);
+      if (ownerKey === null) {
+        return;
+      }
+      const job = dependencies.cancelNeteaseImportAuditJob(ownerKey, request.params.id);
+      if (!job) {
+        response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
+        return;
+      }
+
+      response.json({ job: toPublicNeteaseImportAuditJob(job) });
+    } catch (error) {
+      next(toExpressError(error, "Failed to cancel Netease import audit job"));
+    }
+  });
+
+  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/export", async (request, response, next) => {
+    try {
+      const ownerKey = await resolveOwner(response);
+      if (ownerKey === null) {
+        return;
+      }
+      const job = dependencies.getNeteaseImportAuditJob(ownerKey, request.params.id);
+      if (!job) {
+        response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
+        return;
+      }
+
+      if (job.status !== "completed" || !job.result) {
+        response.status(400).json({ message: "任务尚未完成，不能导出。" });
+        return;
+      }
+
+      const format = typeof request.body?.format === "string" ? request.body.format : "text";
+      response.json(dependencies.formatNeteaseImportAuditJobExport(job.result, format as TransferExportFormat));
+    } catch (error) {
+      next(toExpressError(error, "Failed to export Netease import audit job"));
+    }
+  });
+
+  router.post("/api/playlist-transfer/netease-import-audit/jobs/:id/import/playable", async (request, response, next) => {
+    try {
+      const ownerKey = await resolveOwner(response);
+      if (ownerKey === null) {
+        return;
+      }
+      const job = dependencies.getNeteaseImportAuditJob(ownerKey, request.params.id);
+      if (!job) {
+        response.status(404).json({ message: "网易云导入歌单清理任务不存在。" });
+        return;
+      }
+
+      if (job.status !== "completed" || !job.result) {
+        response.status(400).json({ message: "任务尚未完成，不能创建正常歌曲新歌单。" });
+        return;
+      }
+
+      const trackIds = job.result.playableTrackIds;
+      if (trackIds.length === 0) {
+        response.status(400).json({ message: "扫描结果里没有正常可播歌曲，不能创建新歌单。" });
+        return;
+      }
+
+      const name = typeof request.body?.name === "string" && request.body.name.trim()
+        ? request.body.name.trim()
+        : `${job.result.playlistName} - 正常歌曲`;
+
+      try {
+        const result = await dependencies.createNeteasePlaylistFromTrackIds(name, trackIds);
+        response.json({
+          playlistId: result.playlistId,
+          playlistName: result.playlistName,
+          playlistUrl: result.playlistUrl,
+          addedCount: result.addedCount,
+          skippedCount: Math.max(0, job.result.scannedCount - trackIds.length)
+        });
+      } catch {
+        response.status(400).json(publicErrorResponse(PUBLIC_ERROR_MESSAGES.playableNeteaseImport));
+      }
+    } catch (error) {
+      next(toExpressError(error, "Failed to resolve playable Netease import audit job"));
     }
   });
 

@@ -10,6 +10,7 @@ import type {
   TransferTrackResult
 } from "./types.js";
 import { parseTransferImportRequest } from "./transfer-import-request.js";
+import { toPublicTrackAvailability } from "./availability-public-policy.js";
 
 export function toPublicTransferTrack(track: TransferTrack): PublicTransferTrack {
   return {
@@ -31,18 +32,31 @@ export function toPublicMatchCandidate(candidate: MatchCandidate): PublicMatchCa
     artists: [...candidate.artists],
     ...(candidate.album === undefined ? {} : { album: candidate.album }),
     ...(candidate.durationSeconds === undefined ? {} : { durationSeconds: candidate.durationSeconds }),
-    ...(candidate.availability === undefined ? {} : {
-      availability: {
-        status: candidate.availability.status,
-        ...(candidate.availability.reason === undefined ? {} : { reason: candidate.availability.reason })
-      }
-    }),
+    ...(candidate.availability === undefined
+      ? {}
+      : { availability: toPublicTrackAvailability(candidate.availability) }),
     confidenceScore: candidate.confidenceScore,
     reasons: [...candidate.reasons]
   };
 }
 
 function toPublicTransferTrackResult(result: TransferTrackResult): PublicTransferTrackResult {
+  const publicReason = result.reason === undefined
+    ? undefined
+    : result.status === "manual_review"
+      ? "存在相似候选，需要人工确认"
+      : result.status === "not_found"
+        ? "目标平台未找到候选歌曲"
+        : result.status === "copyright_unavailable" || result.status === "vip_only" || result.status === "trial_only"
+          ? toPublicTrackAvailability({ status: result.status, reason: result.reason }).reason
+          : result.status === "duplicate"
+            ? "导入列表中已存在相同歌名和歌手"
+            : result.status === "metadata_conflict"
+              ? "歌曲信息存在冲突，需要人工确认"
+              : result.status === "skipped"
+                ? "该歌曲已跳过"
+                : undefined;
+
   return {
     sourceTrack: toPublicTransferTrack(result.sourceTrack),
     status: result.status,
@@ -50,7 +64,7 @@ function toPublicTransferTrackResult(result: TransferTrackResult): PublicTransfe
     ...(result.selectedCandidate === undefined
       ? {}
       : { selectedCandidate: toPublicMatchCandidate(result.selectedCandidate) }),
-    ...(result.reason === undefined ? {} : { reason: result.reason })
+    ...(publicReason === undefined ? {} : { reason: publicReason })
   };
 }
 

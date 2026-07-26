@@ -23,7 +23,43 @@ test("getNeteaseTrackUnusableReason recognizes imported tracks with alternate pl
     dl: 0
   });
 
-  assert.equal(reason, "其它版本可播");
+  assert.equal(reason, "歌曲受版权限制，当前不可用");
+});
+
+test("availability throws and returned reasons become stable audit reasons", async () => {
+  const secret = "audit-availability-secret-sentinel";
+  const searchCandidates = async (): Promise<ProviderTrack[]> => [{
+    provider: "netease",
+    id: "replacement-safe",
+    title: "一生一念",
+    artists: ["段奥娟"]
+  }];
+  const baseInput = {
+    playlistId: "liked",
+    playlistName: "我喜欢的音乐",
+    tracks: [{
+      track: unavailableTrack,
+      privilege: { id: unavailableTrack.id, st: -200, pl: 0, dl: 0 }
+    }],
+    candidateLimit: 1,
+    searchCandidates
+  };
+
+  const returnedReasonAudit = await buildNeteaseImportedPlaylistAudit({
+    ...baseInput,
+    checkCandidateAvailability: async () => ({ status: "vip_only", reason: secret })
+  });
+  assert.equal(returnedReasonAudit.items[0].candidates[0].availability?.reason, "目标歌曲需要会员权限");
+  assert.doesNotMatch(JSON.stringify(returnedReasonAudit), new RegExp(secret));
+
+  const thrownAudit = await buildNeteaseImportedPlaylistAudit({
+    ...baseInput,
+    checkCandidateAvailability: async () => {
+      throw Object.assign(new Error(secret), { cause: { credential: secret } });
+    }
+  });
+  assert.equal(thrownAudit.items[0].candidates[0].availability?.reason, "歌曲可用性检查失败，请稍后重试");
+  assert.doesNotMatch(JSON.stringify(thrownAudit), new RegExp(secret));
 });
 
 test("buildNeteaseImportedPlaylistAudit selects same-title playable replacements for text import", async () => {

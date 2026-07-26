@@ -2,7 +2,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import express from "express";
-import type { RequestHandler } from "express";
+import type { ErrorRequestHandler, RequestHandler } from "express";
 import { runWithRequestContext } from "../request-context.js";
 
 export type TestHttpResponse = {
@@ -37,7 +37,7 @@ async function closeServer(server: Server) {
 }
 
 export async function withTestRouter(
-  handlers: RequestHandler[],
+  handlers: Array<RequestHandler | ErrorRequestHandler>,
   callback: (client: TestHttpClient) => Promise<void>,
   options: TestRouterOptions = {}
 ) {

@@ -10,6 +10,7 @@ import type {
 } from "./netease-import-audit-job.js";
 import { toPublicMatchCandidate, toPublicTransferTrack } from "./public-dto.js";
 import type { PublicMatchCandidate, PublicTransferTrack } from "./types.js";
+import { PUBLIC_ERROR_MESSAGES } from "../public-error.js";
 
 export type PublicNeteaseImportAuditItem = {
   originalTrackId: string;
@@ -114,7 +115,11 @@ export function toPublicNeteaseImportAuditJob(job: NeteaseImportAuditJob): Publi
       ...(job.progress.currentTitle === undefined ? {} : { currentTitle: job.progress.currentTitle })
     },
     ...(job.result === undefined ? {} : { result: toPublicNeteaseImportedPlaylistAudit(job.result) }),
-    ...(job.error === undefined ? {} : { error: job.error }),
+    ...(job.status === "failed"
+      ? { error: PUBLIC_ERROR_MESSAGES.neteaseImportAudit }
+      : job.status === "cancelled"
+        ? { error: "扫描已取消" }
+        : {}),
     createdAt: job.createdAt,
     updatedAt: job.updatedAt
   };

@@ -21,6 +21,13 @@ import {
   toPlaylistCompareExportLimitResponse
 } from "../playlist-transfer/playlist-compare-export-policy.js";
 import { resolveBackgroundJobOwner } from "./background-job-owner.js";
+import {
+  PUBLIC_ERROR_MESSAGES,
+  publicErrorResponse,
+  toExpressError
+} from "../public-error.js";
+
+const UNSUPPORTED_COMPARE_PROVIDER_MESSAGE = "歌单对比暂只支持网易云歌单和 QQ 音乐公开歌单。";
 
 export type PlaylistCompareRouterDependencies = {
   getCurrentUserKey: () => Promise<string>;
@@ -64,6 +71,11 @@ function normalizeCompareInput(body: unknown): NormalizedCompareInput {
   };
 }
 
+function hasSupportedCompareProviders(input: NormalizedCompareInput) {
+  return (input.leftProvider === "netease" || input.leftProvider === "qq")
+    && (input.rightProvider === "netease" || input.rightProvider === "qq");
+}
+
 function normalizeCompareStatuses(input: unknown): PlaylistCompareStatus[] {
   const allowed: PlaylistCompareStatus[] = ["exact", "same_title_different_artist", "similar_title", "left_only", "right_only"];
   if (!Array.isArray(input)) {
@@ -93,7 +105,7 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
       return dependencies.loadQqPlaylistTransferTracks(playlistId);
     }
 
-    throw new Error("歌单对比暂只支持网易云歌单和 QQ 音乐公开歌单。");
+    throw new Error(UNSUPPORTED_COMPARE_PROVIDER_MESSAGE);
   }
 
   router.post("/api/playlist-transfer/compare/jobs", async (request, response, next) => {
@@ -115,7 +127,7 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
 
       response.status(202).json({ job: toPublicPlaylistCompareJob(job) });
     } catch (error) {
-      next(error);
+      next(toExpressError(error, "Failed to start playlist compare job"));
     }
   });
 
@@ -133,7 +145,7 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
 
       response.json({ job: toPublicPlaylistCompareJob(job) });
     } catch (error) {
-      next(error);
+      next(toExpressError(error, "Failed to read playlist compare job"));
     }
   });
 
@@ -142,6 +154,11 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
 
     if (!input.leftPlaylistId || !input.rightPlaylistId) {
       response.status(400).json({ message: "请填写左右两个歌单 ID。" });
+      return;
+    }
+
+    if (!hasSupportedCompareProviders(input)) {
+      response.status(400).json({ message: UNSUPPORTED_COMPARE_PROVIDER_MESSAGE });
       return;
     }
 
@@ -164,10 +181,8 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
           tracks: rightTracks
         }
       })));
-    } catch (error) {
-      response.status(400).json({
-        message: error instanceof Error ? error.message : "歌单对比失败"
-      });
+    } catch {
+      response.status(400).json(publicErrorResponse(PUBLIC_ERROR_MESSAGES.playlistCompare));
     }
   });
 
@@ -200,7 +215,7 @@ export function createPlaylistCompareRouter(dependencies: PlaylistCompareRouterD
         response.status(413).json(toPlaylistCompareExportLimitResponse(error));
         return;
       }
-      next(error);
+      next(toExpressError(error, "Failed to export playlist compare result"));
     }
   });
 

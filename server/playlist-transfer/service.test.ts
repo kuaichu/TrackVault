@@ -161,6 +161,43 @@ test("createPlaylistTransferJob reports progress while matching songs", async ()
   assert.equal(progress[progress.length - 1].processed, 2);
 });
 
+test("transfer availability checks never publish thrown or returned provider reasons", async () => {
+  const secret = "transfer-availability-secret-sentinel";
+  const baseInput = {
+    ownerKey: "session:test",
+    sourceProvider: "text" as const,
+    targetProvider: "netease" as const,
+    playlistName: "安全检查",
+    text: "非我 - 方山厨子Rex",
+    checkAvailability: true
+  };
+  const baseDependencies = {
+    searchTargetTracks: async () => [{
+      provider: "netease" as const,
+      id: "n1",
+      title: "非我",
+      artists: ["方山厨子Rex"]
+    }],
+    saveJob: async (nextJob: Awaited<ReturnType<typeof createPlaylistTransferJob>>) => nextJob
+  };
+
+  const returnedReasonJob = await createPlaylistTransferJob(baseInput, {
+    ...baseDependencies,
+    checkAvailability: async () => ({ status: "vip_only", reason: secret })
+  });
+  assert.equal(returnedReasonJob.tracks[0].reason, "目标歌曲需要会员权限");
+  assert.doesNotMatch(JSON.stringify(returnedReasonJob), new RegExp(secret));
+
+  const thrownJob = await createPlaylistTransferJob(baseInput, {
+    ...baseDependencies,
+    checkAvailability: async () => {
+      throw Object.assign(new Error(secret), { cause: { token: secret } });
+    }
+  });
+  assert.equal(thrownJob.tracks[0].reason, "歌曲可用性检查失败，请稍后重试");
+  assert.doesNotMatch(JSON.stringify(thrownJob), new RegExp(secret));
+});
+
 test("getNeteaseImportTrackIds returns unique matched netease candidate ids", () => {
   const ids = getNeteaseImportTrackIds({
     id: "job-1",

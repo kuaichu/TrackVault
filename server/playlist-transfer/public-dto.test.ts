@@ -66,6 +66,8 @@ test("public transfer DTO allowlists fields deeply without mutating persisted re
   assert.equal("ownerKey" in publicJob, false);
   assert.doesNotMatch(serialized, /ownerKey|secret-client-session|credential-digest|candidate-secret|internalAuthorization|\"raw\"/);
   assert.equal(publicJob.tracks[0]?.candidates[0]?.availability?.status, "available");
+  assert.equal(publicJob.tracks[0]?.candidates[0]?.availability?.reason, "目标歌曲当前可用");
+  assertPublicDtoSafe(publicJob, "internal check");
   assert.equal(publicJob.summary.matched, 1);
   assert.deepEqual(internalJob.tracks[0]?.candidates[0]?.raw, {
     pay: { payplay: 1 },

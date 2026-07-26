@@ -8,8 +8,10 @@ import {
 import type { MatchCandidate, ProviderTrack, TransferExportFormat, TransferExportResult, TransferTrack } from "./types.js";
 import {
   toPublicNeteaseImportedPlaylistAudit,
-  toPublicNeteaseImportAuditJob
+  toPublicNeteaseImportAuditJob,
+  type PublicNeteaseImportAuditJob
 } from "./netease-import-audit-public-dto.js";
+import { PUBLIC_ERROR_MESSAGES } from "../public-error.js";
 
 export type NeteaseImportAuditJobStatus = "queued" | "loading" | "running" | "cancelling" | "cancelled" | "completed" | "failed";
 
@@ -51,7 +53,9 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function publicJob(job: InternalJob): NeteaseImportAuditJob {
+class NeteaseImportAuditCancelledError extends Error {}
+
+function publicJob(job: InternalJob): PublicNeteaseImportAuditJob {
   return toPublicNeteaseImportAuditJob(job);
 }
 
@@ -63,7 +67,7 @@ function updateJob(job: InternalJob, patch: Partial<NeteaseImportAuditJob>) {
 
 function assertNotCancelled(job: InternalJob) {
   if (job.cancelRequested) {
-    throw new Error("扫描已取消");
+    throw new NeteaseImportAuditCancelledError("扫描已取消");
   }
 }
 
@@ -117,8 +121,7 @@ async function runJob(job: InternalJob, deps: NeteaseImportAuditJobDeps) {
       }
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "扫描失败";
-    if (job.cancelRequested || message.includes("扫描已取消")) {
+    if (job.cancelRequested || error instanceof NeteaseImportAuditCancelledError) {
       updateJob(job, {
         status: "cancelled",
         error: "扫描已取消",
@@ -132,7 +135,7 @@ async function runJob(job: InternalJob, deps: NeteaseImportAuditJobDeps) {
 
     updateJob(job, {
       status: "failed",
-      error: message,
+      error: PUBLIC_ERROR_MESSAGES.neteaseImportAudit,
       progress: {
         ...job.progress,
         phase: "failed"
@@ -141,7 +144,11 @@ async function runJob(job: InternalJob, deps: NeteaseImportAuditJobDeps) {
   }
 }
 
-export function startNeteaseImportAuditJob(ownerKey: string, input: NeteaseImportAuditJobInput, deps: NeteaseImportAuditJobDeps) {
+export function startNeteaseImportAuditJob(
+  ownerKey: string,
+  input: NeteaseImportAuditJobInput,
+  deps: NeteaseImportAuditJobDeps
+): PublicNeteaseImportAuditJob {
   const createdAt = nowIso();
   const job: InternalJob = {
     id: crypto.randomUUID(),
@@ -169,12 +176,12 @@ export function startNeteaseImportAuditJob(ownerKey: string, input: NeteaseImpor
   return publicJob(job);
 }
 
-export function getNeteaseImportAuditJob(ownerKey: string, id: string) {
+export function getNeteaseImportAuditJob(ownerKey: string, id: string): PublicNeteaseImportAuditJob | null {
   const job = jobs.get(id);
   return ownerKey && job?.ownerKey && job.ownerKey === ownerKey ? publicJob(job) : null;
 }
 
-export function cancelNeteaseImportAuditJob(ownerKey: string, id: string) {
+export function cancelNeteaseImportAuditJob(ownerKey: string, id: string): PublicNeteaseImportAuditJob | null {
   const job = jobs.get(id);
   if (!ownerKey || !job?.ownerKey || job.ownerKey !== ownerKey) {
     return null;

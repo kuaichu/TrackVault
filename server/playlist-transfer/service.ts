@@ -10,6 +10,10 @@ import type {
   TransferTrack,
   TransferTrackResult
 } from "./types.js";
+import {
+  AVAILABILITY_CHECK_FAILED_REASON,
+  toPublicTrackAvailability
+} from "./availability-public-policy.js";
 
 export type CreatePlaylistTransferInput = TransferImportRequest & {
   ownerKey: string;
@@ -94,10 +98,12 @@ function applyCandidateAvailability(result: TransferTrackResult): TransferTrackR
     return result;
   }
 
+  const publicAvailability = toPublicTrackAvailability(availability);
+
   return {
     ...result,
     status: availability.status,
-    reason: availability.reason ?? "目标平台标记该歌曲不可用"
+    reason: publicAvailability.reason
   };
 }
 
@@ -158,12 +164,21 @@ export async function createPlaylistTransferJob(input: CreatePlaylistTransferInp
     let result = applyCandidateAvailability(matchTransferTrack(sourceTrack, candidates));
 
     if (input.checkAvailability && result.selectedCandidate && deps.checkAvailability) {
-      const availability = await deps.checkAvailability(result.selectedCandidate);
-      if (availability) {
+      try {
+        const availability = await deps.checkAvailability(result.selectedCandidate);
+        if (availability) {
+          const publicAvailability = toPublicTrackAvailability(availability);
+          result = {
+            ...result,
+            status: publicAvailability.status,
+            reason: publicAvailability.reason
+          };
+        }
+      } catch {
         result = {
           ...result,
-          status: availability.status,
-          reason: availability.reason
+          status: "copyright_unavailable",
+          reason: AVAILABILITY_CHECK_FAILED_REASON
         };
       }
     }

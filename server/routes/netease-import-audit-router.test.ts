@@ -10,7 +10,12 @@ import {
 import { createBackgroundJobOwnerResolver } from "../background-job-owner.js";
 import { withTestRouter } from "./router-test-http.js";
 import { assertPublicDtoSafe } from "../playlist-transfer/assert-public-dto-safe.js";
-import { formatNeteaseImportAuditJobExport } from "../playlist-transfer/netease-import-audit-job.js";
+import {
+  cancelNeteaseImportAuditJob,
+  formatNeteaseImportAuditJobExport,
+  getNeteaseImportAuditJob,
+  startNeteaseImportAuditJob
+} from "../playlist-transfer/netease-import-audit-job.js";
 
 const timeout = { timeout: 5_000 };
 
@@ -143,15 +148,16 @@ test("sync audit keeps direct Number conversion, defaults, and availability sema
   );
 });
 
-test("sync audit rejects missing ids and preserves Error and non-Error 502 responses", timeout, async () => {
+test("sync audit rejects missing ids and hides Error and non-Error details in 502 responses", timeout, async () => {
+  const secret = "sync-audit-error-secret-sentinel";
   let loadCalls = 0;
   const dependencies = createDependencies({
     loadNeteasePlaylistAuditEntries: async (playlistId) => {
       loadCalls += 1;
       if (playlistId === "known-error") {
-        throw new Error("audit failed");
+        throw Object.assign(new Error(secret), { cause: { cookie: secret } });
       }
-      throw "audit failed";
+      throw secret;
     }
   });
 
@@ -162,11 +168,12 @@ test("sync audit rejects missing ids and preserves Error and non-Error 502 respo
 
     const known = await requestJson("POST", "/api/playlist-transfer/netease-import-audit", { playlistId: "known-error" });
     assert.equal(known.status, 502);
-    assert.deepEqual(known.body, { message: "audit failed" });
+    assert.deepEqual(known.body, { message: "网易云导入歌单清理失败" });
 
     const fallback = await requestJson("POST", "/api/playlist-transfer/netease-import-audit", { playlistId: "non-error" });
     assert.equal(fallback.status, 502);
     assert.deepEqual(fallback.body, { message: "网易云导入歌单清理失败" });
+    assert.doesNotMatch(JSON.stringify([known.body, fallback.body]), new RegExp(secret));
   });
 
   assert.equal(loadCalls, 2);
@@ -294,6 +301,55 @@ test("job start rejects a missing id before starting a job", timeout, async () =
       assert.deepEqual(response.body, { message: "缺少网易云歌单 ID。" });
     }
   );
+});
+
+test("failed audit jobs stay sanitized through start, get, cancel, and export HTTP responses", timeout, async () => {
+  const secret = "audit-job-http-error-secret-sentinel";
+  const router = createNeteaseImportAuditRouter(createDependencies({
+    getCurrentUserKey: async () => "owner-http-failure",
+    loadNeteasePlaylistAuditEntries: async () => {
+      throw Object.assign(new Error(secret), { cause: { credential: secret } });
+    },
+    startNeteaseImportAuditJob,
+    getNeteaseImportAuditJob,
+    cancelNeteaseImportAuditJob,
+    formatNeteaseImportAuditJobExport
+  }));
+
+  await withTestRouter([router], async ({ request, requestJson }) => {
+    const started = await requestJson("POST", "/api/playlist-transfer/netease-import-audit/jobs", {
+      playlistId: "liked-failure"
+    });
+    assert.equal(started.status, 202);
+    assert.doesNotMatch(JSON.stringify(started.body), new RegExp(secret));
+    const id = (started.body as { job: { id: string } }).job.id;
+
+    let failed: Awaited<ReturnType<typeof request>> | undefined;
+    for (let index = 0; index < 30; index += 1) {
+      const response = await request(`/api/playlist-transfer/netease-import-audit/jobs/${id}`);
+      if ((response.body as { job?: { status?: string } }).job?.status === "failed") {
+        failed = response;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    assert.ok(failed);
+    assert.equal((failed.body as { job: { error?: string } }).job.error, "网易云导入歌单清理失败");
+    assert.doesNotMatch(JSON.stringify(failed.body), new RegExp(secret));
+
+    const cancelled = await requestJson("POST", `/api/playlist-transfer/netease-import-audit/jobs/${id}/cancel`, {});
+    assert.equal(cancelled.status, 200);
+    assert.equal((cancelled.body as { job: { error?: string } }).job.error, "网易云导入歌单清理失败");
+    assert.doesNotMatch(JSON.stringify(cancelled.body), new RegExp(secret));
+
+    const exported = await requestJson("POST", `/api/playlist-transfer/netease-import-audit/jobs/${id}/export`, {
+      format: "json"
+    });
+    assert.equal(exported.status, 400);
+    assert.deepEqual(exported.body, { message: "任务尚未完成，不能导出。" });
+    assert.doesNotMatch(JSON.stringify(exported.body), new RegExp(secret));
+  });
 });
 
 test("job lookup and cancellation pass trusted owners with decoded ids", timeout, async () => {
@@ -453,6 +509,7 @@ test("playable import keeps track filtering result, names, and non-negative skip
 });
 
 test("playable import preserves missing, incomplete, empty, and provider failure responses", timeout, async () => {
+  const secret = "playable-import-error-secret-sentinel";
   const emptyJob: NeteaseImportAuditJob = {
     ...completedJob,
     result: { ...audit, playableTrackIds: [] }
@@ -465,8 +522,8 @@ test("playable import preserves missing, incomplete, empty, and provider failure
       return completedJob;
     },
     createNeteasePlaylistFromTrackIds: async (name) => {
-      if (name === "known") throw new Error("create failed");
-      throw "create failed";
+      if (name === "known") throw Object.assign(new Error(secret), { cause: secret });
+      throw secret;
     }
   });
 
@@ -484,11 +541,12 @@ test("playable import preserves missing, incomplete, empty, and provider failure
 
     const known = await requestJson("POST", "/api/playlist-transfer/netease-import-audit/jobs/done/import/playable", { name: "known" });
     assert.equal(known.status, 400);
-    assert.deepEqual(known.body, { message: "create failed" });
+    assert.deepEqual(known.body, { message: "创建正常歌曲新歌单失败" });
 
     const fallback = await requestJson("POST", "/api/playlist-transfer/netease-import-audit/jobs/done/import/playable", { name: "other" });
     assert.equal(fallback.status, 400);
     assert.deepEqual(fallback.body, { message: "创建正常歌曲新歌单失败" });
+    assert.doesNotMatch(JSON.stringify([known.body, fallback.body]), new RegExp(secret));
   });
 });
 
@@ -582,6 +640,7 @@ test("audit sync, job, export, and playable-import HTTP boundaries deeply saniti
     targetTrackId: "replacement-private",
     title: "替代歌曲",
     artists: ["替代歌手"],
+    availability: { status: "vip_only", reason: secret },
     confidenceScore: 99,
     reasons: ["歌名一致"],
     raw: { cookie: secret, nested: { SID: secret, credentialDigest: secret } },

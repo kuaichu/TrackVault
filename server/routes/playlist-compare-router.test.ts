@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ErrorRequestHandler, NextFunction, Request, RequestHandler, Response, Router } from "express";
-import type { PlaylistCompareJob } from "../playlist-transfer/playlist-compare-job.js";
+import {
+  getPlaylistCompareJob as getStoredPlaylistCompareJob,
+  startPlaylistCompareJob as startStoredPlaylistCompareJob,
+  type PlaylistCompareJob
+} from "../playlist-transfer/playlist-compare-job.js";
 import type {
   PlaylistCompareExportOptions,
   PlaylistCompareRequest,
@@ -18,6 +22,7 @@ import {
   type PlaylistCompareRouterDependencies
 } from "./playlist-compare-router.js";
 import { withTestRouter } from "./router-test-http.js";
+import { safeHttpErrorHandler } from "../public-error.js";
 import { assertPublicDtoSafe } from "../playlist-transfer/assert-public-dto-safe.js";
 import { formatPlaylistCompareExport } from "../playlist-transfer/playlist-compare.js";
 import { PLAYLIST_COMPARE_EXPORT_LIMITS } from "../playlist-transfer/playlist-compare-export-policy.js";
@@ -235,7 +240,7 @@ test("job start only rejects missing ids and leaves start errors to the next err
 
   await withTestRouter([
     createPlaylistCompareRouter(dependencies),
-    errorBoundary as unknown as RequestHandler
+    errorBoundary
   ], async ({ requestJson }) => {
     const missingLeft = await requestJson("POST", "/api/playlist-transfer/compare/jobs", {
       leftPlaylistId: 123,
@@ -319,6 +324,46 @@ test("job lookup scopes ids to request identity and conceals cross-owner jobs as
     ["guest:owner-a", queuedJob.id],
     ["guest:owner-a", "missing"]
   ]);
+});
+
+test("failed compare jobs stay sanitized through start and polling HTTP responses", timeout, async () => {
+  const secret = "compare-job-http-secret-sentinel";
+  const router = createPlaylistCompareRouter(createDependencies({
+    getCurrentUserKey: async () => "server-owner",
+    startPlaylistCompareJob: startStoredPlaylistCompareJob,
+    getPlaylistCompareJob: getStoredPlaylistCompareJob,
+    loadNeteasePlaylistTransferTracks: async () => {
+      throw Object.assign(new Error(secret), { cause: { token: secret } });
+    },
+    loadQqPlaylistTransferTracks: async () => []
+  }));
+
+  await withTestRouter([router], async ({ request, requestJson }) => {
+    const started = await requestJson("POST", "/api/playlist-transfer/compare/jobs", {
+      leftProvider: "netease",
+      leftPlaylistId: "left-failure",
+      rightProvider: "qq",
+      rightPlaylistId: "right"
+    });
+    assert.equal(started.status, 202);
+    assert.doesNotMatch(JSON.stringify(started.body), new RegExp(secret));
+    const id = (started.body as { job: { id: string } }).job.id;
+
+    let failed: Awaited<ReturnType<typeof request>> | undefined;
+    for (let index = 0; index < 30; index += 1) {
+      const response = await request(`/api/playlist-transfer/compare/jobs/${id}`);
+      if ((response.body as { job?: { status?: string } }).job?.status === "failed") {
+        failed = response;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    assert.ok(failed);
+    assert.equal(failed.status, 200);
+    assert.equal((failed.body as { job: { error?: string } }).job.error, "歌单对比失败");
+    assert.doesNotMatch(JSON.stringify(failed.body), new RegExp(secret));
+  });
 });
 
 test("compare progress polling returns a clear 4xx when owner identity cannot be resolved", timeout, async () => {
@@ -406,7 +451,8 @@ test("sync compare starts both provider loads in parallel and forwards complete 
   });
 });
 
-test("sync compare preserves missing-id and Error/non-Error 400 responses", timeout, async () => {
+test("sync compare preserves fixed validation 400s and hides Error/non-Error details", timeout, async () => {
+  const secret = "sync-compare-error-secret-sentinel";
   let qqLoads = 0;
   const invalidProviderDependencies = createDependencies({
     loadQqPlaylistTransferTracks: async () => {
@@ -434,23 +480,26 @@ test("sync compare preserves missing-id and Error/non-Error 400 responses", time
       message: "歌单对比暂只支持网易云歌单和 QQ 音乐公开歌单。"
     });
   });
-  assert.equal(qqLoads, 1);
+  assert.equal(qqLoads, 0);
 
-  const nonErrorDependencies = createDependencies({
-    loadNeteasePlaylistTransferTracks: async () => {
-      throw "load failed";
+  const failureDependencies = createDependencies({
+    loadNeteasePlaylistTransferTracks: async (playlistId) => {
+      throw playlistId === "error" ? Object.assign(new Error(secret), { cause: secret }) : secret;
     },
     loadQqPlaylistTransferTracks: async () => []
   });
-  await withTestRouter([createPlaylistCompareRouter(nonErrorDependencies)], async ({ requestJson }) => {
-    const response = await requestJson("POST", "/api/playlist-transfer/compare", {
-      leftProvider: "netease",
-      leftPlaylistId: "left-list",
-      rightProvider: "qq",
-      rightPlaylistId: "right-list"
-    });
-    assert.equal(response.status, 400);
-    assert.deepEqual(response.body, { message: "歌单对比失败" });
+  await withTestRouter([createPlaylistCompareRouter(failureDependencies)], async ({ requestJson }) => {
+    for (const leftPlaylistId of ["error", "non-error"]) {
+      const response = await requestJson("POST", "/api/playlist-transfer/compare", {
+        leftProvider: "netease",
+        leftPlaylistId,
+        rightProvider: "qq",
+        rightPlaylistId: "right-list"
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(response.body, { message: "歌单对比失败" });
+      assert.doesNotMatch(JSON.stringify(response.body), new RegExp(secret));
+    }
   });
 });
 
@@ -712,15 +761,13 @@ test("export filters NaN and Infinity and forwards formatter failures", timeout,
   assert.equal((forwarded[0] as Error).message, "formatter failed");
 });
 
-test("export sends formatter throws through the real Express error boundary without unhandled rejection", timeout, async () => {
+test("export hides Error and non-Error formatter throws at the real Express error boundary", timeout, async () => {
+  const secret = "compare-export-error-secret-sentinel";
   const unhandledRejections: unknown[] = [];
   const onUnhandledRejection = (reason: unknown) => {
     unhandledRejections.push(reason);
   };
-  const errorBoundary: ErrorRequestHandler = (error, _request, response, _next) => {
-    response.status(599).json({ message: error instanceof Error ? error.message : "unknown" });
-  };
-  const thrownValues = [new Error("formatter failed"), "non-error formatter failure"];
+  const thrownValues = [Object.assign(new Error(secret), { cause: secret }), secret];
 
   process.on("unhandledRejection", onUnhandledRejection);
   try {
@@ -732,7 +779,7 @@ test("export sends formatter throws through the real Express error boundary with
       }));
       await withTestRouter([
         router,
-        errorBoundary as unknown as RequestHandler
+        safeHttpErrorHandler
       ], async ({ request }) => {
         const response = await request("/api/playlist-transfer/compare/export", {
           method: "POST",
@@ -740,10 +787,9 @@ test("export sends formatter throws through the real Express error boundary with
           body: JSON.stringify({ result: compareResult, statuses: ["exact"] }),
           signal: AbortSignal.timeout(1_000)
         });
-        assert.equal(response.status, 599);
-        assert.deepEqual(response.body, {
-          message: thrownValue instanceof Error ? thrownValue.message : "unknown"
-        });
+        assert.equal(response.status, 500);
+        assert.deepEqual(response.body, { message: "服务器处理请求失败，请稍后重试。" });
+        assert.doesNotMatch(JSON.stringify(response.body), new RegExp(secret));
       });
     }
     await new Promise((resolve) => setImmediate(resolve));

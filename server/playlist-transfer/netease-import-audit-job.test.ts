@@ -2,6 +2,28 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { cancelNeteaseImportAuditJob, formatNeteaseImportAuditJobExport, getNeteaseImportAuditJob, startNeteaseImportAuditJob } from "./netease-import-audit-job.js";
 import { assertPublicDtoSafe } from "./assert-public-dto-safe.js";
+import type { PublicNeteaseImportAuditJob } from "./netease-import-audit-public-dto.js";
+
+type IsExact<Left, Right> = [Left, Right] extends [Right, Left] ? true : false;
+type AssertTrue<Value extends true> = Value;
+type StartReturnsPublicAuditJob = AssertTrue<IsExact<
+  ReturnType<typeof startNeteaseImportAuditJob>,
+  PublicNeteaseImportAuditJob
+>>;
+type GetReturnsPublicAuditJob = AssertTrue<IsExact<
+  ReturnType<typeof getNeteaseImportAuditJob>,
+  PublicNeteaseImportAuditJob | null
+>>;
+type CancelReturnsPublicAuditJob = AssertTrue<IsExact<
+  ReturnType<typeof cancelNeteaseImportAuditJob>,
+  PublicNeteaseImportAuditJob | null
+>>;
+
+const publicAccessorTypesCompile: [StartReturnsPublicAuditJob, GetReturnsPublicAuditJob, CancelReturnsPublicAuditJob] = [
+  true,
+  true,
+  true
+];
 
 const unavailableTrack = {
   id: "song-1",
@@ -25,6 +47,7 @@ async function waitForJob(ownerKey: string, id: string, status: "completed" | "c
 }
 
 test("startNeteaseImportAuditJob runs in background and stores completed result", async () => {
+  assert.deepEqual(publicAccessorTypesCompile, [true, true, true]);
   const job = startNeteaseImportAuditJob(
     "owner-a",
     {
@@ -249,4 +272,38 @@ test("audit jobs keep candidate raw internally while all returned and exported D
   completed.result?.items[0]?.candidates[0]?.artists.push("公共突变");
   const reread = getNeteaseImportAuditJob("owner-private", started.id);
   assert.deepEqual(reread?.result?.items[0]?.candidates[0]?.artists, ["原歌手"]);
+});
+
+test("failed audit jobs never expose Error message, cause, stack, or non-Error values", async () => {
+  const secret = "audit-job-error-secret-sentinel";
+  for (const failure of [Object.assign(new Error(secret), { cause: { cookie: secret } }), secret]) {
+    const started = startNeteaseImportAuditJob(
+      "owner-failure",
+      {
+        playlistId: "liked-failure",
+        playlistName: "失败审计",
+        maxTracks: 1,
+        candidateLimit: 1,
+        checkAvailability: true
+      },
+      {
+        loadEntries: async () => {
+          throw failure;
+        },
+        searchCandidates: async () => []
+      }
+    );
+
+    assertPublicDtoSafe(started, secret);
+    const failed = await waitForJob("owner-failure", started.id, "failed");
+    assert.equal(failed.error, "网易云导入歌单清理失败");
+    assertPublicDtoSafe(failed, secret);
+    assert.equal("stack" in failed, false);
+    assert.equal("cause" in failed, false);
+
+    const cancelled = cancelNeteaseImportAuditJob("owner-failure", started.id);
+    assert.ok(cancelled);
+    assert.equal(cancelled.error, "网易云导入歌单清理失败");
+    assertPublicDtoSafe(cancelled, secret);
+  }
 });

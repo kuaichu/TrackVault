@@ -3,6 +3,7 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerTerminalRoutes } from "./http-terminal-routes.js";
+import { safeHttpErrorHandler } from "./public-error.js";
 import { getAlbumProfile } from "./album-provider.js";
 import { getCurrentUserKey, getSession, loginSession, logoutSession } from "./account-store.js";
 import { requireAdminAuth } from "./admin-auth.js";
@@ -281,6 +282,7 @@ app.use(createPlaylistCompareRouter({
 }));
 
 registerTerminalRoutes(app, clientDistDir);
+app.use(safeHttpErrorHandler);
 
 app.listen(port, () => {
   console.log(`Server listening on http://localhost:${port}`);

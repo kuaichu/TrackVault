@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ErrorRequestHandler, RequestHandler } from "express";
-import type { PlaylistTransferRunJob } from "../playlist-transfer/playlist-transfer-job.js";
+import type { RequestHandler } from "express";
+import {
+  getPlaylistTransferRunJob,
+  startPlaylistTransferRunJob,
+  type PlaylistTransferRunJob
+} from "../playlist-transfer/playlist-transfer-job.js";
 import type { CreatePlaylistTransferDeps, CreatePlaylistTransferInput } from "../playlist-transfer/service.js";
 import type { PlaylistTransferJob, TransferExportFormat } from "../playlist-transfer/types.js";
 import {
@@ -13,6 +17,7 @@ import { createBackgroundJobOwnerResolver } from "../background-job-owner.js";
 import { getRequiredClientSessionId } from "../request-context.js";
 import { assertPublicDtoSafe } from "../playlist-transfer/assert-public-dto-safe.js";
 import { formatTransferExport } from "../playlist-transfer/export-formatters.js";
+import { safeHttpErrorHandler } from "../public-error.js";
 
 const timeout = { timeout: 5_000 };
 
@@ -199,11 +204,12 @@ test("sync creation overwrites owner, preserves payload, and returns a bare job 
   assert.equal(dependencyArguments[0].saveJob, saveJob);
 });
 
-test("sync creation keeps Error and non-Error failures at 400", timeout, async () => {
+test("sync creation keeps Error and non-Error failures at a safe fixed 400", timeout, async () => {
+  const secret = "transfer-create-error-secret-sentinel";
   const dependencies = createDependencies({
     getCurrentUserKey: async () => "server-owner",
     createPlaylistTransferJob: async (input) => {
-      throw input.playlistName === "error" ? new Error("creation failed") : "creation failed";
+      throw input.playlistName === "error" ? Object.assign(new Error(secret), { cause: secret }) : secret;
     }
   });
 
@@ -214,7 +220,7 @@ test("sync creation keeps Error and non-Error failures at 400", timeout, async (
       playlistName: "error"
     });
     assert.equal(known.status, 400);
-    assert.deepEqual(known.body, { message: "creation failed" });
+    assert.deepEqual(known.body, { message: "创建歌单互转任务失败" });
 
     const fallback = await requestJson("POST", "/api/playlist-transfer/jobs", {
       sourceProvider: "qq",
@@ -223,6 +229,7 @@ test("sync creation keeps Error and non-Error failures at 400", timeout, async (
     });
     assert.equal(fallback.status, 400);
     assert.deepEqual(fallback.body, { message: "创建歌单互转任务失败" });
+    assert.doesNotMatch(JSON.stringify([known.body, fallback.body]), new RegExp(secret));
   });
 });
 
@@ -495,40 +502,39 @@ test("progress start accepts minimum, empty, and complete inputs, overwrites own
   assert.equal(dependencyArguments[0].saveJob, saveJob);
 });
 
-test("progress start forwards synchronous and asynchronous failures without unhandled rejections", timeout, async () => {
+test("progress start normalizes Express control values without 404, double-send, or unhandled rejection", timeout, async () => {
+  const secret = "progress-start-secret-sentinel";
   const unhandledRejections: unknown[] = [];
   const onUnhandledRejection = (reason: unknown) => {
     unhandledRejections.push(reason);
   };
-  const errorBoundary: ErrorRequestHandler = (error, _request, response, _next) => {
-    response.status(599).json({ message: error instanceof Error ? error.message : "unknown" });
-  };
-  const starts: Array<{
-    start: PlaylistTransferJobRouterDependencies["startPlaylistTransferRunJob"];
-    message: string;
-  }> = [
-    {
-      start: () => {
-        throw new Error("sync start failed");
-      },
-      message: "sync start failed"
-    },
-    {
-      start: () => Promise.reject(new Error("async start failed")),
-      message: "async start failed"
-    }
+  const thrownValues: unknown[] = [null, undefined, false, 0, "", "route", "router", new Error(secret)];
+  const starts: Array<PlaylistTransferJobRouterDependencies["startPlaylistTransferRunJob"]> = [
+    ...thrownValues.map((thrownValue) => () => {
+      throw thrownValue;
+    }),
+    () => Promise.reject(Object.assign(new Error(secret), { cause: secret })),
+    () => Promise.reject("router")
   ];
 
   process.on("unhandledRejection", onUnhandledRejection);
   try {
-    for (const { start: startPlaylistTransferRunJob, message } of starts) {
+    for (const startPlaylistTransferRunJob of starts) {
+      let finishCount = 0;
+      const finishTracker: RequestHandler = (_request, response, next) => {
+        response.once("finish", () => {
+          finishCount += 1;
+        });
+        next();
+      };
       const router = createPlaylistTransferJobRouter(createDependencies({
         getCurrentUserKey: async () => "server-owner",
         startPlaylistTransferRunJob
       }));
       await withTestRouter([
+        finishTracker,
         router,
-        errorBoundary as unknown as RequestHandler
+        safeHttpErrorHandler
       ], async ({ request }) => {
         const response = await request("/api/playlist-transfer/jobs/progress", {
           method: "POST",
@@ -536,15 +542,55 @@ test("progress start forwards synchronous and asynchronous failures without unha
           body: JSON.stringify({ sourceProvider: "qq", targetProvider: "netease" }),
           signal: AbortSignal.timeout(1_000)
         });
-        assert.equal(response.status, 599);
-        assert.deepEqual(response.body, { message });
+        assert.equal(response.status, 500);
+        assert.deepEqual(response.body, { message: "服务器处理请求失败，请稍后重试。" });
+        assert.doesNotMatch(JSON.stringify(response.body), new RegExp(secret));
       });
+      assert.equal(finishCount, 1);
     }
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(unhandledRejections, []);
   } finally {
     process.removeListener("unhandledRejection", onUnhandledRejection);
   }
+});
+
+test("failed progress jobs stay sanitized through start and polling HTTP responses", timeout, async () => {
+  const secret = "progress-job-http-secret-sentinel";
+  const router = createPlaylistTransferJobRouter(createDependencies({
+    getCurrentUserKey: async () => "server-owner",
+    startPlaylistTransferRunJob,
+    getPlaylistTransferRunJob,
+    searchTargetTracks: async () => {
+      throw Object.assign(new Error(secret), { cause: { cookie: secret } });
+    }
+  }));
+
+  await withTestRouter([router], async ({ request, requestJson }) => {
+    const started = await requestJson("POST", "/api/playlist-transfer/jobs/progress", {
+      sourceProvider: "text",
+      targetProvider: "netease",
+      text: "失败歌曲 - 歌手"
+    });
+    assert.equal(started.status, 202);
+    assert.doesNotMatch(JSON.stringify(started.body), new RegExp(secret));
+    const id = (started.body as { job: { id: string } }).job.id;
+
+    let failed: Awaited<ReturnType<typeof request>> | undefined;
+    for (let index = 0; index < 30; index += 1) {
+      const response = await request(`/api/playlist-transfer/jobs/progress/${id}`);
+      if ((response.body as { job?: { status?: string } }).job?.status === "failed") {
+        failed = response;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    assert.ok(failed);
+    assert.equal(failed.status, 200);
+    assert.equal((failed.body as { job: { error?: string } }).job.error, "歌单互转失败");
+    assert.doesNotMatch(JSON.stringify(failed.body), new RegExp(secret));
+  });
 });
 
 test("progress reads pass server owner and id while hiding foreign and missing jobs behind the same 404", timeout, async () => {
@@ -785,12 +831,18 @@ test("Netease existing-playlist import trims name and id, passes ids, and comput
     },
     addNeteaseTrackIdsToExistingPlaylist: async (playlistId, ids) => {
       addCalls.push([playlistId, ids]);
-      return {
+      return Object.assign({
         playlistId,
         playlistName: "已有歌单",
         playlistUrl: "https://example.invalid/playlist",
         addedCount: 3
-      };
+      }, {
+        raw: { cookie: "import-result-secret-sentinel" },
+        ownerKey: "import-result-secret-sentinel",
+        clientSessionId: "import-result-secret-sentinel",
+        token: "import-result-secret-sentinel",
+        credentialDigest: "import-result-secret-sentinel"
+      });
     },
     createNeteasePlaylistFromTrackIds: async () => {
       createCalls += 1;
@@ -828,7 +880,10 @@ test("Netease new-playlist import uses the trimmed or default name for empty pla
     addNeteaseTrackIdsToExistingPlaylist: async () => unexpectedDependency("addNeteaseTrackIdsToExistingPlaylist"),
     createNeteasePlaylistFromTrackIds: async (name, ids) => {
       creates.push([name, ids]);
-      return { playlistId: `created-${creates.length}`, playlistName: name, addedCount: 1 };
+      return Object.assign(
+        { playlistId: `created-${creates.length}`, playlistName: name, addedCount: 1 },
+        { raw: { token: "import-result-secret-sentinel" }, cookie: "import-result-secret-sentinel" }
+      );
     }
   });
 
@@ -866,7 +921,8 @@ test("Netease new-playlist import uses the trimmed or default name for empty pla
   ]);
 });
 
-test("Netease import converts id extraction and provider Error/non-Error failures to 400", timeout, async () => {
+test("Netease import hides id extraction and provider Error/non-Error details at 400", timeout, async () => {
+  const secret = "netease-import-error-secret-sentinel";
   const cases: Array<{
     name: string;
     playlistId: string;
@@ -875,9 +931,9 @@ test("Netease import converts id extraction and provider Error/non-Error failure
     createFailure?: unknown;
     expected: string;
   }> = [
-    { name: "ids", playlistId: "", idsFailure: new Error("ids failed"), expected: "ids failed" },
-    { name: "add", playlistId: "existing", addFailure: new Error("add failed"), expected: "add failed" },
-    { name: "create", playlistId: "", createFailure: "create failed", expected: "导入网易云歌单失败" }
+    { name: "ids", playlistId: "", idsFailure: Object.assign(new Error(secret), { cause: secret }), expected: "导入网易云歌单失败" },
+    { name: "add", playlistId: "existing", addFailure: new Error(secret), expected: "导入网易云歌单失败" },
+    { name: "create", playlistId: "", createFailure: secret, expected: "导入网易云歌单失败" }
   ];
 
   for (const errorCase of cases) {
@@ -903,6 +959,7 @@ test("Netease import converts id extraction and provider Error/non-Error failure
       );
       assert.equal(response.status, 400);
       assert.deepEqual(response.body, { message: errorCase.expected });
+      assert.doesNotMatch(JSON.stringify(response.body), new RegExp(secret));
     });
   }
 });
@@ -971,7 +1028,14 @@ test("QQ import trims names, passes mids, always creates, ignores playlistId, an
     },
     createQqPlaylistFromTrackMids: async (name, mids) => {
       creates.push([name, mids]);
-      return { playlistId: `qq-created-${creates.length}`, playlistName: name, addedCount: 2 };
+      return Object.assign(
+        { playlistId: `qq-created-${creates.length}`, playlistName: name, addedCount: 2 },
+        {
+          raw: { credential: "import-result-secret-sentinel" },
+          token: "import-result-secret-sentinel",
+          credentialDigest: "import-result-secret-sentinel"
+        }
+      );
     }
   });
 
@@ -1009,13 +1073,14 @@ test("QQ import trims names, passes mids, always creates, ignores playlistId, an
   ]);
 });
 
-test("QQ provider Error and non-Error failures remain 400", timeout, async () => {
+test("QQ provider Error and non-Error failures remain a safe fixed 400", timeout, async () => {
+  const secret = "qq-import-error-secret-sentinel";
   const dependencies = createDependencies({
     getCurrentUserKey: async () => "server-owner",
     getPlaylistTransferJob: async () => qqJob,
     getQqImportTrackMids: () => ["qq-1"],
     createQqPlaylistFromTrackMids: async (name) => {
-      throw name === "error" ? new Error("QQ create failed") : "QQ create failed";
+      throw name === "error" ? Object.assign(new Error(secret), { cause: secret }) : secret;
     }
   });
 
@@ -1026,7 +1091,7 @@ test("QQ provider Error and non-Error failures remain 400", timeout, async () =>
       { name: "error" }
     );
     assert.equal(known.status, 400);
-    assert.deepEqual(known.body, { message: "QQ create failed" });
+    assert.deepEqual(known.body, { message: "导入 QQ 音乐歌单失败" });
 
     const fallback = await requestJson(
       "POST",
@@ -1035,6 +1100,7 @@ test("QQ provider Error and non-Error failures remain 400", timeout, async () =>
     );
     assert.equal(fallback.status, 400);
     assert.deepEqual(fallback.body, { message: "导入 QQ 音乐歌单失败" });
+    assert.doesNotMatch(JSON.stringify([known.body, fallback.body]), new RegExp(secret));
   });
 });
 

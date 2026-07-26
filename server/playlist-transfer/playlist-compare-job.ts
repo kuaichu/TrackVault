@@ -7,6 +7,7 @@ import {
 } from "./playlist-compare.js";
 import type { TransferTrack } from "./types.js";
 import { toPublicPlaylistCompareJob } from "./playlist-compare-public-dto.js";
+import { PUBLIC_ERROR_MESSAGES } from "../public-error.js";
 
 export type PlaylistCompareJobStatus = "queued" | "loading" | "running" | "completed" | "failed";
 
@@ -108,10 +109,10 @@ async function runJob(job: PlaylistCompareJob, deps: PlaylistCompareJobDeps) {
         total: leftTracks.length
       }
     });
-  } catch (error) {
+  } catch {
     updateJob(job, {
       status: "failed",
-      error: error instanceof Error ? error.message : "歌单对比失败",
+      error: PUBLIC_ERROR_MESSAGES.playlistCompare,
       progress: {
         ...job.progress,
         phase: "failed"

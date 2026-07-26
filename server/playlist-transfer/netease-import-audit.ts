@@ -1,4 +1,8 @@
 import type { MatchCandidate, ProviderTrack, TransferTrack } from "./types.js";
+import {
+  AVAILABILITY_CHECK_FAILED_REASON,
+  toPublicTrackAvailability
+} from "./availability-public-policy.js";
 
 export type NeteaseRawPlaylistTrack = {
   id: number | string;
@@ -123,9 +127,8 @@ function rawTrackToTransferTrack(track: NeteaseRawPlaylistTrack): TransferTrack 
 }
 
 export function getNeteaseTrackUnusableReason(track: NeteaseRawPlaylistTrack, privilege?: NeteaseRawPrivilege) {
-  const copyrightReason = track.noCopyrightRcmd?.typeDesc?.trim();
-  if (copyrightReason) {
-    return copyrightReason;
+  if (track.noCopyrightRcmd?.typeDesc?.trim()) {
+    return "歌曲受版权限制，当前不可用";
   }
 
   if (typeof privilege?.st === "number" && privilege.st < 0) {
@@ -244,13 +247,20 @@ async function buildReplacementCandidates(input: {
   for (const candidate of ranked) {
     let nextCandidate = candidate;
     if (input.checkCandidateAvailability) {
-      const availability = await input.checkCandidateAvailability(candidate);
-      if (availability) {
+      try {
+        const availability = await input.checkCandidateAvailability(candidate);
+        if (availability) {
+          nextCandidate = {
+            ...candidate,
+            availability: toPublicTrackAvailability(availability)
+          };
+        }
+      } catch {
         nextCandidate = {
           ...candidate,
           availability: {
-            status: availability.status,
-            reason: availability.reason
+            status: "copyright_unavailable",
+            reason: AVAILABILITY_CHECK_FAILED_REASON
           }
         };
       }

@@ -135,3 +135,19 @@ test("legacy ownerless jobs remain inaccessible to every identity", async () => 
 
   await nextEventLoopTurn();
 });
+
+test("failed compare jobs expose only the stable action error", async () => {
+  const secret = "compare-job-error-secret-sentinel";
+  const started = startPlaylistCompareJob("owner-failure", compareInput, {
+    loadSideTracks: async () => {
+      throw Object.assign(new Error(secret), { cause: { credential: secret } });
+    }
+  });
+
+  const failed = await waitForCompareJob("owner-failure", started.id);
+  assert.equal(failed?.status, "failed");
+  assert.equal(failed?.error, "歌单对比失败");
+  assert.doesNotMatch(JSON.stringify(failed), new RegExp(secret));
+  assert.equal(failed && "stack" in failed, false);
+  assert.equal(failed && "cause" in failed, false);
+});

@@ -11,6 +11,7 @@ import type {
 } from "./playlist-compare-job.js";
 import { toPublicTransferTrack } from "./public-dto.js";
 import type { PublicTransferTrack, TransferSourceProvider } from "./types.js";
+import { PUBLIC_ERROR_MESSAGES } from "../public-error.js";
 
 export type PublicPlaylistCompareItem = {
   status: PlaylistCompareStatus;
@@ -277,7 +278,7 @@ export function toPublicPlaylistCompareJob(job: PlaylistCompareJob): PublicPlayl
       ...(job.progress.currentTitle === undefined ? {} : { currentTitle: job.progress.currentTitle })
     },
     ...(job.result === undefined ? {} : { result: toPublicPlaylistCompareResult(job.result) }),
-    ...(job.error === undefined ? {} : { error: job.error }),
+    ...(job.status === "failed" ? { error: PUBLIC_ERROR_MESSAGES.playlistCompare } : {}),
     createdAt: job.createdAt,
     updatedAt: job.updatedAt
   };

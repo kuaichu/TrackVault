@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { formatTransferExport } from "./export-formatters.js";
-import type { PlaylistTransferJob } from "./types.js";
+import type { PlaylistTransferJob, TransferExportFormat } from "./types.js";
 import { assertPublicDtoSafe } from "./assert-public-dto-safe.js";
 
 const job: PlaylistTransferJob = {
@@ -98,4 +98,30 @@ test("JSON export serializes only the public transfer DTO", () => {
   assertPublicDtoSafe(JSON.parse(output.content) as unknown, "secret-client-session");
   assert.doesNotMatch(output.content, /ownerKey|secret-client-session|credentialDigest|\"raw\"/);
   assert.equal((JSON.parse(output.content) as { summary: { total: number } }).summary.total, 2);
+});
+
+test("all export formats replace legacy persisted reasons with status-based public text", () => {
+  const secret = "legacy-transfer-reason-secret-sentinel";
+  const legacyJob: PlaylistTransferJob = {
+    ...job,
+    tracks: [{
+      sourceTrack: { source: "netease", title: "受限歌曲", artists: ["歌手"] },
+      status: "vip_only",
+      candidates: [],
+      reason: secret
+    }],
+    summary: { ...job.summary, total: 1, matched: 0, notFound: 0, unavailable: 1 }
+  };
+
+  for (const format of ["json", "csv", "markdown", "text"] satisfies TransferExportFormat[]) {
+    const output = formatTransferExport(legacyJob, format);
+    assert.doesNotMatch(output.content, new RegExp(secret));
+  }
+
+  const json = JSON.parse(formatTransferExport(legacyJob, "json").content) as {
+    tracks: Array<{ reason?: string }>;
+  };
+  assert.equal(json.tracks[0].reason, "目标歌曲需要会员权限");
+  assert.match(formatTransferExport(legacyJob, "csv").content, /目标歌曲需要会员权限/);
+  assert.match(formatTransferExport(legacyJob, "markdown").content, /目标歌曲需要会员权限/);
 });

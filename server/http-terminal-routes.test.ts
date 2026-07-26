@@ -6,6 +6,7 @@ import test from "node:test";
 import express from "express";
 import { registerTerminalRoutes } from "./http-terminal-routes.js";
 import { withTestRouter } from "./routes/router-test-http.js";
+import { safeHttpErrorHandler } from "./public-error.js";
 
 test("serves API, static assets, asset 404, and SPA fallback in composition order", async () => {
   const clientDistDir = await mkdtemp(path.join(tmpdir(), "trackvault-terminal-routes-"));
@@ -41,6 +42,25 @@ test("serves API, static assets, asset 404, and SPA fallback in composition orde
       assert.equal(fallbackResponse.status, 200);
       assert.equal(fallbackResponse.headers.get("cache-control"), "no-store");
       assert.equal(await fallbackResponse.text(), "<main>TrackVault SPA</main>");
+    });
+  } finally {
+    await rm(clientDistDir, { recursive: true, force: true });
+  }
+});
+
+test("terminal sendFile failures reach the safe final error middleware", async () => {
+  const clientDistDir = await mkdtemp(path.join(tmpdir(), "trackvault-terminal-error-"));
+
+  try {
+    const router = express.Router();
+    registerTerminalRoutes(router, clientDistDir);
+    router.use(safeHttpErrorHandler);
+
+    await withTestRouter([router], async ({ request }) => {
+      const response = await request("/missing-spa-entry", { signal: AbortSignal.timeout(1_000) });
+      assert.equal(response.status, 500);
+      assert.deepEqual(response.body, { message: "服务器处理请求失败，请稍后重试。" });
+      assert.doesNotMatch(JSON.stringify(response.body), new RegExp(clientDistDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     });
   } finally {
     await rm(clientDistDir, { recursive: true, force: true });
