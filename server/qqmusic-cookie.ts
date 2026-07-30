@@ -24,9 +24,13 @@ export function parseQqCookie(cookie: string) {
     });
 
   if (Number(cookieObj.login_type) === 2 && cookieObj.wxuin) {
-    cookieObj.uin = cookieObj.wxuin;
+    cookieObj.uin = /^o\d+$/.test(cookieObj.wxuin)
+      ? cookieObj.wxuin.slice(1)
+      : /^\d+$/.test(cookieObj.wxuin) ? cookieObj.wxuin : "";
+  } else {
+    const uin = cookieObj.uin || "";
+    cookieObj.uin = /^o\d+$/.test(uin) ? uin.slice(1) : /^\d+$/.test(uin) ? uin : "";
   }
-  cookieObj.uin = (cookieObj.uin || "").replace(/\D/g, "");
   return cookieObj;
 }
 

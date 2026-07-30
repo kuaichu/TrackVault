@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { CredentialWriteCancelledError, createCredentialWriteGuardRegistry } from "./credential-write-guard.js";
 import { createQqMusicCookiePersister } from "./qqmusic-auth.js";
+import { createQqCredentialVerifier, type QqLoginStatusTransport } from "./qqmusic-credential-verifier.js";
 import { createQqMusicCookieChecker } from "./qqmusic-provider.js";
 import type { QqMusicCookieCheckResult } from "./types.js";
 
@@ -51,6 +52,17 @@ test("QQ cookie checker reports only missing field names without calling the pro
   assert.equal(providerCalls, 1);
 });
 
+test("QQ cookie checker rejects mixed-character UIN without calling the provider", async () => {
+  let providerCalls = 0;
+  const checkCookie = createQqMusicCookieChecker(async () => {
+    providerCalls += 1;
+    return { uin: "123" };
+  });
+  const result = await checkCookie("uin=abc123; qm_keyst=secret");
+  assert.equal(result.ok, false);
+  assert.equal(providerCalls, 0);
+});
+
 test("QQ verification without a stable account ID fails closed", async () => {
   const checkCookie = createQqMusicCookieChecker(async () => ({ uin: null }));
   const result = await checkCookie("uin=12346; qm_keyst=unverified");
@@ -61,11 +73,21 @@ test("QQ verification without a stable account ID fails closed", async () => {
   assert.equal(result.errorType, "credential_rejected");
 });
 
-test("QQ identity is written only after login verification and the original key is preserved", async () => {
+test("QQ transport through verifier, checker and persister writes identity and preserves the original key", async () => {
   const registry = createCredentialWriteGuardRegistry();
   let storedCookie = "";
   let verifiedUin: string | null = null;
-  const checkCookie = createQqMusicCookieChecker(async () => ({ uin: "23456" }));
+  const transport: QqLoginStatusTransport = async (request, cookie) => {
+    assert.equal(request.comm.uin, "23456");
+    assert.equal(cookie.uin, "23456");
+    assert.equal(cookie.qm_keyst, "old-key");
+    return {
+      code: 0,
+      ts: 1730000000000,
+      req_0: { code: 0, data: { base: { is_login: true } } }
+    };
+  };
+  const checkCookie = createQqMusicCookieChecker(createQqCredentialVerifier(transport));
   const persister = createQqMusicCookiePersister({
     checkCookie,
     beginCredentialWrite: () => registry.begin("qqmusic", "qq-success"),

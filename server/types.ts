@@ -404,7 +404,7 @@ export type QqMusicCookieCheckResult = {
   verified: boolean;
   uin: string | null;
   message: string;
-  errorType?: "credential_rejected" | "network_failure" | "protocol_response_invalid";
+  errorType?: "credential_rejected" | "rate_limited" | "temporary_failure" | "protocol_response_invalid";
   refreshedCookie?: string;
 };
 

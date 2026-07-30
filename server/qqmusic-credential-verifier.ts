@@ -2,7 +2,8 @@ const QQ_LOGIN_STATUS_URL = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 
 export type QqCredentialVerificationErrorType =
   | "credential_rejected"
-  | "network_failure"
+  | "rate_limited"
+  | "temporary_failure"
   | "protocol_response_invalid";
 
 export class QqCredentialVerificationError extends Error {
@@ -36,6 +37,8 @@ function serializeCookie(cookie: Record<string, string>) {
 }
 
 export const fetchQqLoginStatus: QqLoginStatusTransport = async (request, cookie) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
   let response: Response;
   try {
     response = await fetch(QQ_LOGIN_STATUS_URL, {
@@ -44,14 +47,23 @@ export const fetchQqLoginStatus: QqLoginStatusTransport = async (request, cookie
         "content-type": "application/json",
         cookie: serializeCookie(cookie)
       },
-      body: JSON.stringify(request)
+      body: JSON.stringify(request),
+      signal: controller.signal
     });
   } catch {
-    throw new QqCredentialVerificationError("network_failure");
+    throw new QqCredentialVerificationError("temporary_failure");
+  } finally {
+    clearTimeout(timeout);
   }
 
   if (!response.ok) {
-    throw new QqCredentialVerificationError("network_failure");
+    if (response.status === 429) {
+      throw new QqCredentialVerificationError("rate_limited");
+    }
+    if (response.status >= 500 && response.status <= 599) {
+      throw new QqCredentialVerificationError("temporary_failure");
+    }
+    throw new QqCredentialVerificationError("protocol_response_invalid");
   }
   try {
     return await response.json();
@@ -71,6 +83,12 @@ function normalizeUin(value: unknown) {
     ? String(value)
     : typeof value === "string" ? value.trim() : "";
   return /^\d+$/.test(normalized) ? normalized : null;
+}
+
+function classifyProviderCode(code: number): QqCredentialVerificationErrorType {
+  if (code === 1000 || code === 104400 || code === 104401) return "credential_rejected";
+  if (code === 2001 || code === 429) return "rate_limited";
+  return "protocol_response_invalid";
 }
 
 export function createQqCredentialVerifier(transport: QqLoginStatusTransport) {
@@ -94,35 +112,37 @@ export function createQqCredentialVerifier(transport: QqLoginStatusTransport) {
       payload = await transport(request, cookie);
     } catch (error) {
       if (error instanceof QqCredentialVerificationError) throw error;
-      throw new QqCredentialVerificationError("network_failure");
+      throw new QqCredentialVerificationError("temporary_failure");
     }
 
     const root = asRecord(payload);
-    const result = asRecord(root?.req_0);
-    if (typeof root?.code !== "number" || typeof result?.code !== "number") {
+    if (typeof root?.code !== "number") {
       throw new QqCredentialVerificationError("protocol_response_invalid");
     }
-    if (root.code !== 0 || result.code !== 0) {
-      throw new QqCredentialVerificationError("credential_rejected");
+    if (root.code !== 0) {
+      throw new QqCredentialVerificationError(classifyProviderCode(root.code));
+    }
+
+    const result = asRecord(root.req_0);
+    if (typeof result?.code !== "number") {
+      throw new QqCredentialVerificationError("protocol_response_invalid");
+    }
+    if (result.code !== 0) {
+      throw new QqCredentialVerificationError(classifyProviderCode(result.code));
     }
 
     const data = asRecord(result.data);
     const userInfo = asRecord(data?.user_info);
-    if (!data || !userInfo || typeof data.login_type !== "number") {
-      throw new QqCredentialVerificationError("protocol_response_invalid");
+    if (userInfo && Object.prototype.hasOwnProperty.call(userInfo, "uin")) {
+      const responseUin = normalizeUin(userInfo.uin);
+      if (!responseUin) {
+        throw new QqCredentialVerificationError("protocol_response_invalid");
+      }
+      if (responseUin !== submittedUin) {
+        throw new QqCredentialVerificationError("credential_rejected");
+      }
     }
-    if (data.login_type <= 0) {
-      throw new QqCredentialVerificationError("credential_rejected");
-    }
-
-    const verifiedUin = normalizeUin(userInfo.uin);
-    if (!verifiedUin) {
-      throw new QqCredentialVerificationError("protocol_response_invalid");
-    }
-    if (verifiedUin !== submittedUin) {
-      throw new QqCredentialVerificationError("credential_rejected");
-    }
-    return { uin: verifiedUin };
+    return { uin: submittedUin };
   };
 }
 
@@ -131,7 +151,8 @@ export const verifyQqCredential = createQqCredentialVerifier(fetchQqLoginStatus)
 export function getQqCredentialVerificationMessage(errorType: QqCredentialVerificationErrorType) {
   switch (errorType) {
     case "credential_rejected": return "QQ 音乐凭证已被拒绝。请重试或清除凭证。";
-    case "network_failure": return "QQ 音乐凭证验证网络失败。请稍后重试或清除凭证。";
+    case "rate_limited": return "QQ 音乐凭证验证请求过于频繁。请稍后重试。";
+    case "temporary_failure": return "QQ 音乐凭证验证暂时失败。请稍后重试或清除凭证。";
     case "protocol_response_invalid": return "QQ 音乐凭证验证响应异常。请稍后重试或清除凭证。";
   }
 }
