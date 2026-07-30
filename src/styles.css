@@ -9552,18 +9552,40 @@ button.quick-chip:active,
 
 .transfer-summary-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(70px, 1fr));
+  grid-template-columns: repeat(6, minmax(64px, 1fr));
   gap: 8px;
-  min-width: 420px;
+  min-width: 480px;
 }
 
-.transfer-summary-grid strong {
+.transfer-summary-grid button {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+  text-align: center;
+  cursor: pointer;
+}
+
+.transfer-summary-grid > strong {
   display: grid;
   gap: 3px;
   padding: 10px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.05);
   text-align: center;
+}
+
+.transfer-summary-grid button:hover,
+.transfer-summary-grid button.active {
+  border-color: rgba(120, 216, 255, 0.42);
+  background: rgba(120, 216, 255, 0.12);
+}
+
+.transfer-summary-grid strong {
+  font-size: 1rem;
 }
 
 .transfer-summary-grid small {
@@ -10175,6 +10197,34 @@ body {
   gap: 18px;
   min-height: 0;
   min-width: 0;
+}
+
+.transfer-row-review {
+  align-items: start;
+}
+
+.transfer-row .transfer-review-reason,
+.transfer-row .transfer-candidate-list span {
+  white-space: normal;
+}
+
+.transfer-review-reason {
+  margin-top: 6px;
+}
+
+.transfer-candidate-list {
+  display: grid;
+  gap: 8px;
+}
+
+.transfer-candidate {
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.transfer-candidate:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .sidebar-nav-stack {

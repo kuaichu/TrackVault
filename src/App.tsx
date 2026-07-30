@@ -92,6 +92,7 @@ import {
 } from "./api";
 import { isMediaMemoryLimitExceededError } from "./media-memory";
 import { buildSelectedSourceTracks, getPlaylistSourceBlockReason, getPlaylistSourceKey, isCurrentPlaylistSourceRequest } from "./playlist-transfer-source";
+import { filterTransferTracks, getCompletedTransferImportName, getDefaultTransferPlaylistName, getDefaultTransferResultFilter, resolveTransferImportName, type TransferResultFilter } from "./playlist-transfer-results";
 import type { AccountState, AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferImportResult, PlaylistTransferJob, PlaylistTransferRunJob, QqMusicAccountStatus, QqMusicUserProfile, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, SongInsight, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferTrack, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
@@ -1300,6 +1301,8 @@ export default function App() {
   const initialPlayerState = DEFAULT_PLAYER_STATE;
   const syncingFromUrlRef = useRef(false);
   const pendingUrlRef = useRef<string | null>(null);
+  const transferImportNameRef = useRef("转换后的歌单");
+  const transferImportNameEditedRef = useRef(false);
   const detailRequestIdRef = useRef(0);
   const [urlRoutingReady, setUrlRoutingReady] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -1386,6 +1389,7 @@ export default function App() {
   const [transferAdvancedOpen, setTransferAdvancedOpen] = useState(false);
   const [transferToolTab, setTransferToolTab] = useState<"audit" | "compare">("audit");
   const [transferJob, setTransferJob] = useState<PlaylistTransferJob | null>(null);
+  const [transferResultFilter, setTransferResultFilter] = useState<TransferResultFilter>("all");
   const [transferExportFormat, setTransferExportFormat] = useState<TransferExportFormat>("markdown");
   const [transferExportContent, setTransferExportContent] = useState("");
   const [transferNeteaseTargetMode, setTransferNeteaseTargetMode] = useState<"create" | "existing">("create");
@@ -2596,7 +2600,9 @@ export default function App() {
       setMessage(`QQ 音乐共读取 ${data.length} 个歌单`);
       if (options.selectTransferPlaylist !== false && (options.preferFirst || !transferPlaylistId) && data.length > 0) {
         setTransferPlaylistId(data[0].id);
-        setTransferPlaylistName(`${data[0].name} 迁移到网易云`);
+        const playlistName = getDefaultTransferPlaylistName(data[0].name);
+        setTransferPlaylistName(playlistName);
+        setDefaultTransferImportName(playlistName);
         void loadTransferSourceSongs(data[0].id, "qq");
       }
     } catch (error) {
@@ -2750,7 +2756,9 @@ export default function App() {
         ? transferQqPlaylists.find((item) => item.id === playlistId)
         : playlists.find((item) => item.id === playlistId);
     if (playlist) {
-      setTransferPlaylistName(`${playlist.name} 迁移到${transferTargetProvider === "netease" ? "网易云" : "目标平台"}`);
+      const playlistName = getDefaultTransferPlaylistName(playlist.name);
+      setTransferPlaylistName(playlistName);
+      setDefaultTransferImportName(playlistName);
     }
     if (playlistId && (transferSourceProvider === "qq" || transferSourceProvider === "netease")) {
       void loadTransferSourceSongs(playlistId, transferSourceProvider === "qq" ? "qq" : "netease");
@@ -2785,7 +2793,11 @@ export default function App() {
         setTransferRunJob(job);
         if (job.status === "completed" && job.result) {
           setTransferJob(job.result);
-          setTransferImportName(`${job.result.playlistName} 转换结果`);
+          setTransferResultFilter(getDefaultTransferResultFilter(job.result));
+          const completedImportName = getCompletedTransferImportName(job.result.playlistName, transferImportNameRef.current, transferImportNameEditedRef.current);
+          if (completedImportName !== transferImportNameRef.current) {
+            setAutomaticTransferImportName(completedImportName);
+          }
           setTransferImportResult(null);
           setTransferLoading(false);
           setMessage(`歌单互转完成：${job.result.summary.matched} 首匹配，${job.result.summary.manualReview} 首待确认，${job.result.summary.notFound} 首未找到。`);
@@ -2822,6 +2834,10 @@ export default function App() {
       sourceProvider === "netease"
         ? selectedPlaylist?.name || transferPlaylistName.trim()
         : transferPlaylistName.trim() || (sourceProvider === "qq" ? selectedPlaylist?.name || `QQ 歌单 ${playlistId}` : "文字歌单");
+
+    if (!transferImportNameEditedRef.current) {
+      setAutomaticTransferImportName(playlistName);
+    }
 
     if ((sourceProvider === "netease" || sourceProvider === "qq") && !playlistId) {
       setMessage(sourceProvider === "netease" ? "请先选择一个网易云歌单。" : "请先选择或输入 QQ 音乐歌单 ID。");
@@ -2913,9 +2929,9 @@ export default function App() {
         return null;
       }
 
-      const importName = newPlaylistName?.trim() || transferImportName.trim();
+      const importName = newPlaylistName?.trim() || transferImportNameRef.current;
       const result = await importPlaylistTransferToNetease(job.id, {
-        name: !importName || importName === "转换后的歌单" ? `${job.playlistName} 转换结果` : importName,
+        name: resolveTransferImportName(job.playlistName, importName),
         playlistId: createNewPlaylist ? undefined : transferTargetPlaylistId
       });
       setTransferImportResult(result);
@@ -2939,9 +2955,9 @@ export default function App() {
     setMessage("正在创建 QQ 音乐目标歌单");
 
     try {
-      const importName = newPlaylistName?.trim() || transferImportName.trim();
+      const importName = newPlaylistName?.trim() || transferImportNameRef.current;
       const result = await importPlaylistTransferToQq(job.id, {
-        name: !importName || importName === "转换后的歌单" ? `${job.playlistName} 转换结果` : importName
+        name: resolveTransferImportName(job.playlistName, importName)
       });
       setTransferImportResult(result);
       setMessage(`已创建「${result.playlistName ?? "QQ 音乐歌单"}」，导入 ${result.addedCount} 首，跳过 ${result.skippedCount} 首。`);
@@ -3350,7 +3366,7 @@ export default function App() {
     setTransferPlaylistName(playlistName);
     setTransferExecutionMode("report");
     setTransferNeteaseTargetMode("create");
-    setTransferImportName(playlistName);
+    setAutomaticTransferImportName(playlistName);
     setTransferLoading(true);
     setPlaylistCompareCreating(true);
     setPlaylistCompareCreateResult(null);
@@ -3575,6 +3591,24 @@ export default function App() {
     } finally {
       setLoadingAdminConfig(false);
     }
+  }
+
+  function setAutomaticTransferImportName(name: string) {
+    transferImportNameEditedRef.current = false;
+    transferImportNameRef.current = name;
+    setTransferImportName(name);
+  }
+
+  function setDefaultTransferImportName(name: string) {
+    if (!transferImportNameEditedRef.current) {
+      setAutomaticTransferImportName(name);
+    }
+  }
+
+  function handleTransferImportNameChange(name: string) {
+    transferImportNameEditedRef.current = true;
+    transferImportNameRef.current = name;
+    setTransferImportName(name);
   }
 
   function commitAccountState(nextSession: AccountState) {
@@ -8878,7 +8912,7 @@ export default function App() {
                         {transferNeteaseTargetMode === "create" ? (
                         <label>
                           <span>新歌单名称</span>
-                          <input value={transferImportName} onChange={(event) => setTransferImportName(event.target.value)} />
+                          <input value={transferImportName} onChange={(event) => handleTransferImportNameChange(event.target.value)} />
                         </label>
                         ) : (
                         <div className="transfer-grid">
@@ -8966,6 +9000,99 @@ export default function App() {
                     </div>
                   ) : null}
                 </section>
+
+                {transferJob ? (
+                  <section className="settings-card transfer-report-card">
+                    <div className="transfer-report-head">
+                      <div>
+                        <span>{transferJob.playlistName}</span>
+                        <p>{transferJob.sourceProvider} 到 {transferJob.targetProvider} · 共 {transferJob.summary.total} 首</p>
+                      </div>
+                      <div className="transfer-summary-grid">
+                        {([
+                          ["all", transferJob.summary.total, "全部"],
+                          ["matched", transferJob.summary.matched, "已匹配"],
+                          ["review", transferJob.summary.manualReview, "待确认"],
+                          ["not_found", transferJob.summary.notFound, "未找到"],
+                          ["restricted", transferJob.summary.unavailable, "受限"],
+                          ["duplicate", transferJob.summary.duplicate, "重复"]
+                        ] as const).map(([filter, count, label]) => (
+                          <button
+                            type="button"
+                            key={filter}
+                            className={transferResultFilter === filter ? "active" : ""}
+                            aria-pressed={transferResultFilter === filter}
+                            onClick={() => setTransferResultFilter(filter)}
+                          >
+                            <strong>{count}</strong><small>{label}</small>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="transfer-table">
+                      {filterTransferTracks(transferJob.tracks, transferResultFilter).map((track, index) => {
+                        const needsReview = track.status === "manual_review" || track.status === "metadata_conflict";
+                        return (
+                          <article key={`${track.sourceTrack.sourceTrackId ?? index}-${track.sourceTrack.title}`} className={`transfer-row${needsReview ? " transfer-row-review" : ""}`}>
+                            <div>
+                              <strong>{track.sourceTrack.title}</strong>
+                              <span>{track.sourceTrack.artists.join(" / ") || "未知歌手"}{track.sourceTrack.album ? ` · ${track.sourceTrack.album}` : ""}</span>
+                              {needsReview ? <span className="transfer-review-reason">原因：{track.reason ?? "需要人工确认"}</span> : null}
+                            </div>
+                            <div>
+                              {needsReview ? (
+                                <div className="transfer-candidate-list">
+                                  {track.candidates.length > 0 ? track.candidates.map((candidate) => (
+                                    <div key={`${candidate.provider}-${candidate.targetTrackId}`} className="transfer-candidate">
+                                      <strong>{candidate.title}</strong>
+                                      <span>{candidate.artists.join(" / ") || "未知歌手"}{candidate.album ? ` · ${candidate.album}` : ""} · {candidate.confidenceScore} 分</span>
+                                    </div>
+                                  )) : <span>无候选歌曲</span>}
+                                </div>
+                              ) : (
+                                <>
+                                  <strong>{track.selectedCandidate ? track.selectedCandidate.title : getTransferStatusLabel(track.status)}</strong>
+                                  <span>{track.selectedCandidate ? `${track.selectedCandidate.artists.join(" / ") || "未知歌手"} · ${track.selectedCandidate.confidenceScore} 分` : track.reason ?? "无候选"}</span>
+                                </>
+                              )}
+                            </div>
+                            <span className={`transfer-status transfer-status-${track.status}`}>{getTransferStatusLabel(track.status)}</span>
+                          </article>
+                        );
+                      })}
+                    </div>
+
+                    <div className="form-actions transfer-export-actions">
+                      <select value={transferExportFormat} onChange={(event) => setTransferExportFormat(event.target.value as TransferExportFormat)}>
+                        <option value="markdown">Markdown</option><option value="text">纯文本</option><option value="csv">CSV</option><option value="json">JSON</option>
+                      </select>
+                      <button type="button" className="secondary-button" disabled={transferExporting} onClick={() => void handleExportTransferJob()}>{transferExporting ? "导出中" : "生成导出内容"}</button>
+                    </div>
+
+                    {transferJob.targetProvider === "netease" && transferJob.summary.matched > 0 ? (
+                      <div className="transfer-import-panel">
+                        {transferNeteaseTargetMode === "create" ? (
+                          <label><span>网易云目标歌单名</span><input value={transferImportName} onChange={(event) => handleTransferImportNameChange(event.target.value)} /></label>
+                        ) : (
+                          <label><span>导入到已有歌单</span><select value={transferTargetPlaylistId} onChange={(event) => setTransferTargetPlaylistId(event.target.value)}><option value="">选择自己创建的歌单</option>{transferNeteaseTargetPlaylists.map((playlist) => <option key={playlist.id} value={playlist.id}>{playlist.name} · {playlist.trackCount} 首</option>)}</select></label>
+                        )}
+                        <button type="button" className="primary-button" disabled={transferImporting || Boolean(transferImportResult)} onClick={() => void handleImportTransferToNetease()}>{transferImporting ? "导入中" : transferImportResult ? "已写入" : transferNeteaseTargetMode === "existing" ? "导入已有歌单" : "创建网易云歌单"}</button>
+                        {transferImportResult ? <p>已导入 {transferImportResult.addedCount} 首，跳过 {transferImportResult.skippedCount} 首。歌单：{transferImportResult.playlistName ?? transferImportResult.playlistId}</p> : null}
+                      </div>
+                    ) : null}
+
+                    {transferJob.targetProvider === "qq" && transferJob.summary.matched > 0 ? (
+                      <div className="transfer-import-panel">
+                        <label><span>QQ 音乐目标歌单名</span><input value={transferImportName} onChange={(event) => handleTransferImportNameChange(event.target.value)} /></label>
+                        <button type="button" className="primary-button" disabled={transferImporting || Boolean(transferImportResult)} onClick={() => void handleImportTransferToQq()}>{transferImporting ? "创建中" : transferImportResult ? "已写入" : "创建 QQ 音乐歌单"}</button>
+                        {transferImportResult ? <p>已导入 {transferImportResult.addedCount} 首，跳过 {transferImportResult.skippedCount} 首。歌单：{transferImportResult.playlistName ?? transferImportResult.playlistId}</p> : null}
+                      </div>
+                    ) : null}
+
+                    {transferExportContent ? <textarea className="transfer-export-output" value={transferExportContent} readOnly /> : null}
+                  </section>
+                ) : null}
 
                 <section className="settings-card transfer-tools-head">
                   <div>
@@ -9429,105 +9556,6 @@ export default function App() {
                   </section>
                 ) : null}
 
-                {transferJob ? (
-                  <section className="settings-card transfer-report-card">
-                    <div className="transfer-report-head">
-                      <div>
-                        <span>{transferJob.playlistName}</span>
-                        <p>
-                          {transferJob.sourceProvider} 到 {transferJob.targetProvider} · 共 {transferJob.summary.total} 首
-                        </p>
-                      </div>
-                      <div className="transfer-summary-grid">
-                        <strong>{transferJob.summary.matched}<small>已匹配</small></strong>
-                        <strong>{transferJob.summary.manualReview}<small>待确认</small></strong>
-                        <strong>{transferJob.summary.notFound}<small>未找到</small></strong>
-                        <strong>{transferJob.summary.unavailable}<small>受限</small></strong>
-                        <strong>{transferJob.summary.duplicate}<small>重复</small></strong>
-                      </div>
-                    </div>
-
-                    <div className="transfer-table">
-                      {transferJob.tracks.slice(0, 80).map((track, index) => (
-                        <article key={`${track.sourceTrack.sourceTrackId ?? index}-${track.sourceTrack.title}`} className="transfer-row">
-                          <div>
-                            <strong>{track.sourceTrack.title}</strong>
-                            <span>{track.sourceTrack.artists.join(" / ") || "未知歌手"}{track.sourceTrack.album ? ` · ${track.sourceTrack.album}` : ""}</span>
-                          </div>
-                          <div>
-                            <strong>{track.selectedCandidate ? track.selectedCandidate.title : getTransferStatusLabel(track.status)}</strong>
-                            <span>
-                              {track.selectedCandidate
-                                ? `${track.selectedCandidate.artists.join(" / ") || "未知歌手"} · ${track.selectedCandidate.confidenceScore} 分`
-                                : track.reason ?? "无候选"}
-                            </span>
-                          </div>
-                          <span className={`transfer-status transfer-status-${track.status}`}>{getTransferStatusLabel(track.status)}</span>
-                        </article>
-                      ))}
-                    </div>
-
-                    <div className="form-actions transfer-export-actions">
-                      <select value={transferExportFormat} onChange={(event) => setTransferExportFormat(event.target.value as TransferExportFormat)}>
-                        <option value="markdown">Markdown</option>
-                        <option value="text">纯文本</option>
-                        <option value="csv">CSV</option>
-                        <option value="json">JSON</option>
-                      </select>
-                      <button type="button" className="secondary-button" disabled={transferExporting} onClick={() => void handleExportTransferJob()}>
-                        {transferExporting ? "导出中" : "生成导出内容"}
-                      </button>
-                    </div>
-
-                    {transferJob.targetProvider === "netease" && transferJob.summary.matched > 0 ? (
-                      <div className="transfer-import-panel">
-                        {transferNeteaseTargetMode === "create" ? (
-                          <label>
-                            <span>网易云目标歌单名</span>
-                            <input value={transferImportName} onChange={(event) => setTransferImportName(event.target.value)} />
-                          </label>
-                        ) : (
-                          <label>
-                            <span>导入到已有歌单</span>
-                            <select value={transferTargetPlaylistId} onChange={(event) => setTransferTargetPlaylistId(event.target.value)}>
-                              <option value="">选择自己创建的歌单</option>
-                              {transferNeteaseTargetPlaylists.map((playlist) => (
-                                <option key={playlist.id} value={playlist.id}>
-                                  {playlist.name} · {playlist.trackCount} 首
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        )}
-                        <button type="button" className="primary-button" disabled={transferImporting || Boolean(transferImportResult)} onClick={() => void handleImportTransferToNetease()}>
-                          {transferImporting ? "导入中" : transferImportResult ? "已写入" : transferNeteaseTargetMode === "existing" ? "导入已有歌单" : "创建网易云歌单"}
-                        </button>
-                        {transferImportResult ? (
-                          <p>已导入 {transferImportResult.addedCount} 首，跳过 {transferImportResult.skippedCount} 首。歌单：{transferImportResult.playlistName ?? transferImportResult.playlistId}</p>
-                        ) : null}
-                      </div>
-                    ) : null}
-
-                    {transferJob.targetProvider === "qq" && transferJob.summary.matched > 0 ? (
-                      <div className="transfer-import-panel">
-                        <label>
-                          <span>QQ 音乐目标歌单名</span>
-                          <input value={transferImportName} onChange={(event) => setTransferImportName(event.target.value)} />
-                        </label>
-                        <button type="button" className="primary-button" disabled={transferImporting || Boolean(transferImportResult)} onClick={() => void handleImportTransferToQq()}>
-                          {transferImporting ? "创建中" : transferImportResult ? "已写入" : "创建 QQ 音乐歌单"}
-                        </button>
-                        {transferImportResult ? (
-                          <p>已导入 {transferImportResult.addedCount} 首，跳过 {transferImportResult.skippedCount} 首。歌单：{transferImportResult.playlistName ?? transferImportResult.playlistId}</p>
-                        ) : null}
-                      </div>
-                    ) : null}
-
-                    {transferExportContent ? (
-                      <textarea className="transfer-export-output" value={transferExportContent} readOnly />
-                    ) : null}
-                  </section>
-                ) : null}
               </div>
             </section>
           ) : mainTab === "search" && navKey === "playlists" && !isPlaylistSongsView ? (
