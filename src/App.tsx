@@ -2,7 +2,7 @@ import { type CSSProperties, FormEvent, type MouseEvent, useEffect, useMemo, use
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { detailRoute, parseAppRoute, searchRoute, topRoute, type PublicProvider } from "./app-routes";
-import { playlistTotal, resultProvider, shouldWriteBrowserUrl } from "./frontend-route-state";
+import { detailBackFallback, playlistTotals, requiresNeteasePlaybackAuth, resultProvider, shouldWriteBrowserUrl } from "./frontend-route-state";
 import {
   decideScopedHydration,
   getPlayerStateFingerprint,
@@ -1660,8 +1660,13 @@ export default function App() {
   const hasNeteaseDownloadCredential = neteaseAccountIsLoggedIn;
   const hasQqMusicDownloadCredential = hasQqMusicCookie;
   const downloadAuthState = { hasNeteaseDownloadCredential, hasQqMusicDownloadCredential };
-  const playbackLocked = !neteaseAccountIsLoggedIn && !isQqResultMode && currentTrack?.source !== "qqmusic";
+  const playbackCandidate = currentTrack ?? results[0] ?? playQueue[0];
+  const playbackLocked = requiresNeteasePlaybackAuth(neteaseAccountIsLoggedIn, playbackCandidate?.source);
   const hasPlaybackQueue = playQueue.length > 0 || results.length > 0;
+
+  function isPlaybackAuthLocked(song: Song | null | undefined) {
+    return requiresNeteasePlaybackAuth(neteaseAccountIsLoggedIn, song?.source);
+  }
 
   function songHasDownloadCredential(song: Song | null) {
     return Boolean(song && canDownloadSong(song, downloadAuthState).allowed);
@@ -1971,8 +1976,7 @@ export default function App() {
       setLoadingArtist(false);
     }
     const currentUrl = `${location.pathname}${location.search}`;
-    if (!shouldWriteBrowserUrl(currentUrl, path)) {
-      pendingUrlRef.current = null;
+    if (!shouldWriteBrowserUrl(currentUrl, pendingUrlRef.current, path)) {
       return;
     }
     pendingUrlRef.current = path;
@@ -2552,9 +2556,9 @@ export default function App() {
       setPlaylistSongsPage(pageData.page);
       setPlaylistSongsLimit(pageData.limit);
       setPlaylistSongsHasMore(pageData.hasMore);
-      const resolvedTotal = playlistTotal(pageData.total, playlist.trackCount);
-      setPlaylistSongsTotal(resolvedTotal);
-      setActivePlaylist((current) => current?.id === playlist.id ? { ...current, trackCount: resolvedTotal } : current);
+      const totals = playlistTotals(pageData.total, pageData.sourceTotal, playlist.trackCount);
+      setPlaylistSongsTotal(totals.matchTotal);
+      setActivePlaylist((current) => current?.id === playlist.id ? { ...current, trackCount: totals.sourceTotal } : current);
       setPlaylistSearchKeyword(pageData.keyword ?? normalizedKeyword);
       setPlaylistSearchInput(pageData.keyword ?? normalizedKeyword);
       navigateTo("playlists");
@@ -2562,11 +2566,12 @@ export default function App() {
         navigateBrowser(detailRoute("playlists", playlistProvider, playlist.id), undefined, false);
       }
       scrollResultListToTop();
-      const totalPages = Math.max(1, Math.ceil(resolvedTotal / pageData.limit));
+      const paginationTotal = (pageData.keyword ?? normalizedKeyword) ? totals.matchTotal : totals.sourceTotal;
+      const totalPages = Math.max(1, Math.ceil(paginationTotal / pageData.limit));
       setMessage(
         pageData.keyword
           ? `${playlist.name} · 筛选 “${pageData.keyword}” · 第 ${pageData.page} / ${totalPages} 页 · 当前 ${pageData.songs.length} 首 / 匹配 ${pageData.total} 首`
-          : `${playlist.name} · 第 ${pageData.page} / ${totalPages} 页 · 当前 ${pageData.songs.length} 首 / 共 ${resolvedTotal} 首`
+          : `${playlist.name} · 第 ${pageData.page} / ${totalPages} 页 · 当前 ${pageData.songs.length} 首 / 共 ${totals.sourceTotal} 首`
       );
     } catch (error) {
       if (requestId === detailRequestIdRef.current) setMessage(error instanceof Error ? error.message : "获取歌单歌曲失败");
@@ -3819,7 +3824,7 @@ export default function App() {
   }
 
   function requirePlaybackAuth(song?: Song | null) {
-    if (neteaseAccountIsLoggedIn || isQqDataMode || song?.source === "qqmusic" || currentTrack?.source === "qqmusic") {
+    if (!requiresNeteasePlaybackAuth(neteaseAccountIsLoggedIn, (song ?? currentTrack)?.source)) {
       return true;
     }
 
@@ -4220,11 +4225,11 @@ export default function App() {
       setPlaylistSongsPage(pageData.page);
       setPlaylistSongsLimit(pageData.limit);
       setPlaylistSongsHasMore(pageData.hasMore);
-      const resolvedTotal = playlistTotal(pageData.total, playlist.trackCount);
-      setPlaylistSongsTotal(resolvedTotal);
-      setActivePlaylist((current) => current?.id === playlist.id ? { ...current, trackCount: resolvedTotal } : current);
+      const totals = playlistTotals(pageData.total, pageData.sourceTotal, playlist.trackCount);
+      setPlaylistSongsTotal(totals.matchTotal);
+      setActivePlaylist((current) => current?.id === playlist.id ? { ...current, trackCount: totals.sourceTotal } : current);
       navigateBrowser(detailRoute("playlists", "qq", playlist.id));
-      setMessage(`${playlist.name} · 当前 ${pageData.songs.length} 首 / 共 ${pageData.total || playlist.trackCount} 首`);
+      setMessage(`${playlist.name} · 当前 ${pageData.songs.length} 首 / 共 ${totals.sourceTotal} 首`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "打开 QQ 歌单失败");
     } finally {
@@ -5804,17 +5809,13 @@ export default function App() {
       return;
     }
 
-    if (options.fromEnded && playbackLocked) {
-      return;
-    }
-
     const queue = getActivePlaybackQueue();
     if (queue.length === 0) {
       return;
     }
 
     const nextSong = await resolveNextPlaybackSong(queue);
-    if (nextSong && !playbackLocked) {
+    if (nextSong && requirePlaybackAuth(nextSong)) {
       syncAudioForSong(nextSong, true);
     } else if (!nextSong) {
       setMessage("队列里的歌曲都需要会员或暂无版权，暂时没有可播放的下一首。");
@@ -5855,7 +5856,7 @@ export default function App() {
           mode: playbackMode
         });
         if (nextSong) {
-          if (!playbackLocked) {
+          if (!requiresNeteasePlaybackAuth(neteaseAccountIsLoggedIn, nextSong.source)) {
             window.setTimeout(() => syncAudioForSong(nextSong, true), 0);
           } else {
             setCurrentTrack(nextSong);
@@ -5883,7 +5884,7 @@ export default function App() {
       return;
     }
 
-    const totalSongs = playlistSongsTotal || activePlaylist.trackCount;
+    const totalSongs = playlistSearchKeyword ? playlistSongsTotal : activePlaylist.trackCount;
     const totalPages = Math.max(1, Math.ceil(totalSongs / playlistSongsLimit));
     const safePage = Math.min(totalPages, Math.max(1, nextPage));
 
@@ -7531,7 +7532,7 @@ export default function App() {
         return 1;
       }
 
-      const totalSongs = playlistSongsTotal || activePlaylist.trackCount;
+      const totalSongs = playlistSearchKeyword ? playlistSongsTotal : activePlaylist.trackCount;
       return Math.max(1, Math.ceil(totalSongs / playlistSongsLimit));
     },
     [activePlaylist, playlistSongsLimit, playlistSongsTotal, playlistSearchKeyword]
@@ -7595,11 +7596,13 @@ export default function App() {
 
   function goBackInBrowserHistory() {
     const historyIndex = typeof window.history.state?.idx === "number" ? window.history.state.idx : 0;
-    if (historyIndex > 0) {
+    const fallbackUrl = detailBackFallback(historyIndex);
+    if (!fallbackUrl) {
       browserNavigate(-1);
       return;
     }
-    navigateBrowser("/discover", { replace: true });
+    pendingUrlRef.current = null;
+    browserNavigate(fallbackUrl, { replace: true });
   }
   const showAdminFallbackControls = true;
   const inferredDiscoverFeedKind: DiscoverFeedKind = results.some((song) => song.source === "netease-personal-radar")
@@ -9870,14 +9873,14 @@ export default function App() {
                       </button>
                       <button
                         type="button"
-                        className={playbackLocked || isSongPlaybackLocked(song) ? "row-icon-button locked-playback-button" : "row-icon-button"}
-                        aria-label={playbackLocked ? `登录后试听 ${song.title}` : isSongPlaybackLocked(song) ? `${song.title} 暂不可播放` : `试听 ${song.title}`}
-                        title={playbackLocked ? "登录后试听" : isSongPlaybackLocked(song) ? getSongPlaybackBlockedText(song) : "试听"}
-                        disabled={playbackLocked || isSongPlaybackLocked(song)}
+                        className={isPlaybackAuthLocked(song) || isSongPlaybackLocked(song) ? "row-icon-button locked-playback-button" : "row-icon-button"}
+                        aria-label={isPlaybackAuthLocked(song) ? `登录后试听 ${song.title}` : isSongPlaybackLocked(song) ? `${song.title} 暂不可播放` : `试听 ${song.title}`}
+                        title={isPlaybackAuthLocked(song) ? "登录后试听" : isSongPlaybackLocked(song) ? getSongPlaybackBlockedText(song) : "试听"}
+                        disabled={isPlaybackAuthLocked(song) || isSongPlaybackLocked(song)}
                         onClick={(event) => { event.stopPropagation(); handlePreview(song); }}
                       >
                         <PreviewIcon />
-                        {playbackLocked || isSongPlaybackLocked(song) ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                        {isPlaybackAuthLocked(song) || isSongPlaybackLocked(song) ? <span className="download-lock-badge"><LockIcon /></span> : null}
                       </button>
                       {!isQqResultMode ? (
                         <button
@@ -9942,13 +9945,13 @@ export default function App() {
                         <span className="result-time">{song.duration}</span>
                         <button
                           type="button"
-                          className={playbackLocked ? "history-play-button locked-action-button" : "history-play-button"}
-                          disabled={playbackLocked}
-                          aria-label={playbackLocked ? `登录后播放 ${song.title}` : `播放 ${song.title}`}
-                          title={playbackLocked ? "登录后播放" : "播放"}
+                          className={isPlaybackAuthLocked(song) ? "history-play-button locked-action-button" : "history-play-button"}
+                          disabled={isPlaybackAuthLocked(song)}
+                          aria-label={isPlaybackAuthLocked(song) ? `登录后播放 ${song.title}` : `播放 ${song.title}`}
+                          title={isPlaybackAuthLocked(song) ? "登录后播放" : "播放"}
                           onClick={(event) => { event.stopPropagation(); handlePreview(song); }}
                         >
-                          {playbackLocked ? <LockIcon /> : <PlayerIcon name="play" />}
+                          {isPlaybackAuthLocked(song) ? <LockIcon /> : <PlayerIcon name="play" />}
                         </button>
                       </article>
                     );
@@ -10249,14 +10252,14 @@ export default function App() {
                         </button>
                         <button
                           type="button"
-                          className={playbackLocked || isSongPlaybackLocked(song) ? "row-icon-button locked-playback-button" : "row-icon-button"}
-                          aria-label={playbackLocked ? `登录后试听 ${song.title}` : isSongPlaybackLocked(song) ? `${song.title} 暂不可播放` : `试听 ${song.title}`}
-                          title={playbackLocked ? "登录后试听" : isSongPlaybackLocked(song) ? getSongPlaybackBlockedText(song) : "试听"}
-                          disabled={playbackLocked || isSongPlaybackLocked(song)}
+                          className={isPlaybackAuthLocked(song) || isSongPlaybackLocked(song) ? "row-icon-button locked-playback-button" : "row-icon-button"}
+                          aria-label={isPlaybackAuthLocked(song) ? `登录后试听 ${song.title}` : isSongPlaybackLocked(song) ? `${song.title} 暂不可播放` : `试听 ${song.title}`}
+                          title={isPlaybackAuthLocked(song) ? "登录后试听" : isSongPlaybackLocked(song) ? getSongPlaybackBlockedText(song) : "试听"}
+                          disabled={isPlaybackAuthLocked(song) || isSongPlaybackLocked(song)}
                           onClick={() => handlePreview(song)}
                         >
                           <PreviewIcon />
-                          {playbackLocked || isSongPlaybackLocked(song) ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                          {isPlaybackAuthLocked(song) || isSongPlaybackLocked(song) ? <span className="download-lock-badge"><LockIcon /></span> : null}
                         </button>
                         {!isQqDataMode ? (
                           <button
@@ -10671,8 +10674,8 @@ export default function App() {
                   playQueue.map((song, index) => (
                     <article
                       key={song.id}
-                      className={[currentTrack?.id === song.id ? "play-queue-row active" : "play-queue-row", playbackLocked ? "locked-playback-row" : ""].filter(Boolean).join(" ")}
-                      title={playbackLocked ? "登录后播放" : undefined}
+                      className={[currentTrack?.id === song.id ? "play-queue-row active" : "play-queue-row", isPlaybackAuthLocked(song) ? "locked-playback-row" : ""].filter(Boolean).join(" ")}
+                      title={isPlaybackAuthLocked(song) ? "登录后播放" : undefined}
                       onClick={() => handlePreview(song)}
                       onContextMenu={(event) => handleOpenSongContextMenu(event, song)}
                     >
@@ -11310,13 +11313,13 @@ export default function App() {
                 <div className="song-detail-actions" aria-label="歌曲操作">
                   <button
                     type="button"
-                    className={playbackLocked || isSongPlaybackLocked(detailSong) ? "row-icon-button locked-playback-button" : "row-icon-button"}
-                    disabled={playbackLocked || isSongPlaybackLocked(detailSong)}
-                    title={playbackLocked ? "登录后试听" : isSongPlaybackLocked(detailSong) ? getSongPlaybackBlockedText(detailSong) : "试听"}
+                    className={isPlaybackAuthLocked(detailSong) || isSongPlaybackLocked(detailSong) ? "row-icon-button locked-playback-button" : "row-icon-button"}
+                    disabled={isPlaybackAuthLocked(detailSong) || isSongPlaybackLocked(detailSong)}
+                    title={isPlaybackAuthLocked(detailSong) ? "登录后试听" : isSongPlaybackLocked(detailSong) ? getSongPlaybackBlockedText(detailSong) : "试听"}
                     onClick={() => handlePreview(detailSong)}
                   >
                     <PreviewIcon />
-                    {playbackLocked || isSongPlaybackLocked(detailSong) ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                    {isPlaybackAuthLocked(detailSong) || isSongPlaybackLocked(detailSong) ? <span className="download-lock-badge"><LockIcon /></span> : null}
                   </button>
                   <button
                     type="button"
@@ -11992,7 +11995,7 @@ export default function App() {
             <strong>{songContextMenu.song.title}</strong>
             <span>{songContextMenu.song.artist}</span>
           </div>
-          <button type="button" role="menuitem" disabled={playbackLocked || isSongPlaybackLocked(songContextMenu.song)} title={isSongPlaybackLocked(songContextMenu.song) ? getSongPlaybackBlockedText(songContextMenu.song) : undefined} onClick={() => runSongContextAction(() => handlePreview(songContextMenu.song))}>
+          <button type="button" role="menuitem" disabled={isPlaybackAuthLocked(songContextMenu.song) || isSongPlaybackLocked(songContextMenu.song)} title={isPlaybackAuthLocked(songContextMenu.song) ? "登录后播放" : isSongPlaybackLocked(songContextMenu.song) ? getSongPlaybackBlockedText(songContextMenu.song) : undefined} onClick={() => runSongContextAction(() => handlePreview(songContextMenu.song))}>
             <span className="song-context-icon"><PlayerIcon name="play" /></span>
             播放
           </button>
