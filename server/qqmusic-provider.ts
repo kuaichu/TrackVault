@@ -6,6 +6,7 @@ import { findMembershipExpireAt, formatMembershipExpireText } from "./membership
 import { getClientSessionId } from "./request-context.js";
 import { captureCredentialWriteGuard, runCredentialWriteIfCurrent } from "./credential-write-guard.js";
 import { getQqCookieMissingFieldsMessage, parseQqCookie, validateQqCookie } from "./qqmusic-cookie.js";
+import { getQqCredentialVerificationMessage, QqCredentialVerificationError, verifyQqCredential } from "./qqmusic-credential-verifier.js";
 
 const require = createRequire(import.meta.url);
 
@@ -1198,7 +1199,7 @@ async function getVerifiedQqCookie() {
 }
 
 export function createQqMusicCookieChecker(
-  verifyCredential: (cookie: Record<string, string>) => Promise<{ uin?: string | null; musickey?: string }>
+  verifyCredential: (cookie: Record<string, string>) => Promise<{ uin?: string | null }>
 ) {
   return async function checkCookie(cookie: string): Promise<QqMusicCookieCheckResult> {
     const validation = validateQqCookie(cookie.trim());
@@ -1215,42 +1216,33 @@ export function createQqMusicCookieChecker(
     try {
       const verifiedCredential = await verifyCredential(cookieObj);
       const verifiedUin = verifiedCredential.uin?.trim() ?? "";
-      const refreshedKey = verifiedCredential.musickey?.trim();
-      if (!/^\d+$/.test(verifiedUin) || !refreshedKey) {
-        throw new Error("刷新结果缺少服务端验证的稳定账号或密钥");
+      if (!/^\d+$/.test(verifiedUin) || verifiedUin !== cookieObj.uin) {
+        throw new QqCredentialVerificationError("credential_rejected");
       }
-      const nextCookie: Record<string, string> = {
-        ...cookieObj,
-        uin: verifiedUin,
-        qm_keyst: refreshedKey,
-        qqmusic_key: refreshedKey
-      };
 
       return {
         ok: true,
         verified: true,
         uin: verifiedUin,
-        message: `QQ 音乐 Cookie 已验证：${verifiedUin}`,
-        refreshedCookie: serializeQqCookie(nextCookie)
+        message: `QQ 音乐 Cookie 已验证：${verifiedUin}`
       };
     } catch (error) {
+      const errorType = error instanceof QqCredentialVerificationError
+        ? error.errorType
+        : "protocol_response_invalid";
       return {
         ok: true,
         verified: false,
         uin: cookieObj.uin,
-        message: "QQ 音乐 Cookie 已保存但未验证。请重新验证或替换凭证。"
+        errorType,
+        message: getQqCredentialVerificationMessage(errorType)
       };
     }
   };
 }
 
 export const checkQqMusicCookie = createQqMusicCookieChecker(
-  async (cookie) => {
-    const refreshed = await callQqMusicApi<{ musickey?: string }>(cookie, "user/refresh");
-    // QQLogin refresh issues a new key only after the submitted musicid/key pair authenticates.
-    // The accepted musicid is therefore the stable UIN attested by this server response.
-    return { uin: cookie.uin, musickey: refreshed.musickey };
-  }
+  verifyQqCredential
 );
 
 export async function getQqMusicAccountStatus(): Promise<QqMusicAccountStatus> {

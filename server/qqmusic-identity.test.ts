@@ -13,7 +13,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-test("QQ refresh failure is reported as saved but unverified without exposing a refreshed credential", async () => {
+test("QQ verification failure is reported as saved but unverified without exposing credential details", async () => {
   const secret = "secret-cookie-value";
   const checkCookie = createQqMusicCookieChecker(async () => {
     throw new Error(`provider rejected ${secret}`);
@@ -24,7 +24,8 @@ test("QQ refresh failure is reported as saved but unverified without exposing a 
   assert.equal(result.verified, false);
   assert.equal(result.uin, "12345");
   assert.equal(result.refreshedCookie, undefined);
-  assert.match(result.message, /已保存但未验证/);
+  assert.equal(result.errorType, "protocol_response_invalid");
+  assert.match(result.message, /响应异常/);
   assert.doesNotMatch(result.message, new RegExp(secret));
 });
 
@@ -32,7 +33,7 @@ test("QQ cookie checker reports only missing field names without calling the pro
   let providerCalls = 0;
   const checkCookie = createQqMusicCookieChecker(async () => {
     providerCalls += 1;
-    return { uin: "12345", musickey: "refreshed" };
+    return { uin: "12345" };
   });
 
   const missingUin = await checkCookie("qm_keyst=secret-value; pgv_pvid=statistics-cookie");
@@ -50,21 +51,21 @@ test("QQ cookie checker reports only missing field names without calling the pro
   assert.equal(providerCalls, 1);
 });
 
-test("QQ refresh without a verified replacement key fails closed", async () => {
+test("QQ verification without a stable account ID fails closed", async () => {
   const checkCookie = createQqMusicCookieChecker(async () => ({ uin: null }));
   const result = await checkCookie("uin=12346; qm_keyst=unverified");
 
   assert.equal(result.ok, true);
   assert.equal(result.verified, false);
   assert.equal(result.refreshedCookie, undefined);
-  assert.match(result.message, /已保存但未验证/);
+  assert.equal(result.errorType, "credential_rejected");
 });
 
-test("QQ identity is written only after a successful Provider refresh", async () => {
+test("QQ identity is written only after login verification and the original key is preserved", async () => {
   const registry = createCredentialWriteGuardRegistry();
   let storedCookie = "";
   let verifiedUin: string | null = null;
-  const checkCookie = createQqMusicCookieChecker(async () => ({ uin: "23456", musickey: "refreshed-key" }));
+  const checkCookie = createQqMusicCookieChecker(async () => ({ uin: "23456" }));
   const persister = createQqMusicCookiePersister({
     checkCookie,
     beginCredentialWrite: () => registry.begin("qqmusic", "qq-success"),
@@ -78,12 +79,12 @@ test("QQ identity is written only after a successful Provider refresh", async ()
     clearVerifiedIdentity: async () => undefined
   });
 
-  const result = await persister.importCookie("uin=99999; qm_keyst=old-key");
+  const result = await persister.importCookie("uin=23456; qm_keyst=old-key");
   assert.equal(result.ok, true);
   assert.equal(result.verified, true);
   assert.equal(verifiedUin, "23456");
-  assert.match(storedCookie, /uin=23456/);
-  assert.match(storedCookie, /qm_keyst=refreshed-key/);
+  assert.equal(storedCookie, "uin=23456; qm_keyst=old-key");
+  assert.equal(result.refreshedCookie, undefined);
 });
 
 test("saved-but-unverified QQ results cannot create verified identity", async () => {
