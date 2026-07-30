@@ -8414,7 +8414,7 @@ export default function App() {
             ) : null}
           </div>
 
-          <div className="sidebar-nav-stack">
+          <div className="sidebar-nav-layout">
             <div className="sidebar-group">
               <span className="group-label">音乐</span>
               <nav className="nav-list" aria-label="音乐导航">
@@ -8435,28 +8435,30 @@ export default function App() {
               </nav>
             </div>
 
-            <div className="sidebar-group">
-              <span className="group-label">工具</span>
-              <nav className="nav-list" aria-label="工具导航">
-                <button type="button" className={mainTab === "search" && navKey === "transfer" ? "nav-button active" : "nav-button"} onClick={openTransferPage}>
-                  歌单互转
-                </button>
-                <button type="button" className={mainTab === "search" && navKey === "downloads" ? "nav-button active" : "nav-button"} onClick={() => navigateTopLevel("downloads")}>
-                  下载管理
-                </button>
-                <button type="button" className={mainTab === "search" && navKey === "history" ? "nav-button active" : "nav-button"} onClick={() => navigateTopLevel("history")}>
-                  播放历史
-                </button>
-              </nav>
-            </div>
+            <div className="sidebar-nav-stack">
+              <div className="sidebar-group">
+                <span className="group-label">工具</span>
+                <nav className="nav-list" aria-label="工具导航">
+                  <button type="button" className={mainTab === "search" && navKey === "transfer" ? "nav-button active" : "nav-button"} onClick={openTransferPage}>
+                    歌单互转
+                  </button>
+                  <button type="button" className={mainTab === "search" && navKey === "downloads" ? "nav-button active" : "nav-button"} onClick={() => navigateTopLevel("downloads")}>
+                    下载管理
+                  </button>
+                  <button type="button" className={mainTab === "search" && navKey === "history" ? "nav-button active" : "nav-button"} onClick={() => navigateTopLevel("history")}>
+                    播放历史
+                  </button>
+                </nav>
+              </div>
 
-            <div className="sidebar-group">
-              <span className="group-label">系统</span>
-              <nav className="nav-list" aria-label="系统导航">
-                <button type="button" className={mainTab === "settings" ? "nav-button active" : "nav-button"} onClick={() => navigateTopLevel(navKey, "settings")}>
-                  设置
-                </button>
-              </nav>
+              <div className="sidebar-group">
+                <span className="group-label">系统</span>
+                <nav className="nav-list" aria-label="系统导航">
+                  <button type="button" className={mainTab === "settings" ? "nav-button active" : "nav-button"} onClick={() => navigateTopLevel(navKey, "settings")}>
+                    设置
+                  </button>
+                </nav>
+              </div>
             </div>
           </div>
         </aside>

@@ -10168,13 +10168,23 @@ body {
   box-shadow: 0 0 16px rgba(255, 198, 109, 0.55);
 }
 
-.sidebar-nav-stack {
-  display: grid;
-  flex: 0 0 auto;
+.sidebar-nav-layout {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
   gap: 18px;
   min-height: 0;
   min-width: 0;
-  overflow: visible;
+}
+
+.sidebar-nav-stack {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 18px;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding-right: 0;
   margin-right: 0;
   scrollbar-width: none;
