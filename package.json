@@ -8,7 +8,7 @@
     "dev:client": "wait-on tcp:127.0.0.1:3010 && vite",
     "dev:server": "tsx watch server/index.ts",
     "typecheck:client": "tsc -p tsconfig.json --noEmit",
-    "build": "vite build && tsc -p tsconfig.server.json",
+    "build": "vite build && node -e \"require('node:fs').rmSync('dist-server',{recursive:true,force:true})\" && tsc -p tsconfig.server.json",
     "test": "tsx --test \"server/**/*.test.ts\" \"src/**/*.test.ts\"",
     "start": "node dist-server/index.js"
   },
