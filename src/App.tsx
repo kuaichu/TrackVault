@@ -1,5 +1,7 @@
 import { type CSSProperties, FormEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { detailRoute, parseAppRoute, searchRoute, topRoute, type PublicProvider } from "./app-routes";
 import {
   decideScopedHydration,
   getPlayerStateFingerprint,
@@ -298,29 +300,6 @@ type UserProfileTarget = { id: string; fallbackName?: string; fallbackAvatarUrl?
 type NeteaseLoginMode = "qr" | "cellphone" | "cookie";
 type QqLoginMode = "qr" | "cookie";
 type DiscoverFeedKind = "recommend" | "daily" | PersonalRadioKind;
-type ViewSnapshot = {
-  results: Song[];
-  playQueue: Song[];
-  resultSource: ResultSource;
-  activePlaylist: UserPlaylist | null;
-  activeArtist: ArtistProfile | null;
-  activeAlbum: AlbumProfile | null;
-  selectedPlaylistId: string | null;
-  playlistSongsPage: number;
-  playlistSongsLimit: number;
-  playlistSongsHasMore: boolean;
-  playlistSongsTotal: number;
-  playlistSearchInput: string;
-  playlistSearchKeyword: string;
-  discoverFeedKind: DiscoverFeedKind;
-  cloudMeta: { count: number; size: number; maxSize: number };
-  qualitySelections: Record<string, DownloadQualityLevel>;
-  qualitySelectionTouched: Record<string, true>;
-  resultScrollTop: number;
-};
-
-type ViewState = { mainTab: MainTab; navKey: NavKey; snapshot: ViewSnapshot };
-type NavigateOptions = { recordHistory?: boolean; resetHistory?: boolean };
 type PersistedViewState = { mainTab: MainTab; navKey: NavKey; discoverFeedKind?: DiscoverFeedKind; savedAt: number };
 
 const navText: Record<NavKey, { title: string; subtitle: string }> = {
@@ -762,6 +741,21 @@ function savePlayerStateLocal(state: PersistedPlayerState, dataScopeId: string) 
   } catch {
     // Best-effort only.
   }
+}
+
+function persistedViewPath(view: PersistedViewState | null, settings: AppSettings) {
+  if (view?.mainTab === "settings") return "/settings";
+  if (view?.mainTab === "account") return "/account";
+  if (view?.mainTab === "search") {
+    if (view.navKey === "daily") return "/discover";
+    if (["discover", "search", "playlists", "transfer", "cloud", "downloads", "history"].includes(view.navKey)) {
+      return `/${view.navKey}`;
+    }
+  }
+  if (settings.startupView === "search") return "/search";
+  if (settings.startupView === "playlists") return "/playlists";
+  if (settings.startupView === "downloads") return "/downloads";
+  return "/discover";
 }
 
 function saveHistoryLocal<T>(baseKey: string, items: T[], dataScopeId: string) {
@@ -1316,7 +1310,13 @@ function renderCommentContent(content: string) {
 }
 
 export default function App() {
+  const location = useLocation();
+  const browserNavigate = useNavigate();
   const initialPlayerState = DEFAULT_PLAYER_STATE;
+  const syncingFromUrlRef = useRef(false);
+  const pendingUrlRef = useRef<string | null>(null);
+  const detailRequestIdRef = useRef(0);
+  const [urlRoutingReady, setUrlRoutingReady] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lyricPanelRef = useRef<HTMLDivElement | null>(null);
   const resultBodyRef = useRef<HTMLDivElement | null>(null);
@@ -1455,6 +1455,7 @@ export default function App() {
   const [removingPlaylistSongs, setRemovingPlaylistSongs] = useState(false);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null);
   const [activePlaylist, setActivePlaylist] = useState<UserPlaylist | null>(null);
+  const [activePlaylistProvider, setActivePlaylistProvider] = useState<PublicProvider>("netease");
   const [activeArtist, setActiveArtist] = useState<ArtistProfile | null>(null);
   const [activeAlbum, setActiveAlbum] = useState<AlbumProfile | null>(null);
   const [playlistSongsPage, setPlaylistSongsPage] = useState(1);
@@ -1484,7 +1485,6 @@ export default function App() {
   const [settingsQualityMenuStyle, setSettingsQualityMenuStyle] = useState<FloatingMenuStyle | null>(null);
   const [mainTab, setMainTab] = useState<MainTab>("search");
   const [navKey, setNavKey] = useState<NavKey>("discover");
-  const [viewHistory, setViewHistory] = useState<ViewState[]>([]);
   const [currentTrack, setCurrentTrack] = useState<Song | null>(initialPlayerState.currentTrack);
   const [playbackSourcePlaylistId, setPlaybackSourcePlaylistId] = useState<string | null>(null);
   const [playerTheme, setPlayerTheme] = useState<PlayerTheme>(defaultPlayerTheme);
@@ -1943,44 +1943,9 @@ export default function App() {
     });
   }
 
-  function navigateTo(nextNavKey: NavKey, nextMainTab: MainTab = "search", options: NavigateOptions = {}) {
-    const recordHistory = options.recordHistory ?? true;
+  function navigateTo(nextNavKey: NavKey, nextMainTab: MainTab = "search") {
     if (nextNavKey === navKey && nextMainTab === mainTab) {
-      if (options.resetHistory) {
-        setViewHistory([]);
-      }
       return;
-    }
-
-    if (recordHistory) {
-      const resultScrollTop = resultBodyRef.current?.scrollTop ?? 0;
-      const currentView = {
-        mainTab,
-        navKey,
-        snapshot: {
-          results,
-          playQueue,
-          resultSource,
-          activePlaylist,
-          activeArtist,
-          activeAlbum,
-          selectedPlaylistId,
-          playlistSongsPage,
-          playlistSongsLimit,
-          playlistSongsHasMore,
-          playlistSongsTotal,
-          playlistSearchInput,
-          playlistSearchKeyword,
-          discoverFeedKind,
-          cloudMeta,
-          qualitySelections,
-          qualitySelectionTouched,
-          resultScrollTop
-        }
-      };
-      setViewHistory((current) => [currentView, ...current.filter((item) => item.mainTab !== currentView.mainTab || item.navKey !== currentView.navKey)].slice(0, 20));
-    } else if (options.resetHistory) {
-      setViewHistory([]);
     }
 
     setMainTab(nextMainTab);
@@ -1994,41 +1959,24 @@ export default function App() {
     });
   }
 
-  function navigateTopLevel(nextNavKey: NavKey, nextMainTab: MainTab = "search") {
-    navigateTo(nextNavKey, nextMainTab, { recordHistory: false, resetHistory: true });
+  function navigateBrowser(path: string, options?: { replace?: boolean }, invalidateDetails = true) {
+    if (invalidateDetails) {
+      detailRequestIdRef.current += 1;
+      setLoadingPlaylistSongs(false);
+      setLoadingArtist(false);
+    }
+    pendingUrlRef.current = path;
+    browserNavigate(path, options);
   }
 
-  function goBackView() {
-    const previousView = viewHistory[0];
-    if (!previousView) {
-      return;
-    }
-
-    setViewHistory((current) => current.slice(1));
-    setMainTab(previousView.mainTab);
-    setNavKey(previousView.navKey);
-    setResults(previousView.snapshot.results);
-    setPlayQueue(previousView.snapshot.playQueue);
-    setResultSource(previousView.snapshot.resultSource);
-    setActivePlaylist(previousView.snapshot.activePlaylist);
-    setActiveArtist(previousView.snapshot.activeArtist);
-    setActiveAlbum(previousView.snapshot.activeAlbum);
-    setSelectedPlaylistId(previousView.snapshot.selectedPlaylistId);
-    setPlaylistSongsPage(previousView.snapshot.playlistSongsPage);
-    setPlaylistSongsLimit(previousView.snapshot.playlistSongsLimit);
-    setPlaylistSongsHasMore(previousView.snapshot.playlistSongsHasMore);
-    setPlaylistSongsTotal(previousView.snapshot.playlistSongsTotal);
-    setPlaylistSearchInput(previousView.snapshot.playlistSearchInput);
-    setPlaylistSearchKeyword(previousView.snapshot.playlistSearchKeyword);
-    setDiscoverFeedKind(previousView.snapshot.discoverFeedKind);
-    setCloudMeta(previousView.snapshot.cloudMeta);
-    setQualitySelections(previousView.snapshot.qualitySelections);
-    setQualitySelectionTouched(previousView.snapshot.qualitySelectionTouched);
-    window.requestAnimationFrame(() => {
-      if (resultBodyRef.current) {
-        resultBodyRef.current.scrollTop = previousView.snapshot.resultScrollTop;
+  function navigateTopLevel(nextNavKey: NavKey, nextMainTab: MainTab = "search") {
+    navigateTo(nextNavKey, nextMainTab);
+    if (!syncingFromUrlRef.current) {
+      const page = nextMainTab === "settings" ? "settings" : nextMainTab === "account" ? "account" : nextNavKey === "daily" ? "discover" : nextNavKey;
+      if (page !== "artist" && page !== "album") {
+        navigateBrowser(topRoute(page));
       }
-    });
+    }
   }
 
   function openSearchPage() {
@@ -2120,7 +2068,7 @@ export default function App() {
       }));
   }
 
-  async function runSearch(nextQuery: string, options: { providerMode?: ActiveProviderMode } = {}) {
+  async function runSearch(nextQuery: string, options: { providerMode?: ActiveProviderMode; syncUrl?: boolean } = {}) {
     const trimmed = nextQuery.trim();
     if (!trimmed) {
       setResults([]);
@@ -2130,7 +2078,11 @@ export default function App() {
     const targetProviderMode = options.providerMode ?? activeSearchProviderMode;
     const targetProviderLabel = searchProviderOptions.find((option) => option.value === targetProviderMode)?.label ?? activeSearchProviderLabel;
 
-    navigateTopLevel("search");
+    navigateTo("search");
+    if (options.syncUrl !== false) {
+      navigateBrowser(searchRoute(trimmed));
+    }
+    setQuery(trimmed);
     setActivePlaylist(null);
     setActiveArtist(null);
     setActiveAlbum(null);
@@ -2543,8 +2495,11 @@ export default function App() {
     }
   }
 
-  async function loadPlaylistSongs(playlist: UserPlaylist, page = 1, keywordOverride = playlistSearchKeyword, sortOverride = playlistSortMode) {
-    if (isQqDataMode) {
+  async function loadPlaylistSongs(playlist: UserPlaylist, page = 1, keywordOverride = playlistSearchKeyword, sortOverride = playlistSortMode, providerOverride?: PublicProvider, syncUrl = true) {
+    const playlistProvider = providerOverride ?? getPlaylistProviderMode(activeSearchProviderMode);
+    const requestId = detailRequestIdRef.current + 1;
+    detailRequestIdRef.current = requestId;
+    if (playlistProvider === "qq") {
       if (!hasQqMusicCookie) {
         setMessage("请先在账号中心导入 QQ 音乐 Cookie。");
         return;
@@ -2555,10 +2510,12 @@ export default function App() {
         return;
       }
     }
+    if (requestId !== detailRequestIdRef.current) return;
 
     const normalizedKeyword = keywordOverride.trim();
     setLoadingPlaylistSongs(true);
     setActivePlaylist(playlist);
+    setActivePlaylistProvider(playlistProvider);
     setActiveArtist(null);
     setActiveAlbum(null);
     setSelectedPlaylistId(playlist.id);
@@ -2575,8 +2532,9 @@ export default function App() {
         PLAYLIST_SONGS_PAGE_SIZE,
         normalizedKeyword,
         sortOverride,
-        getPlaylistProviderMode(activeSearchProviderMode)
+        playlistProvider
       );
+      if (requestId !== detailRequestIdRef.current) return;
       setResults(pageData.songs);
       setPlayQueue(pageData.songs);
       setResultSource("playlist");
@@ -2588,6 +2546,9 @@ export default function App() {
       setPlaylistSearchKeyword(pageData.keyword ?? normalizedKeyword);
       setPlaylistSearchInput(pageData.keyword ?? normalizedKeyword);
       navigateTo("playlists");
+      if (syncUrl) {
+        navigateBrowser(detailRoute("playlists", playlistProvider, playlist.id), undefined, false);
+      }
       scrollResultListToTop();
       const totalPages = Math.max(1, Math.ceil((pageData.total || playlist.trackCount) / pageData.limit));
       setMessage(
@@ -2596,9 +2557,9 @@ export default function App() {
           : `${playlist.name} · 第 ${pageData.page} / ${Math.max(1, Math.ceil(playlist.trackCount / pageData.limit))} 页 · 当前 ${pageData.songs.length} 首 / 共 ${playlist.trackCount} 首`
       );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "获取歌单歌曲失败");
+      if (requestId === detailRequestIdRef.current) setMessage(error instanceof Error ? error.message : "获取歌单歌曲失败");
     } finally {
-      setLoadingPlaylistSongs(false);
+      if (requestId === detailRequestIdRef.current) setLoadingPlaylistSongs(false);
     }
   }
 
@@ -3397,12 +3358,14 @@ export default function App() {
     }
   }
 
-  async function loadArtistPage(artistId: string, fallbackName?: string) {
+  async function loadArtistPage(artistId: string, fallbackName?: string, syncUrl = true) {
     const trimmedArtistId = artistId.trim();
     if (!trimmedArtistId) {
       setMessage("当前歌曲没有可跳转的歌手信息。");
       return;
     }
+    const requestId = detailRequestIdRef.current + 1;
+    detailRequestIdRef.current = requestId;
 
     setLoadingArtist(true);
     setActiveArtist(null);
@@ -3413,10 +3376,14 @@ export default function App() {
     setPlayQueue([]);
     setResultSource("artist");
     navigateTo("artist");
+    if (syncUrl) {
+      navigateBrowser(detailRoute("artists", "netease", trimmedArtistId), undefined, false);
+    }
     setMessage(`正在读取歌手：${fallbackName ?? "歌手详情"}`);
 
     try {
       const artist = await getArtistProfile(trimmedArtistId);
+      if (requestId !== detailRequestIdRef.current) return;
       setActiveArtist(artist);
       setResults(artist.topSongs);
       setPlayQueue(artist.topSongs);
@@ -3425,13 +3392,17 @@ export default function App() {
       navigateTo("artist");
       setMessage(`${artist.name} · 热门歌曲 ${artist.topSongs.length} 首`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "获取歌手信息失败");
+      if (requestId === detailRequestIdRef.current) setMessage(error instanceof Error ? error.message : "获取歌手信息失败");
     } finally {
-      setLoadingArtist(false);
+      if (requestId === detailRequestIdRef.current) setLoadingArtist(false);
     }
   }
 
   async function handleOpenArtist(song: Song, artistTarget?: SongArtist) {
+    if (song.source === "qqmusic") {
+      setMessage("QQ 音乐歌手详情暂不支持深链接。");
+      return;
+    }
     try {
       const targetName = artistTarget?.name?.trim() || getSongArtists(song)[0]?.name || song.artist;
       const targetId = artistTarget?.id?.trim() || song.primaryArtistId?.trim();
@@ -3448,12 +3419,14 @@ export default function App() {
     }
   }
 
-  async function loadAlbumPage(albumId: string, fallbackName?: string) {
+  async function loadAlbumPage(albumId: string, fallbackName?: string, syncUrl = true) {
     const trimmedAlbumId = albumId.trim();
     if (!trimmedAlbumId) {
       setMessage("当前歌曲没有可跳转的专辑信息。");
       return;
     }
+    const requestId = detailRequestIdRef.current + 1;
+    detailRequestIdRef.current = requestId;
 
     setActiveAlbum(null);
     setActiveArtist(null);
@@ -3463,10 +3436,14 @@ export default function App() {
     setPlayQueue([]);
     setResultSource("album");
     navigateTo("album");
+    if (syncUrl) {
+      navigateBrowser(detailRoute("albums", "netease", trimmedAlbumId), undefined, false);
+    }
     setMessage(`正在读取专辑：${fallbackName ?? "专辑详情"}`);
 
     try {
       const album = await getAlbumProfile(trimmedAlbumId);
+      if (requestId !== detailRequestIdRef.current) return;
       setActiveAlbum(album);
       setResults(album.songs);
       setPlayQueue(album.songs);
@@ -3475,11 +3452,15 @@ export default function App() {
       navigateTo("album");
       setMessage(`${album.name} · 共 ${album.songs.length} 首歌曲`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "获取专辑信息失败");
+      if (requestId === detailRequestIdRef.current) setMessage(error instanceof Error ? error.message : "获取专辑信息失败");
     }
   }
 
   async function handleOpenAlbum(song: Song) {
+    if (song.source === "qqmusic") {
+      setMessage("QQ 音乐专辑详情暂不支持深链接。");
+      return;
+    }
     if (!song.albumId?.trim()) {
       setMessage("当前歌曲没有可跳转的专辑信息。");
       return;
@@ -4198,6 +4179,7 @@ export default function App() {
     setAccountMenuOpen(false);
     setResults([]);
     setActivePlaylist(playlist);
+    setActivePlaylistProvider("qq");
     setActiveArtist(null);
     setActiveAlbum(null);
     setSelectedPlaylistId(playlist.id);
@@ -4227,6 +4209,7 @@ export default function App() {
       setPlaylistSongsLimit(pageData.limit);
       setPlaylistSongsHasMore(pageData.hasMore);
       setPlaylistSongsTotal(pageData.total);
+      navigateBrowser(detailRoute("playlists", "qq", playlist.id));
       setMessage(`${playlist.name} · 当前 ${pageData.songs.length} 首 / 共 ${pageData.total || playlist.trackCount} 首`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "打开 QQ 歌单失败");
@@ -4249,7 +4232,7 @@ export default function App() {
     };
 
     closeUserProfile();
-    void loadPlaylistSongs(mappedPlaylist, 1, "");
+    void loadPlaylistSongs(mappedPlaylist, 1, "", "default", "netease");
   }
 
   function openUserEventResource(event: UserEventItem) {
@@ -4271,7 +4254,9 @@ export default function App() {
           owned: false
         },
         1,
-        ""
+        "",
+        "default",
+        "netease"
       );
       return;
     }
@@ -5892,7 +5877,7 @@ export default function App() {
       return;
     }
 
-    void loadPlaylistSongs(activePlaylist, safePage, playlistSearchKeyword, playlistSortMode);
+    void loadPlaylistSongs(activePlaylist, safePage, playlistSearchKeyword, playlistSortMode, activePlaylistProvider);
   }
 
   function handlePlaylistSearchSubmit(event: FormEvent) {
@@ -5901,7 +5886,7 @@ export default function App() {
       return;
     }
 
-    void loadPlaylistSongs(activePlaylist, 1, playlistSearchInput, playlistSortMode);
+    void loadPlaylistSongs(activePlaylist, 1, playlistSearchInput, playlistSortMode, activePlaylistProvider);
   }
 
   function handleClearPlaylistSearch() {
@@ -5911,7 +5896,7 @@ export default function App() {
 
     setPlaylistSearchInput("");
     setPlaylistSearchKeyword("");
-    void loadPlaylistSongs(activePlaylist, 1, "", playlistSortMode);
+    void loadPlaylistSongs(activePlaylist, 1, "", playlistSortMode, activePlaylistProvider);
   }
 
   function getQualityMenuBoundaryBottom(trigger: HTMLElement) {
@@ -6036,7 +6021,7 @@ export default function App() {
       return;
     }
 
-    void loadPlaylistSongs(activePlaylist, 1, playlistSearchKeyword, nextSortMode);
+    void loadPlaylistSongs(activePlaylist, 1, playlistSearchKeyword, nextSortMode, activePlaylistProvider);
   }
 
   async function handleRemovePlaylistSongs(songIds: string[]) {
@@ -6044,7 +6029,7 @@ export default function App() {
       return;
     }
 
-    if (isQqDataMode) {
+    if (activePlaylistProvider === "qq") {
       setMessage("QQ 音乐歌单删除还没接入，当前先支持读取、播放和下载。");
       return;
     }
@@ -6084,7 +6069,7 @@ export default function App() {
       setPlayQueue((current) => current.filter((song) => !removedIdSet.has(song.id)));
       setPlaylistSongsTotal(nextTotal);
 
-      await loadPlaylistSongs(updatedPlaylist, nextPage, playlistSearchKeyword, playlistSortMode);
+      await loadPlaylistSongs(updatedPlaylist, nextPage, playlistSearchKeyword, playlistSortMode, activePlaylistProvider);
       setMessage(`已从「${result.playlistName}」移除 ${removedCount} 首歌`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "从歌单移除失败");
@@ -6318,14 +6303,77 @@ export default function App() {
     };
   }, [songContextMenu]);
 
+  async function applyUrlRoute() {
+    const route = parseAppRoute(location.pathname, location.search);
+    if (route.kind === "root") {
+      browserNavigate(persistedViewPath(loadLastViewState(), settings), { replace: true });
+      return;
+    }
+    if (route.kind === "unknown") {
+      browserNavigate("/discover", { replace: true });
+      return;
+    }
+
+    function invokeWithoutUrlWrite<T>(action: () => T) {
+      syncingFromUrlRef.current = true;
+      try {
+        return action();
+      } finally {
+        syncingFromUrlRef.current = false;
+      }
+    }
+
+      if (route.kind === "playlist") {
+        const routeRequestId = detailRequestIdRef.current + 1;
+        detailRequestIdRef.current = routeRequestId;
+        const availablePlaylists = await getPlaylists(route.provider).catch(() => []);
+        if (routeRequestId !== detailRequestIdRef.current) return;
+        const playlist = availablePlaylists.find((item) => item.id === route.id) ?? {
+          id: route.id,
+          name: "歌单详情",
+          coverUrl: "",
+          trackCount: 0,
+          creatorName: "",
+          playCount: 0,
+          owned: false
+        };
+        await loadPlaylistSongs(playlist, 1, "", "default", route.provider, false);
+        return;
+      }
+      if (route.kind === "artist") {
+        await loadArtistPage(route.id, undefined, false);
+        return;
+      }
+      if (route.kind === "album") {
+        await loadAlbumPage(route.id, undefined, false);
+        return;
+      }
+
+      if (route.page === "search") {
+        if (route.query) await runSearch(route.query, { syncUrl: false });
+        else invokeWithoutUrlWrite(openSearchPage);
+      } else if (route.page === "discover") {
+        await invokeWithoutUrlWrite(() => loadDiscoverSongs());
+      } else if (route.page === "playlists") {
+        invokeWithoutUrlWrite(openPlaylistsPage);
+      } else if (route.page === "cloud") {
+        await invokeWithoutUrlWrite(() => loadCloudSongs());
+      } else if (route.page === "transfer") {
+        invokeWithoutUrlWrite(openTransferPage);
+      } else if (route.page === "downloads" || route.page === "history") {
+        const page = route.page;
+        invokeWithoutUrlWrite(() => navigateTopLevel(page));
+      } else if (route.page === "settings") {
+        invokeWithoutUrlWrite(() => navigateTopLevel("discover", "settings"));
+      } else {
+        invokeWithoutUrlWrite(() => navigateTopLevel("discover", "account"));
+      }
+  }
+
   useEffect(() => {
     void refreshSettings().then((nextSettings) => {
-      const settingsForStartup = nextSettings ?? defaultSettings;
-      const lastView = loadLastViewState();
-      if (!lastView || !restoreLastViewState(lastView, settingsForStartup)) {
-        applyStartupPreferences(settingsForStartup);
-      }
       viewPersistenceReadyRef.current = true;
+      setUrlRoutingReady(true);
       if (nextSettings?.hasNeteaseCookie) {
         void ensureNeteaseCookieHealthy({ silent: true, force: true, hasCredentialOverride: true });
       }
@@ -6341,6 +6389,20 @@ export default function App() {
 
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!urlRoutingReady) return;
+    const currentUrl = `${location.pathname}${location.search}`;
+    if (pendingUrlRef.current === currentUrl) {
+      pendingUrlRef.current = null;
+      return;
+    }
+    pendingUrlRef.current = null;
+    detailRequestIdRef.current += 1;
+    setLoadingPlaylistSongs(false);
+    setLoadingArtist(false);
+    void applyUrlRoute();
+  }, [location.pathname, location.search, urlRoutingReady]);
 
   useEffect(() => {
     if (!viewPersistenceReadyRef.current) {
@@ -7505,7 +7567,16 @@ export default function App() {
   const isDiscoverListView = mainTab === "search" && navKey === "discover" && resultSource === "discover";
   const isPlaylistSongsView = mainTab === "search" && navKey === "playlists" && resultSource === "playlist" && Boolean(activePlaylist);
   const isDetailResultView = mainTab === "search" && (navKey === "artist" || navKey === "album");
-  const canGoBackFromCurrentView = isPlaylistSongsView || (isDetailResultView && viewHistory.length > 0);
+  const canGoBackFromCurrentView = isPlaylistSongsView || isDetailResultView;
+
+  function goBackInBrowserHistory() {
+    const historyIndex = typeof window.history.state?.idx === "number" ? window.history.state.idx : 0;
+    if (historyIndex > 0) {
+      browserNavigate(-1);
+      return;
+    }
+    navigateBrowser("/discover", { replace: true });
+  }
   const showAdminFallbackControls = true;
   const inferredDiscoverFeedKind: DiscoverFeedKind = results.some((song) => song.source === "netease-personal-radar")
     ? "radar"
@@ -8467,7 +8538,7 @@ export default function App() {
           <header className="content-header">
             <div className={canGoBackFromCurrentView ? "content-titlebar has-back" : "content-titlebar"}>
               {canGoBackFromCurrentView ? (
-                <button type="button" className="back-button" onClick={isPlaylistSongsView ? openPlaylistsPage : goBackView} aria-label={isPlaylistSongsView ? "返回我的歌单" : "返回上一个界面"}>
+                <button type="button" className="back-button" onClick={goBackInBrowserHistory} aria-label="返回上一个界面">
                   <svg aria-hidden="true" viewBox="0 0 24 24">
                     <path d="M14.8 6.4 9.2 12l5.6 5.6" />
                   </svg>
@@ -9679,7 +9750,7 @@ export default function App() {
                             <span>收藏</span>
                           </button>
                         ) : null}
-                        {resultSource === "playlist" && activePlaylist?.owned && !isQqDataMode ? (
+                        {resultSource === "playlist" && activePlaylist?.owned && activePlaylistProvider !== "qq" ? (
                           <button
                             type="button"
                             className="secondary-button compact operation-button danger-button"
@@ -11926,7 +11997,7 @@ export default function App() {
             <span className="song-context-icon">↗</span>
             复制链接
           </button>
-          {resultSource === "playlist" && activePlaylist?.owned && !isQqDataMode ? (
+          {resultSource === "playlist" && activePlaylist?.owned && activePlaylistProvider !== "qq" ? (
             <>
               <div className="song-context-divider" />
               <button type="button" role="menuitem" className="danger" disabled={removingPlaylistSongs} onClick={() => runSongContextAction(() => handleRemovePlaylistSongs([songContextMenu.song.id]))}>
