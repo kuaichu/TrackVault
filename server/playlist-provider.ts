@@ -5,7 +5,7 @@ import type { DownloadQualityOption, PlaylistSongsPage, PlaylistTrackRemoveResul
 import { getNeteaseSongAvailability, type NeteasePrivilegeLike } from "./song-availability.js";
 
 const require = createRequire(import.meta.url);
-const { login_status, playlist_track_all, playlist_tracks, song_detail, user_playlist } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
+const { login_status, playlist_detail, playlist_track_all, playlist_tracks, song_detail, user_playlist } = require("NeteaseCloudMusicApi") as typeof import("NeteaseCloudMusicApi");
 
 type LoginStatusBody = {
   data?: {
@@ -79,6 +79,11 @@ const PLAYLIST_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 
 const playlistPageCache = new Map<string, { expiresAt: number; page: PlaylistSongsPage }>();
 const playlistSearchCache = new Map<string, { expiresAt: number; songs: Song[] }>();
+
+export function getPlaylistPageMeta(page: number, limit: number, songsOnPage: number, total: number) {
+  const offset = (page - 1) * limit;
+  return { total, hasMore: offset + songsOnPage < total };
+}
 
 function formatDuration(durationMs: number | undefined) {
   if (!durationMs || durationMs <= 0) {
@@ -193,19 +198,28 @@ async function getPlaylistTracksPage(playlistId: string, cookie: string, page: n
   const safeLimit = Math.min(200, Math.max(1, Math.floor(limit) || PLAYLIST_PAGE_SIZE));
   const offset = (safePage - 1) * safeLimit;
 
-  const response = await playlist_track_all({
-    id: playlistId,
-    limit: safeLimit,
-    offset,
-    cookie
-  });
+  const [response, detailResponse] = await Promise.all([
+    playlist_track_all({
+      id: playlistId,
+      limit: safeLimit,
+      offset,
+      cookie
+    }),
+    playlist_detail({ id: playlistId, cookie }).catch(() => null)
+  ]);
 
   const songs = ((response.body as { songs?: PlaylistTrack[] }).songs ?? []) as PlaylistTrack[];
+  const reportedTotal = Number((detailResponse?.body as { playlist?: { trackCount?: number } } | undefined)?.playlist?.trackCount);
+  const total = Number.isFinite(reportedTotal) && reportedTotal >= 0
+    ? reportedTotal
+    : offset + songs.length + (songs.length === safeLimit ? 1 : 0);
+  const meta = getPlaylistPageMeta(safePage, safeLimit, songs.length, total);
   return {
     songs,
     page: safePage,
     limit: safeLimit,
-    hasMore: songs.length === safeLimit
+    hasMore: meta.hasMore,
+    total: meta.total
   };
 }
 
@@ -410,7 +424,8 @@ export async function getPlaylistSongs(playlistId: string, page = 1, limit = PLA
     page: trackPage.page,
     limit: trackPage.limit,
     hasMore: trackPage.hasMore,
-    total: songs.length,
+    total: trackPage.total,
+    sourceTotal: trackPage.total,
     keyword: ""
   };
 

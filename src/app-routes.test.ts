@@ -33,3 +33,12 @@ test("rejects unsupported providers, malformed ids, and unknown paths", () => {
   assert.deepEqual(parseAppRoute("/playlists/netease/%E0%A4%A"), { kind: "unknown" });
   assert.deepEqual(parseAppRoute("/not-a-page"), { kind: "unknown" });
 });
+
+test("detail route generators only accept providers supported by the parser", () => {
+  assert.equal(detailRoute("artists", "netease", "123"), "/artists/netease/123");
+  assert.equal(detailRoute("albums", "netease", "456"), "/albums/netease/456");
+  // @ts-expect-error QQ artist routes are not supported by parseAppRoute.
+  detailRoute("artists", "qq", "123");
+  // @ts-expect-error QQ album routes are not supported by parseAppRoute.
+  detailRoute("albums", "qq", "456");
+});

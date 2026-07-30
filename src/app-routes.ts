@@ -51,6 +51,8 @@ export function searchRoute(query: string) {
   return trimmed ? `/search?q=${encodeURIComponent(trimmed)}` : "/search";
 }
 
+export function detailRoute(kind: "playlists", provider: PublicProvider, id: string): string;
+export function detailRoute(kind: "artists" | "albums", provider: "netease", id: string): string;
 export function detailRoute(kind: "playlists" | "artists" | "albums", provider: PublicProvider, id: string) {
   return `/${kind}/${provider}/${encodeURIComponent(id.trim())}`;
 }

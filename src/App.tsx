@@ -2,6 +2,7 @@ import { type CSSProperties, FormEvent, type MouseEvent, useEffect, useMemo, use
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { detailRoute, parseAppRoute, searchRoute, topRoute, type PublicProvider } from "./app-routes";
+import { playlistTotal, resultProvider, shouldWriteBrowserUrl } from "./frontend-route-state";
 import {
   decideScopedHydration,
   getPlayerStateFingerprint,
@@ -1653,12 +1654,13 @@ export default function App() {
   const neteaseSourceActive = activeSearchProviderMode === "netease" || activeSearchProviderMode === "aggregate";
   const qqSourceActive = activeSearchProviderMode === "qq" || activeSearchProviderMode === "aggregate";
   const isQqDataMode = activeSearchProviderMode === "qq";
+  const isQqResultMode = resultProvider(resultSource, activePlaylistProvider, activeSearchProviderMode) === "qq";
   const playlistProviderLabel = isQqDataMode ? "QQ 音乐" : "网易云";
   const hasPlaylistCredential = isQqDataMode ? hasQqMusicCookie : hasNeteaseCookie;
   const hasNeteaseDownloadCredential = neteaseAccountIsLoggedIn;
   const hasQqMusicDownloadCredential = hasQqMusicCookie;
   const downloadAuthState = { hasNeteaseDownloadCredential, hasQqMusicDownloadCredential };
-  const playbackLocked = !neteaseAccountIsLoggedIn && !isQqDataMode;
+  const playbackLocked = !neteaseAccountIsLoggedIn && !isQqResultMode && currentTrack?.source !== "qqmusic";
   const hasPlaybackQueue = playQueue.length > 0 || results.length > 0;
 
   function songHasDownloadCredential(song: Song | null) {
@@ -1948,6 +1950,9 @@ export default function App() {
       return;
     }
 
+    searchRequestIdRef.current += 1;
+    listRequestIdRef.current += 1;
+
     setMainTab(nextMainTab);
     setNavKey(nextNavKey);
     setBatchSelectionMode(false);
@@ -1964,6 +1969,11 @@ export default function App() {
       detailRequestIdRef.current += 1;
       setLoadingPlaylistSongs(false);
       setLoadingArtist(false);
+    }
+    const currentUrl = `${location.pathname}${location.search}`;
+    if (!shouldWriteBrowserUrl(currentUrl, path)) {
+      pendingUrlRef.current = null;
+      return;
     }
     pendingUrlRef.current = path;
     browserNavigate(path, options);
@@ -2122,11 +2132,11 @@ export default function App() {
   async function loadDiscoverSongs(options: { keepExisting?: boolean; providerMode?: ActiveProviderMode } = {}) {
     const targetProviderMode = options.providerMode ?? activeSearchProviderMode;
     const targetProviderLabel = searchProviderOptions.find((option) => option.value === targetProviderMode)?.label ?? activeSearchProviderLabel;
-    const requestId = listRequestIdRef.current + 1;
-    listRequestIdRef.current = requestId;
     const shouldKeepCurrentResults =
       options.keepExisting || (mainTab === "search" && navKey === "discover" && resultSource === "discover");
     navigateTopLevel("discover");
+    const requestId = listRequestIdRef.current + 1;
+    listRequestIdRef.current = requestId;
     setActivePlaylist(null);
     setActiveArtist(null);
     setActiveAlbum(null);
@@ -2156,7 +2166,7 @@ export default function App() {
       }
       setMessage(error instanceof Error ? error.message : "获取发现音乐失败");
     } finally {
-      setLoadingDiscoverSongs(false);
+      if (requestId === listRequestIdRef.current) setLoadingDiscoverSongs(false);
     }
   }
 
@@ -2166,12 +2176,12 @@ export default function App() {
       return;
     }
 
-    const requestId = listRequestIdRef.current + 1;
-    listRequestIdRef.current = requestId;
     const label = kind === "roaming" ? "私人漫游" : "私人雷达";
     const shouldKeepCurrentResults =
       options.keepExisting || (mainTab === "search" && navKey === "discover" && resultSource === "discover" && discoverFeedKind === kind);
     navigateTopLevel("discover");
+    const requestId = listRequestIdRef.current + 1;
+    listRequestIdRef.current = requestId;
     setActivePlaylist(null);
     setActiveArtist(null);
     setActiveAlbum(null);
@@ -2212,11 +2222,11 @@ export default function App() {
       return;
     }
 
-    const requestId = listRequestIdRef.current + 1;
-    listRequestIdRef.current = requestId;
     const shouldKeepCurrentResults =
       options.keepExisting || (mainTab === "search" && navKey === "discover" && resultSource === "discover" && discoverFeedKind === "daily");
     navigateTopLevel("discover");
+    const requestId = listRequestIdRef.current + 1;
+    listRequestIdRef.current = requestId;
     setActivePlaylist(null);
     setActiveArtist(null);
     setActiveAlbum(null);
@@ -2542,7 +2552,9 @@ export default function App() {
       setPlaylistSongsPage(pageData.page);
       setPlaylistSongsLimit(pageData.limit);
       setPlaylistSongsHasMore(pageData.hasMore);
-      setPlaylistSongsTotal(pageData.total);
+      const resolvedTotal = playlistTotal(pageData.total, playlist.trackCount);
+      setPlaylistSongsTotal(resolvedTotal);
+      setActivePlaylist((current) => current?.id === playlist.id ? { ...current, trackCount: resolvedTotal } : current);
       setPlaylistSearchKeyword(pageData.keyword ?? normalizedKeyword);
       setPlaylistSearchInput(pageData.keyword ?? normalizedKeyword);
       navigateTo("playlists");
@@ -2550,11 +2562,11 @@ export default function App() {
         navigateBrowser(detailRoute("playlists", playlistProvider, playlist.id), undefined, false);
       }
       scrollResultListToTop();
-      const totalPages = Math.max(1, Math.ceil((pageData.total || playlist.trackCount) / pageData.limit));
+      const totalPages = Math.max(1, Math.ceil(resolvedTotal / pageData.limit));
       setMessage(
         pageData.keyword
           ? `${playlist.name} · 筛选 “${pageData.keyword}” · 第 ${pageData.page} / ${totalPages} 页 · 当前 ${pageData.songs.length} 首 / 匹配 ${pageData.total} 首`
-          : `${playlist.name} · 第 ${pageData.page} / ${Math.max(1, Math.ceil(playlist.trackCount / pageData.limit))} 页 · 当前 ${pageData.songs.length} 首 / 共 ${playlist.trackCount} 首`
+          : `${playlist.name} · 第 ${pageData.page} / ${totalPages} 页 · 当前 ${pageData.songs.length} 首 / 共 ${resolvedTotal} 首`
       );
     } catch (error) {
       if (requestId === detailRequestIdRef.current) setMessage(error instanceof Error ? error.message : "获取歌单歌曲失败");
@@ -3475,10 +3487,10 @@ export default function App() {
       return;
     }
 
-    const requestId = listRequestIdRef.current + 1;
-    listRequestIdRef.current = requestId;
     const shouldKeepCurrentResults = mainTab === "search" && navKey === "cloud" && resultSource === "cloud";
     navigateTopLevel("cloud");
+    const requestId = listRequestIdRef.current + 1;
+    listRequestIdRef.current = requestId;
     setActivePlaylist(null);
     setActiveArtist(null);
     setActiveAlbum(null);
@@ -3507,7 +3519,7 @@ export default function App() {
       }
       setMessage(error instanceof Error ? error.message : "获取云盘音乐失败");
     } finally {
-      setLoadingCloudSongs(false);
+      if (requestId === listRequestIdRef.current) setLoadingCloudSongs(false);
     }
   }
 
@@ -4208,7 +4220,9 @@ export default function App() {
       setPlaylistSongsPage(pageData.page);
       setPlaylistSongsLimit(pageData.limit);
       setPlaylistSongsHasMore(pageData.hasMore);
-      setPlaylistSongsTotal(pageData.total);
+      const resolvedTotal = playlistTotal(pageData.total, playlist.trackCount);
+      setPlaylistSongsTotal(resolvedTotal);
+      setActivePlaylist((current) => current?.id === playlist.id ? { ...current, trackCount: resolvedTotal } : current);
       navigateBrowser(detailRoute("playlists", "qq", playlist.id));
       setMessage(`${playlist.name} · 当前 ${pageData.songs.length} 首 / 共 ${pageData.total || playlist.trackCount} 首`);
     } catch (error) {
@@ -5522,7 +5536,7 @@ export default function App() {
       return;
     }
 
-    if (isQqDataMode) {
+    if (activePlaylistProvider === "qq" || safeSongs.some((song) => song.source === "qqmusic")) {
       setMessage("QQ 音乐收藏到歌单还没接入，当前先支持读取、播放和下载。");
       return;
     }
@@ -5869,7 +5883,7 @@ export default function App() {
       return;
     }
 
-    const totalSongs = playlistSearchKeyword ? playlistSongsTotal : activePlaylist.trackCount;
+    const totalSongs = playlistSongsTotal || activePlaylist.trackCount;
     const totalPages = Math.max(1, Math.ceil(totalSongs / playlistSongsLimit));
     const safePage = Math.min(totalPages, Math.max(1, nextPage));
 
@@ -6317,9 +6331,17 @@ export default function App() {
     function invokeWithoutUrlWrite<T>(action: () => T) {
       syncingFromUrlRef.current = true;
       try {
-        return action();
-      } finally {
+        const result = action();
+        if (result && typeof (result as unknown as PromiseLike<unknown>).then === "function") {
+          return Promise.resolve(result).finally(() => {
+            syncingFromUrlRef.current = false;
+          }) as T;
+        }
         syncingFromUrlRef.current = false;
+        return result;
+      } catch (error) {
+        syncingFromUrlRef.current = false;
+        throw error;
       }
     }
 
@@ -6399,6 +6421,8 @@ export default function App() {
     }
     pendingUrlRef.current = null;
     detailRequestIdRef.current += 1;
+    searchRequestIdRef.current += 1;
+    listRequestIdRef.current += 1;
     setLoadingPlaylistSongs(false);
     setLoadingArtist(false);
     void applyUrlRoute();
@@ -7507,7 +7531,7 @@ export default function App() {
         return 1;
       }
 
-      const totalSongs = playlistSearchKeyword ? playlistSongsTotal : activePlaylist.trackCount;
+      const totalSongs = playlistSongsTotal || activePlaylist.trackCount;
       return Math.max(1, Math.ceil(totalSongs / playlistSongsLimit));
     },
     [activePlaylist, playlistSongsLimit, playlistSongsTotal, playlistSearchKeyword]
@@ -9738,7 +9762,7 @@ export default function App() {
                           {!batchHasDownloadCredentials(selectedVisibleSongs) ? <LockIcon /> : <OperationIcon name="download" />}
                           <span>{batchDownloading ? "启动" : "下载"}</span>
                         </button>
-                        {!isQqDataMode ? (
+                        {!isQqResultMode ? (
                           <button
                             type="button"
                             className={!neteaseAccountIsLoggedIn ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
@@ -9855,7 +9879,7 @@ export default function App() {
                         <PreviewIcon />
                         {playbackLocked || isSongPlaybackLocked(song) ? <span className="download-lock-badge"><LockIcon /></span> : null}
                       </button>
-                      {!isQqDataMode ? (
+                      {!isQqResultMode ? (
                         <button
                           type="button"
                           className={!neteaseAccountIsLoggedIn ? "row-icon-button playlist-add-button locked-download-button" : "row-icon-button playlist-add-button"}
