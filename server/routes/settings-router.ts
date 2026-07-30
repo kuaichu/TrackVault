@@ -62,10 +62,11 @@ export function createPlatformCookieRouter(dependencies: PlatformCookieRouterDep
 
   router.post("/api/settings/qqmusic-cookie/check", async (request, response) => {
     try {
-      const cookie = typeof request.body?.cookie === "string" ? request.body.cookie : "";
+      const submittedCookie = typeof request.body?.cookie === "string" ? request.body.cookie : "";
+      const cookie = submittedCookie.trim() ? submittedCookie : (await dependencies.getSettings()).qqMusicCookie;
       response.json(await dependencies.importQqMusicCookie(cookie));
-    } catch (error) {
-      response.status(409).json({ message: error instanceof Error ? error.message : "QQ 音乐 Cookie 导入失败" });
+    } catch {
+      response.status(409).json({ message: "QQ 音乐 Cookie 导入失败" });
     }
   });
 

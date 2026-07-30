@@ -94,6 +94,20 @@ test("non-empty credential patches replace only the requested platform", () => {
   assert.equal(qqNext.neteaseCookie, current.neteaseCookie);
 });
 
+test("general settings updates reject structurally invalid QQ cookies", () => {
+  const current = createSettings();
+  assert.throws(
+    () => mergeSettingsUpdate(current, { qqMusicCookie: "pgv_pvid=statistics-cookie; qm_keyst=secret-value" }),
+    (error: unknown) => error instanceof Error
+      && /uin|wxuin/.test(error.message)
+      && !/statistics-cookie|secret-value/.test(error.message)
+  );
+  assert.throws(
+    () => mergeSettingsUpdate(current, { qqMusicCookie: "uin=20002; pgv_pvid=statistics-cookie" }),
+    /qm_keyst|qqmusic_key/
+  );
+});
+
 test("empty credential strings preserve stored values", () => {
   const current = createSettings();
   const next = mergeSettingsUpdate(current, { neteaseCookie: "   ", qqMusicCookie: "" });

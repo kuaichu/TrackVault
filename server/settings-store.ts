@@ -5,6 +5,7 @@ import { getClientSessionId } from "./request-context.js";
 import type { AdminConfig, AdminConfigUpdate, AdminConfigView, AppSettings, AppSettingsUpdate, PublicAppSettings } from "./types.js";
 import { clearStoredAccountSession, clearStoredQqMusicIdentity } from "./account-session-snapshot.js";
 import { invalidateCredentialWrites } from "./credential-write-guard.js";
+import { getQqCookieMissingFieldsMessage, validateQqCookie } from "./qqmusic-cookie.js";
 
 const dataDir = path.resolve(process.env.TRACKVAULT_DATA_DIR?.trim() || path.join(process.cwd(), "data"));
 const legacySettingsPath = path.join(dataDir, "settings.json");
@@ -117,6 +118,13 @@ export function mergeSettingsUpdate(current: AppSettings, update: AppSettingsUpd
     update.clearQqMusicCookie,
     "QQ 音乐"
   );
+  const submittedQqCookie = update.qqMusicCookie?.trim() ?? "";
+  if (submittedQqCookie) {
+    const validation = validateQqCookie(submittedQqCookie);
+    if (validation.missingFields.length) {
+      throw new SettingsUpdateConflictError(getQqCookieMissingFieldsMessage(validation.missingFields));
+    }
+  }
 
   return normalizeSettings(nextInput);
 }

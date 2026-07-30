@@ -20,6 +20,10 @@ export function requiresNeteasePlaybackAuth(neteaseLoggedIn: boolean, songSource
   return !neteaseLoggedIn && songSource !== "qqmusic";
 }
 
+export function isQqMusicAccountVerified(hasSavedCredential: boolean, status: { ok: boolean } | null) {
+  return hasSavedCredential && status?.ok === true;
+}
+
 export function detailBackFallback(historyIndex: number) {
   return historyIndex > 0 ? null : "/discover";
 }

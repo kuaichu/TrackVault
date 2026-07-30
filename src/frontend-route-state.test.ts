@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { detailBackFallback, playlistTotals, requiresNeteasePlaybackAuth, resultProvider, shouldWriteBrowserUrl } from "./frontend-route-state";
+import { detailBackFallback, isQqMusicAccountVerified, playlistTotals, requiresNeteasePlaybackAuth, resultProvider, shouldWriteBrowserUrl } from "./frontend-route-state";
 
 test("does not write duplicate browser history entries", () => {
   assert.equal(shouldWriteBrowserUrl("/cloud", null, "/cloud"), false);
@@ -30,4 +30,11 @@ test("playback auth follows the song provider instead of the global mode", () =>
   assert.equal(requiresNeteasePlaybackAuth(false, "qqmusic"), false);
   assert.equal(requiresNeteasePlaybackAuth(true, "netease"), false);
   assert.equal(requiresNeteasePlaybackAuth(false, undefined), true);
+});
+
+test("saved QQ credentials do not unlock account features until verified", () => {
+  assert.equal(isQqMusicAccountVerified(true, null), false);
+  assert.equal(isQqMusicAccountVerified(true, { ok: false }), false);
+  assert.equal(isQqMusicAccountVerified(false, { ok: true }), false);
+  assert.equal(isQqMusicAccountVerified(true, { ok: true }), true);
 });

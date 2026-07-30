@@ -5,6 +5,7 @@ import { getSettings } from "./settings-store.js";
 import { findMembershipExpireAt, formatMembershipExpireText } from "./membership-utils.js";
 import { getClientSessionId } from "./request-context.js";
 import { captureCredentialWriteGuard, runCredentialWriteIfCurrent } from "./credential-write-guard.js";
+import { getQqCookieMissingFieldsMessage, parseQqCookie, validateQqCookie } from "./qqmusic-cookie.js";
 
 const require = createRequire(import.meta.url);
 
@@ -504,41 +505,6 @@ function getQqErrorMessage(error: unknown) {
 
 function isUsefulQqDisplayName(value: string | undefined) {
   return Boolean(value?.trim());
-}
-
-function parseQqCookie(cookie: string) {
-  const cookieObj: Record<string, string> = {};
-
-  cookie
-    .replace(/\r?\n+/g, "; ")
-    .split(/;\s*/)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .forEach((part) => {
-      const equalIndex = part.indexOf("=");
-      const colonIndex = part.indexOf(":");
-      const separatorIndex = equalIndex >= 0
-        ? equalIndex
-        : colonIndex >= 0
-          ? colonIndex
-          : -1;
-      if (separatorIndex <= 0) {
-        return;
-      }
-
-      const key = part.slice(0, separatorIndex).trim().replace(/^"+|"+$/g, "");
-      const value = part.slice(separatorIndex + 1).trim().replace(/^"+|"+$/g, "");
-      if (key && value) {
-        cookieObj[key] = value;
-      }
-    });
-
-  if (Number(cookieObj.login_type) === 2 && cookieObj.wxuin) {
-    cookieObj.uin = cookieObj.wxuin;
-  }
-
-  cookieObj.uin = (cookieObj.uin || "").replace(/\D/g, "");
-  return cookieObj;
 }
 
 function serializeQqCookie(cookieObj: Record<string, string>) {
@@ -1235,32 +1201,14 @@ export function createQqMusicCookieChecker(
   verifyCredential: (cookie: Record<string, string>) => Promise<{ uin?: string | null; musickey?: string }>
 ) {
   return async function checkCookie(cookie: string): Promise<QqMusicCookieCheckResult> {
-    const trimmed = cookie.trim();
-    if (!trimmed) {
+    const validation = validateQqCookie(cookie.trim());
+    const cookieObj = validation.cookie;
+    if (validation.missingFields.length) {
       return {
         ok: false,
         verified: false,
-        uin: null,
-        message: "请先粘贴 QQ 音乐网页登录后的 Cookie。"
-      };
-    }
-
-    const cookieObj = parseQqCookie(trimmed);
-    if (!cookieObj.uin) {
-      return {
-        ok: false,
-        verified: false,
-        uin: null,
-        message: "QQ 音乐 Cookie 缺少 uin 或 wxuin，请从 y.qq.com 登录后的 Cookies 里完整复制。"
-      };
-    }
-
-    if (!cookieObj.qm_keyst && !cookieObj.qqmusic_key) {
-      return {
-        ok: false,
-        verified: false,
-        uin: cookieObj.uin,
-        message: "QQ 音乐 Cookie 缺少 qm_keyst 或 qqmusic_key，无法用于获取会员音源。"
+        uin: cookieObj.uin || null,
+        message: getQqCookieMissingFieldsMessage(validation.missingFields)
       };
     }
 
@@ -1290,7 +1238,7 @@ export function createQqMusicCookieChecker(
         ok: true,
         verified: false,
         uin: cookieObj.uin,
-        message: `QQ 音乐 Cookie 已保存但未验证：${getQqErrorMessage(error)}。后台任务仍使用访客身份，请重新登录后再验证。`
+        message: "QQ 音乐 Cookie 已保存但未验证。请重新验证或替换凭证。"
       };
     }
   };

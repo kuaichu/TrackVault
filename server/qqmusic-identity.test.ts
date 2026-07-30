@@ -14,16 +14,40 @@ function deferred<T>() {
 }
 
 test("QQ refresh failure is reported as saved but unverified without exposing a refreshed credential", async () => {
+  const secret = "secret-cookie-value";
   const checkCookie = createQqMusicCookieChecker(async () => {
-    throw new Error("provider unavailable");
+    throw new Error(`provider rejected ${secret}`);
   });
-  const result = await checkCookie("uin=12345; qm_keyst=unverified");
+  const result = await checkCookie(`uin=12345; qm_keyst=${secret}`);
 
   assert.equal(result.ok, true);
   assert.equal(result.verified, false);
   assert.equal(result.uin, "12345");
   assert.equal(result.refreshedCookie, undefined);
   assert.match(result.message, /已保存但未验证/);
+  assert.doesNotMatch(result.message, new RegExp(secret));
+});
+
+test("QQ cookie checker reports only missing field names without calling the provider", async () => {
+  let providerCalls = 0;
+  const checkCookie = createQqMusicCookieChecker(async () => {
+    providerCalls += 1;
+    return { uin: "12345", musickey: "refreshed" };
+  });
+
+  const missingUin = await checkCookie("qm_keyst=secret-value; pgv_pvid=statistics-cookie");
+  assert.equal(missingUin.ok, false);
+  assert.match(missingUin.message, /uin|wxuin/);
+  assert.doesNotMatch(missingUin.message, /secret-value|statistics-cookie/);
+
+  const missingKey = await checkCookie("uin=12345; pgv_pvid=statistics-cookie");
+  assert.equal(missingKey.ok, false);
+  assert.match(missingKey.message, /qm_keyst|qqmusic_key/);
+  assert.doesNotMatch(missingKey.message, /12345|statistics-cookie/);
+
+  const wxLogin = await checkCookie("login_type=2; wxuin=o24680; qqmusic_key=secret; pgv_pvid=statistics-cookie");
+  assert.equal(wxLogin.ok, true);
+  assert.equal(providerCalls, 1);
 });
 
 test("QQ refresh without a verified replacement key fails closed", async () => {
@@ -33,7 +57,7 @@ test("QQ refresh without a verified replacement key fails closed", async () => {
   assert.equal(result.ok, true);
   assert.equal(result.verified, false);
   assert.equal(result.refreshedCookie, undefined);
-  assert.match(result.message, /缺少服务端验证的稳定账号或密钥/);
+  assert.match(result.message, /已保存但未验证/);
 });
 
 test("QQ identity is written only after a successful Provider refresh", async () => {

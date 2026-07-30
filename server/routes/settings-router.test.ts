@@ -134,12 +134,15 @@ test("platform cookie routes preserve platform-specific normalization and stored
 
     const qq = await requestJson("POST", "/api/settings/qqmusic-cookie/check", { cookie: "  uin=raw  " });
     assert.equal(qq.status, 200);
+
+    const storedQq = await requestJson("POST", "/api/settings/qqmusic-cookie/check", { cookie: "   " });
+    assert.equal(storedQq.status, 200);
   });
 
   assert.deepEqual(importedNetease, ["MUSIC_U=new"]);
   assert.deepEqual(checkedNetease, ["MUSIC_U=stored-netease"]);
-  assert.deepEqual(importedQq, ["  uin=raw  "]);
-  assert.equal(getSettingsCalls, 1);
+  assert.deepEqual(importedQq, ["  uin=raw  ", "uin=stored-qq"]);
+  assert.equal(getSettingsCalls, 2);
 });
 
 test("both platform cookie failures retain 409 responses and fallback messages", timeout, async () => {
@@ -154,7 +157,7 @@ test("both platform cookie failures retain 409 responses and fallback messages",
     },
     importQqMusicCookie: async () => {
       qqCalls += 1;
-      throw "not-an-error";
+      throw new Error("provider rejected qm_keyst=secret-value");
     }
   } satisfies PlatformCookieRouterDependencies;
 

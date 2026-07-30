@@ -2,7 +2,8 @@ import { type CSSProperties, FormEvent, type MouseEvent, useEffect, useMemo, use
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router-dom";
 import { detailRoute, parseAppRoute, searchRoute, topRoute, type PublicProvider } from "./app-routes";
-import { detailBackFallback, playlistTotals, requiresNeteasePlaybackAuth, resultProvider, shouldWriteBrowserUrl } from "./frontend-route-state";
+import { detailBackFallback, isQqMusicAccountVerified, playlistTotals, requiresNeteasePlaybackAuth, resultProvider, shouldWriteBrowserUrl } from "./frontend-route-state";
+import { QQ_COOKIE_EXTRACT_SCRIPT, validateQqCookieInput } from "./qq-cookie-import";
 import {
   decideScopedHydration,
   getPlayerStateFingerprint,
@@ -426,25 +427,7 @@ const CELLPHONE_LOGIN_DEFAULT_MESSAGE = "请输入手机号并发送验证码登
 const COOKIE_LOGIN_DEFAULT_MESSAGE = "粘贴网页登录后的 MUSIC_U Cookie。";
 const COOKIE_LOGIN_GUIDE = "Chrome/Edge：F12 -> Application / 应用 -> Cookies -> https://music.163.com -> MUSIC_U -> 复制 Value。Firefox：F12 -> 存储 -> Cookies -> https://music.163.com -> MUSIC_U -> 复制值。直接粘贴值，或 MUSIC_U:\"...\" 都可以。";
 const QQ_COOKIE_LOGIN_DEFAULT_MESSAGE = "粘贴 QQ 音乐网页登录后的 Cookie。";
-const QQ_COOKIE_LOGIN_GUIDE = "登录 y.qq.com 后，打开浏览器控制台粘贴“取 Cookie 指令”，运行后会自动复制 Cookie。若浏览器拦截，再用 Application / 应用 -> Cookies -> https://y.qq.com 手动复制。";
-const QQ_COOKIE_EXTRACT_SCRIPT = `(() => {
-  const cookie = document.cookie || "";
-  const hasUin = /(?:^|;\\s*)(uin|wxuin)=/.test(cookie);
-  const hasKey = /(?:^|;\\s*)(qm_keyst|qqmusic_key)=/.test(cookie);
-  const tip = hasUin && hasKey
-    ? "已复制 QQ 音乐 Cookie，回到 TrackVault 点“粘贴并检测”。"
-    : "没有读到 uin/qm_keyst。请确认 y.qq.com 已登录；如果仍不行，用 Cookies 面板手动复制。";
-  const fallback = () => window.prompt(tip, cookie);
-  if (!cookie) {
-    fallback();
-    return;
-  }
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(cookie).then(() => alert(tip)).catch(fallback);
-    return;
-  }
-  fallback();
-})();`;
+const QQ_COOKIE_LOGIN_GUIDE = "登录 y.qq.com 后运行“取 Cookie 指令”。若缺少 uin/wxuin 或 qm_keyst/qqmusic_key，请打开 Application / 应用 -> Cookies -> https://y.qq.com，在 Cookies 面板手动复制缺少字段。";
 
 type SongCachePayload = {
   savedAt: number;
@@ -1625,23 +1608,24 @@ export default function App() {
     : "登录后显示";
   const neteasePlatformStatusLabel = neteaseAccountIsLoggedIn ? accountBadgeLabel : "未登录";
   const hasNeteaseCookie = settings.hasNeteaseCookie;
-  const hasQqMusicCookie = Boolean(settings.hasQqMusicCookie || qqAccountStatus?.ok);
+  const hasSavedQqMusicCookie = settings.hasQqMusicCookie;
+  const hasQqMusicCookie = isQqMusicAccountVerified(hasSavedQqMusicCookie, qqAccountStatus);
   const qqAccountVipEnabled = Boolean(qqAccountStatus?.vipEnabled);
   const qqMusicAccountName = qqAccountStatus?.displayName?.trim() || (qqAccountStatus?.uin ? `QQ ${qqAccountStatus.uin}` : "");
-  const qqMusicPlatformStatusLabel = hasQqMusicCookie ? (qqAccountVipEnabled ? "VIP" : "普通") : "未登录";
+  const qqMusicPlatformStatusLabel = hasQqMusicCookie ? (qqAccountVipEnabled ? "VIP" : "普通") : hasSavedQqMusicCookie ? "未验证" : "未登录";
   const qqMusicMembershipExpireLabel = hasQqMusicCookie
     ? qqAccountVipEnabled
       ? qqAccountStatus?.vipExpireText
         ? `${qqAccountStatus.vipExpireText} 到期`
         : "到期时间未返回"
       : "当前为普通账号"
-    : "导入 Cookie 后显示";
+    : hasSavedQqMusicCookie ? "验证后显示" : "导入 Cookie 后显示";
   const qqMusicSidebarStatusLabel = qqMusicPlatformStatusLabel;
   const qqMusicAccountDetailLabel = hasQqMusicCookie
     ? loadingQqAccountStatus
       ? "正在同步账号信息"
       : qqMusicAccountName ? "账号已同步" : "已导入登录态"
-    : "未登录 · 当前仅可搜索";
+    : hasSavedQqMusicCookie ? "凭证已保存 · 账号未验证" : "未登录 · 当前仅可搜索";
   const activeSearchProviderMode = settings.providerMode === "demo" ? "netease" : settings.providerMode;
   const activeSearchProviderLabel = searchProviderOptions.find((option) => option.value === activeSearchProviderMode)?.label ?? "网易云";
   const activeIdentityName = activeSearchProviderMode === "qq"
@@ -5218,21 +5202,13 @@ export default function App() {
     }
   }
 
-  function normalizeQqCookieInput(input: string) {
-    return input
-      .trim()
-      .replace(/\r?\n+/g, "; ")
-      .replace(/;\s*;/g, ";")
-      .replace(/;\s*$/g, "");
-  }
-
-  function openQqCookieLogin() {
+  function openQqCookieLogin(mode: QqLoginMode = "qr") {
     setAccountMenuOpen(false);
-    setQqLoginMode("qr");
+    setQqLoginMode(mode);
     setQqCookieInput("");
-    setQqLoginMessage("正在生成 QQ 音乐登录二维码...");
+    setQqLoginMessage(mode === "cookie" ? QQ_COOKIE_LOGIN_DEFAULT_MESSAGE : "正在生成 QQ 音乐登录二维码...");
     setQqLoginOpen(true);
-    void startQqQrLoginFlow();
+    if (mode === "qr") void startQqQrLoginFlow();
   }
 
   function closeQqLogin() {
@@ -5282,11 +5258,12 @@ export default function App() {
   }
 
   async function importQqCookie(cookieInput: string) {
-    const cookie = normalizeQqCookieInput(cookieInput);
-    if (!cookie) {
-      setQqLoginMessage("请输入 QQ 音乐 Cookie。");
+    const validation = validateQqCookieInput(cookieInput);
+    if (validation.missingFields.length) {
+      setQqLoginMessage(validation.message);
       return;
     }
+    const cookie = validation.normalizedCookie;
 
     try {
       setCheckingQqCookie(true);
@@ -5825,6 +5802,23 @@ export default function App() {
   function handleNextTrack() {
     markPlayerInteraction();
     void playNextTrack();
+  }
+
+  async function handleReverifyQqCookie() {
+    try {
+      setCheckingQqCookie(true);
+      const result = await checkQqMusicCookie("");
+      setQqLoginMessage(result.message);
+      setMessage(result.message);
+      const saved = await refreshSettings();
+      if (saved) setSettings(saved);
+      await refreshQqMusicAccountStatus(true);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "QQ 音乐 Cookie 重新验证失败");
+    } finally {
+      setCheckingQqCookie(false);
+      setAccountMenuOpen(false);
+    }
   }
 
   function handleQueueSongNext(song: Song) {
@@ -8491,7 +8485,7 @@ export default function App() {
                       <span className={hasQqMusicCookie ? (qqAccountVipEnabled ? "platform-account-state vip" : "platform-account-state") : "platform-account-state muted"}>{qqMusicPlatformStatusLabel}</span>
                     </div>
                   </div>
-                  <p>{hasQqMusicCookie ? "用于 QQ 曲库搜索、试听与下载；高音质仍取决于账号权限和当前版权。" : "导入 y.qq.com Cookie 后，QQ 搜索结果才能尝试会员音源和高品质链接。"}</p>
+                  <p>{hasQqMusicCookie ? "账号已验证，可用于 QQ 曲库账号功能；高音质仍取决于账号权限和当前版权。" : hasSavedQqMusicCookie ? "凭证已保存但账号尚未验证。验证成功前不会开放个人信息、歌单和下载功能。" : "导入 y.qq.com Cookie 后再验证账号。"}</p>
                   <div className="platform-account-membership" aria-label="QQ音乐会员有效期">
                     <span>会员有效期</span>
                     <strong>{qqMusicMembershipExpireLabel}</strong>
@@ -8500,11 +8494,14 @@ export default function App() {
                     <button type="button" role="menuitem" disabled={!hasQqMusicCookie} onClick={openQqProfile}>
                       个人信息
                     </button>
-                    <button type="button" role="menuitem" onClick={openQqCookieLogin}>
-                      {hasQqMusicCookie ? "重新登录" : "登录账号"}
+                    <button type="button" role="menuitem" disabled={!hasSavedQqMusicCookie || checkingQqCookie} onClick={() => void handleReverifyQqCookie()}>
+                      {checkingQqCookie ? "验证中" : "重新验证"}
                     </button>
-                    <button type="button" role="menuitem" className="danger" disabled={!hasQqMusicCookie} onClick={() => void handleClearQqCookie()}>
-                      退出登录
+                    <button type="button" role="menuitem" onClick={() => openQqCookieLogin("cookie")}>
+                      {hasSavedQqMusicCookie ? "替换凭证" : "导入凭证"}
+                    </button>
+                    <button type="button" role="menuitem" className="danger" disabled={!hasSavedQqMusicCookie} onClick={() => void handleClearQqCookie()}>
+                      清除凭证
                     </button>
                   </div>
                 </section>
