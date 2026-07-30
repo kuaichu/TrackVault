@@ -70,7 +70,7 @@ function parseCsvPlaylist(input: string): TransferTrack[] {
 async function loadInputTracks(input: CreatePlaylistTransferInput, deps: CreatePlaylistTransferDeps) {
   let tracks: TransferTrack[];
 
-  if (input.sourceTracks?.length) {
+  if (input.sourceTracks !== undefined) {
     tracks = input.sourceTracks;
   } else if (input.sourceProvider === "text") {
     tracks = parseTextPlaylist(input.text ?? "");
@@ -85,11 +85,13 @@ async function loadInputTracks(input: CreatePlaylistTransferInput, deps: CreateP
   }
 
   const selectedIds = new Set((input.sourceTrackIds ?? []).map((id) => id.trim()).filter(Boolean));
-  if (selectedIds.size === 0) {
-    return tracks;
+  const selectedTracks = selectedIds.size === 0
+    ? tracks
+    : tracks.filter((track) => track.sourceTrackId && selectedIds.has(track.sourceTrackId));
+  if (selectedTracks.length === 0) {
+    throw new Error("来源歌单没有可迁移的歌曲。");
   }
-
-  return tracks.filter((track) => track.sourceTrackId && selectedIds.has(track.sourceTrackId));
+  return selectedTracks;
 }
 
 function applyCandidateAvailability(result: TransferTrackResult): TransferTrackResult {

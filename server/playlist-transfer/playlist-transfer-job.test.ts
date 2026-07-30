@@ -144,3 +144,13 @@ test("failed progress jobs expose only the stable action error", async () => {
   assert.equal("stack" in failed, false);
   assert.equal("cause" in failed, false);
 });
+
+test("empty playlist sources become failed progress jobs instead of completed 0/0", async () => {
+  const job = startPlaylistTransferRunJob(
+    { ownerKey: "session:empty", sourceProvider: "qq", targetProvider: "netease", playlistId: "empty" },
+    { loadSourceTracks: async () => [], searchTargetTracks: async () => [], saveJob: async (nextJob) => nextJob }
+  );
+  const failed = await waitForJob("session:empty", job.id, "failed");
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.result, undefined);
+});

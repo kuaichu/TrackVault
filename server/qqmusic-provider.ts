@@ -196,6 +196,9 @@ type QqCollectedSonglistsResult = {
 type QqCollectionResult = Record<string, unknown>;
 
 type QqSonglistDetail = {
+  code?: number;
+  subcode?: number;
+  message?: string;
   dissid?: number | string;
   disstid?: number | string;
   dirid?: number | string;
@@ -207,6 +210,16 @@ type QqSonglistDetail = {
   visitnum?: number;
   songlist?: QqSearchSong[];
 };
+
+export function parseQqAccountPlaylistSongs(data: QqSonglistDetail): QqSearchSong[] {
+  if ((data.code !== undefined && data.code !== 0) || (data.subcode !== undefined && data.subcode !== 0)) {
+    throw new Error(`QQ 音乐歌单读取失败${data.message ? `：${data.message}` : ""}`);
+  }
+  if (!Array.isArray(data.songlist)) {
+    throw new Error("QQ 音乐歌单响应缺少歌曲列表结构。");
+  }
+  return data.songlist;
+}
 
 type QqAudioType = "m4a" | "128" | "320" | "flac";
 
@@ -1463,7 +1476,7 @@ export async function getQqPlaylistSongs(playlistId: string, page = 1, limit = 1
   const data = await callQqMusicApi<QqSonglistDetail>(cookieObj, "songlist", {
     id: rawPlaylistId
   });
-  const allSongs = (data.songlist ?? []).map(mapQqSong).filter((song): song is Song => Boolean(song));
+  const allSongs = parseQqAccountPlaylistSongs(data).map(mapQqSong).filter((song): song is Song => Boolean(song));
   const filteredSongs = sortSongs(filterSongs(allSongs, keyword), sortMode);
   const offset = (safePage - 1) * safeLimit;
   const songs = filteredSongs.slice(offset, offset + safeLimit);

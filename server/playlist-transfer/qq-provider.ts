@@ -19,11 +19,25 @@ type QqSong = {
 };
 
 type QqPlaylistBody = {
+  code?: number;
+  subcode?: number;
+  message?: string;
   cdlist?: Array<{
     dissname?: string;
     songlist?: QqSong[];
   }>;
 };
+
+export function parseQqPlaylistTransferBody(body: QqPlaylistBody): QqSong[] {
+  if ((body.code !== undefined && body.code !== 0) || (body.subcode !== undefined && body.subcode !== 0)) {
+    throw new Error(`QQ 音乐歌单读取失败${body.message ? `：${body.message}` : ""}`);
+  }
+  const songs = body.cdlist?.[0]?.songlist;
+  if (!Array.isArray(songs)) {
+    throw new Error("QQ 音乐歌单响应缺少歌曲列表结构。");
+  }
+  return songs;
+}
 
 const QQ_HEADERS = {
   Referer: "https://y.qq.com/",
@@ -139,6 +153,6 @@ export async function loadQqPlaylistTransferTracks(playlistId: string): Promise<
   }
 
   const body = JSON.parse(decodeJsonPrefix(await response.text())) as QqPlaylistBody;
-  const songs = body.cdlist?.[0]?.songlist ?? [];
+  const songs = parseQqPlaylistTransferBody(body);
   return songs.map(qqSongToTransferTrack).filter((song): song is TransferTrack => Boolean(song));
 }

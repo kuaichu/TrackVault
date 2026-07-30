@@ -91,6 +91,7 @@ import {
   searchSongs
 } from "./api";
 import { isMediaMemoryLimitExceededError } from "./media-memory";
+import { buildSelectedSourceTracks, getPlaylistSourceBlockReason, getPlaylistSourceKey, isCurrentPlaylistSourceRequest } from "./playlist-transfer-source";
 import type { AccountState, AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferImportResult, PlaylistTransferJob, PlaylistTransferRunJob, QqMusicAccountStatus, QqMusicUserProfile, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, SongInsight, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferTrack, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
@@ -1348,6 +1349,8 @@ export default function App() {
   const qrCloseTimerRef = useRef<number | null>(null);
   const accountMenuFrameRef = useRef<number | null>(null);
   const transferRunJobIdRef = useRef("");
+  const transferSourceRequestIdRef = useRef(0);
+  const transferSourcePlaylistKeyRef = useRef("");
   const neteaseAuditJobIdRef = useRef("");
   const playlistCompareJobIdRef = useRef("");
   const viewPersistenceReadyRef = useRef(false);
@@ -1378,6 +1381,7 @@ export default function App() {
   const [transferSelectedSourceSongIds, setTransferSelectedSourceSongIds] = useState<string[]>([]);
   const [loadingTransferSourceSongs, setLoadingTransferSourceSongs] = useState(false);
   const [transferSourceSongsError, setTransferSourceSongsError] = useState("");
+  const [transferLoadedSourcePlaylistKey, setTransferLoadedSourcePlaylistKey] = useState("");
   const [transferManualIdOpen, setTransferManualIdOpen] = useState(false);
   const [transferAdvancedOpen, setTransferAdvancedOpen] = useState(false);
   const [transferToolTab, setTransferToolTab] = useState<"audit" | "compare">("audit");
@@ -2630,14 +2634,20 @@ export default function App() {
 
   async function loadTransferSourceSongs(playlistId: string, provider: "netease" | "qq" = transferSourceProvider === "qq" ? "qq" : "netease") {
     const safePlaylistId = playlistId.trim();
+    const playlistKey = getPlaylistSourceKey(provider, safePlaylistId);
+    const requestId = ++transferSourceRequestIdRef.current;
+    transferSourcePlaylistKeyRef.current = playlistKey;
+    setTransferLoadedSourcePlaylistKey("");
     if (!safePlaylistId) {
       setTransferSourceSongs([]);
       setTransferSelectedSourceSongIds([]);
+      setLoadingTransferSourceSongs(false);
       return;
     }
 
     if (provider === "qq" && !hasQqMusicCookie) {
       setMessage("请先在账号中心导入 QQ 音乐 Cookie。");
+      setLoadingTransferSourceSongs(false);
       return;
     }
 
@@ -2650,6 +2660,7 @@ export default function App() {
       const collectedSongs: Song[] = [];
       while (page <= 10) {
         const pageData = await getPlaylistSongs(safePlaylistId, page, limit, "", "default", provider);
+        if (!isCurrentPlaylistSourceRequest(requestId, transferSourceRequestIdRef.current, playlistKey, transferSourcePlaylistKeyRef.current)) return;
         collectedSongs.push(...pageData.songs);
         if (!pageData.hasMore) {
           break;
@@ -2657,26 +2668,36 @@ export default function App() {
         page += 1;
       }
 
+      if (!isCurrentPlaylistSourceRequest(requestId, transferSourceRequestIdRef.current, playlistKey, transferSourcePlaylistKeyRef.current)) return;
       setTransferSourceSongs(collectedSongs);
       setTransferSelectedSourceSongIds(collectedSongs.map((song) => song.id));
+      setTransferLoadedSourcePlaylistKey(playlistKey);
       setMessage(`已读取来源歌单 ${collectedSongs.length} 首，默认全选`);
     } catch (error) {
+      if (!isCurrentPlaylistSourceRequest(requestId, transferSourceRequestIdRef.current, playlistKey, transferSourcePlaylistKeyRef.current)) return;
       const messageText = error instanceof Error ? error.message : "读取来源歌单歌曲失败";
       setTransferSourceSongsError(messageText);
       setMessage(messageText);
       setTransferSourceSongs([]);
       setTransferSelectedSourceSongIds([]);
     } finally {
-      setLoadingTransferSourceSongs(false);
+      if (isCurrentPlaylistSourceRequest(requestId, transferSourceRequestIdRef.current, playlistKey, transferSourcePlaylistKeyRef.current)) {
+        setLoadingTransferSourceSongs(false);
+      }
     }
   }
 
   function handleTransferSourceProviderChange(provider: TransferSourceProvider) {
+    transferSourceRequestIdRef.current += 1;
+    transferSourcePlaylistKeyRef.current = "";
     setTransferSourceProvider(provider);
     setTransferPlaylistId("");
     setTransferSourceSongs([]);
     setTransferSelectedSourceSongIds([]);
     setTransferSourceSongsError("");
+    setTransferLoadedSourcePlaylistKey("");
+    setLoadingTransferSourceSongs(false);
+    setLoadingTransferSourceSongs(false);
     setTransferManualIdOpen(false);
     setTransferJob(null);
     setTransferExportContent("");
@@ -2716,10 +2737,14 @@ export default function App() {
   }
 
   function handleTransferPlaylistSelect(playlistId: string) {
+    transferSourceRequestIdRef.current += 1;
+    transferSourcePlaylistKeyRef.current = "";
     setTransferPlaylistId(playlistId);
     setTransferSourceSongs([]);
     setTransferSelectedSourceSongIds([]);
     setTransferSourceSongsError("");
+    setTransferLoadedSourcePlaylistKey("");
+    setLoadingTransferSourceSongs(false);
     const playlist =
       transferSourceProvider === "qq"
         ? transferQqPlaylists.find((item) => item.id === playlistId)
@@ -2803,8 +2828,17 @@ export default function App() {
       return;
     }
 
-    if ((sourceProvider === "netease" || sourceProvider === "qq") && transferSourceSongs.length > 0 && transferSelectedSourceSongIds.length === 0) {
-      setMessage("请至少选择一首要迁移的歌曲。");
+    const sourceBlockReason = getPlaylistSourceBlockReason({
+      provider: sourceProvider,
+      playlistId: playlistId ?? "",
+      loadedPlaylistKey: transferLoadedSourcePlaylistKey,
+      loading: loadingTransferSourceSongs,
+      error: transferSourceSongsError,
+      songs: transferSourceSongs,
+      selectedSongIds: transferSelectedSourceSongIds
+    });
+    if (sourceBlockReason) {
+      setMessage(sourceBlockReason);
       return;
     }
 
@@ -2830,9 +2864,9 @@ export default function App() {
         targetProvider,
         playlistId,
         playlistName,
-        sourceTrackIds:
-          (sourceProvider === "netease" || sourceProvider === "qq") && transferSourceSongs.length > 0
-            ? transferSelectedSourceSongIds
+        sourceTracks:
+          sourceProvider === "netease" || sourceProvider === "qq"
+            ? buildSelectedSourceTracks(sourceProvider, transferSourceSongs, transferSelectedSourceSongIds)
             : undefined,
         text: transferTextInput,
         checkAvailability: transferCheckAvailability
@@ -8687,9 +8721,14 @@ export default function App() {
                               id="transfer-manual-playlist-id"
                               value={transferPlaylistId}
                               onChange={(event) => {
+                                transferSourceRequestIdRef.current += 1;
+                                transferSourcePlaylistKeyRef.current = "";
                                 setTransferPlaylistId(event.target.value);
                                 setTransferSourceSongs([]);
                                 setTransferSelectedSourceSongIds([]);
+                                setTransferSourceSongsError("");
+                                setTransferLoadedSourcePlaylistKey("");
+                                setLoadingTransferSourceSongs(false);
                               }}
                               onBlur={() => {
                                 if (transferPlaylistId.trim()) {
@@ -8892,7 +8931,12 @@ export default function App() {
                   </div>
 
                   <div className="form-actions">
-                    <button type="button" className="primary-button wide" disabled={transferLoading} onClick={() => void handleCreateTransferJob()}>
+                    <button
+                      type="button"
+                      className="primary-button wide"
+                      disabled={transferLoading || Boolean(getPlaylistSourceBlockReason({ provider: transferSourceProvider, playlistId: transferPlaylistId, loadedPlaylistKey: transferLoadedSourcePlaylistKey, loading: loadingTransferSourceSongs, error: transferSourceSongsError, songs: transferSourceSongs, selectedSongIds: transferSelectedSourceSongIds }))}
+                      onClick={() => void handleCreateTransferJob()}
+                    >
                       {transferLoading ? "转换中" : transferExecutionMode === "write" && transferTargetProvider === "netease" ? "开始转换并写入" : "开始转换"}
                     </button>
                   </div>

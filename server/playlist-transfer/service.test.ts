@@ -94,22 +94,28 @@ test("createPlaylistTransferJob filters provider playlist tracks by selected sou
   assert.equal(job.tracks[0].selectedCandidate?.targetTrackId, "netease-qq-song-2");
 });
 
-test("createPlaylistTransferJob accepts selected comparison tracks directly", async () => {
+test("createPlaylistTransferJob uses handed-off QQ private playlist tracks without calling the loader", async () => {
+  let loaderCalls = 0;
   const job = await createPlaylistTransferJob(
     {
       ownerKey: "session:test",
-      sourceProvider: "text",
-      targetProvider: "qq",
-      playlistName: "对比所选歌曲",
+      sourceProvider: "qq",
+      targetProvider: "netease",
+      playlistId: "private-liked-playlist",
+      playlistName: "QQ 我喜欢",
       sourceTracks: [
-        { source: "qq", sourceTrackId: "qq-mid-1", title: "第一首", artists: ["歌手A"] },
-        { source: "netease", sourceTrackId: "netease-id-2", title: "第二首", artists: ["歌手B"] }
+        { source: "qq", sourceTrackId: "numeric-song-id-1", title: "第一首", artists: ["歌手A"] },
+        { source: "qq", sourceTrackId: "numeric-song-id-2", title: "第二首", artists: ["歌手B"] }
       ]
     },
     {
+      loadSourceTracks: async () => {
+        loaderCalls += 1;
+        throw new Error("source loader must not be called");
+      },
       searchTargetTracks: async (track) => [{
-        provider: "qq",
-        id: track.source === "qq" ? track.sourceTrackId! : "qq-mid-2",
+        provider: "netease",
+        id: `netease-${track.sourceTrackId}`,
         title: track.title,
         artists: track.artists
       }],
@@ -118,8 +124,9 @@ test("createPlaylistTransferJob accepts selected comparison tracks directly", as
   );
 
   assert.equal(job.summary.total, 2);
+  assert.equal(loaderCalls, 0);
   assert.equal(job.summary.matched, 2);
-  assert.deepEqual(getQqImportTrackMids(job), ["qq-mid-1", "qq-mid-2"]);
+  assert.deepEqual(getNeteaseImportTrackIds(job), ["netease-numeric-song-id-1", "netease-numeric-song-id-2"]);
 });
 
 test("createPlaylistTransferJob reports progress while matching songs", async () => {
@@ -159,6 +166,23 @@ test("createPlaylistTransferJob reports progress while matching songs", async ()
   assert.ok(progress.some((item) => item.phase === "saving" && item.processed === 2));
   assert.equal(progress[progress.length - 1].phase, "completed");
   assert.equal(progress[progress.length - 1].processed, 2);
+});
+
+test("createPlaylistTransferJob rejects empty handed-off and loaded sources", async () => {
+  let loaderCalls = 0;
+  const deps = {
+    loadSourceTracks: async () => {
+      loaderCalls += 1;
+      return [];
+    },
+    searchTargetTracks: async () => [],
+    saveJob: async (nextJob: any) => nextJob
+  };
+
+  await assert.rejects(createPlaylistTransferJob({ ownerKey: "session:test", sourceProvider: "qq", targetProvider: "netease", playlistId: "private", sourceTracks: [] }, deps), /没有可迁移/);
+  assert.equal(loaderCalls, 0);
+  await assert.rejects(createPlaylistTransferJob({ ownerKey: "session:test", sourceProvider: "qq", targetProvider: "netease", playlistId: "empty" }, deps), /没有可迁移/);
+  assert.equal(loaderCalls, 1);
 });
 
 test("transfer availability checks never publish thrown or returned provider reasons", async () => {

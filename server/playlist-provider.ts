@@ -208,7 +208,7 @@ async function getPlaylistTracksPage(playlistId: string, cookie: string, page: n
     playlist_detail({ id: playlistId, cookie }).catch(() => null)
   ]);
 
-  const songs = ((response.body as { songs?: PlaylistTrack[] }).songs ?? []) as PlaylistTrack[];
+  const songs = parseNeteasePlaylistSongsBody(response.body);
   const reportedTotal = Number((detailResponse?.body as { playlist?: { trackCount?: number } } | undefined)?.playlist?.trackCount);
   const total = Number.isFinite(reportedTotal) && reportedTotal >= 0
     ? reportedTotal
@@ -221,6 +221,17 @@ async function getPlaylistTracksPage(playlistId: string, cookie: string, page: n
     hasMore: meta.hasMore,
     total: meta.total
   };
+}
+
+export function parseNeteasePlaylistSongsBody(body: unknown): PlaylistTrack[] {
+  const value = body as { code?: number; msg?: string; message?: string; songs?: PlaylistTrack[] };
+  if (value?.code !== undefined && value.code !== 200) {
+    throw new Error(`网易云歌单读取失败${value.msg || value.message ? `：${value.msg || value.message}` : ""}`);
+  }
+  if (!Array.isArray(value?.songs)) {
+    throw new Error("网易云歌单响应缺少歌曲列表结构。");
+  }
+  return value.songs;
 }
 
 function mapTrackToSong(track: PlaylistTrack, detailMap: Map<string, DetailSong>) {
@@ -263,7 +274,7 @@ async function getAllPlaylistSongsForSearch(playlistId: string, cookie: string) 
       cookie
     });
 
-    const batch = ((response.body as { songs?: PlaylistTrack[] }).songs ?? []) as PlaylistTrack[];
+    const batch = parseNeteasePlaylistSongsBody(response.body);
     if (batch.length === 0) {
       break;
     }
