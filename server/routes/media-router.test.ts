@@ -312,6 +312,7 @@ test("proxy tags small MP3 and FLAC responses inside the serial slot", timeout, 
     for (const [level, mime] of [["mp3", "audio/mpeg"], ["flac", "audio/flac"]]) {
       const response = await requestRaw(`/api/download/proxy?${songQuery.replace("level=lossless", `level=${level}`)}`);
       assert.equal(response.headers.get("content-type"), mime);
+      assert.equal(response.headers.get("content-disposition"), `attachment; filename="track.${level}"; filename*=UTF-8''track.${level}`);
       assert.equal(response.headers.get("content-length"), "5");
       assert.equal(response.headers.get("x-trackvault-lyrics"), "fetched");
       assert.equal(response.headers.get("x-trackvault-cover"), level === "flac" ? "fetched" : "missing");
@@ -328,10 +329,11 @@ test("tagged M4A returns an explicit unsupported error while raw M4A still strea
     fetchImpl: async () => new Response(bytes(0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70), { headers: { "content-type": "audio/mp4", "content-length": "8" } }),
     getAudioMetadataTarget
   });
-  await withTestRouter([createMediaRouter(dependencies)], async ({ request, requestRaw }) => {
-    const tagged = await request(`/api/download/proxy?${songQuery.replace("source=netease", "source=qqmusic")}`);
+  await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
+    const tagged = await requestRaw(`/api/download/proxy?${songQuery.replace("source=netease", "source=qqmusic")}`);
     assert.equal(tagged.status, 415);
-    assert.deepEqual(tagged.body, {
+    assert.equal(tagged.headers.get("content-disposition"), null);
+    assert.deepEqual(await tagged.json(), {
       code: "METADATA_FORMAT_UNSUPPORTED",
       message: "当前仅有 M4A 或其他不可写标签格式；可改用服务器裸下载。",
       format: "m4a",
@@ -352,10 +354,11 @@ test("proxy returns structured 413 before reading a known oversized response", t
     getAudioMetadataTarget: () => "mp3",
     readResponseBytesWithLimit: async () => { readCalls += 1; return bytes(); }
   });
-  await withTestRouter([createMediaRouter(dependencies)], async ({ request }) => {
-    const response = await request(`/api/download/proxy?${songQuery}`);
+  await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
+    const response = await requestRaw(`/api/download/proxy?${songQuery}`);
     assert.equal(response.status, 413);
-    assert.deepEqual(response.body, { code: "MEDIA_MEMORY_LIMIT_EXCEEDED", message: "媒体文件超过 0 MiB 的安全内存处理上限", limitBytes: 4, contentLength: 5, fallbackModes: ["raw-direct", "server-raw"] });
+    assert.equal(response.headers.get("content-disposition"), null);
+    assert.deepEqual(await response.json(), { code: "MEDIA_MEMORY_LIMIT_EXCEEDED", message: "媒体文件超过 0 MiB 的安全内存处理上限", limitBytes: 4, contentLength: 5, fallbackModes: ["raw-direct", "server-raw"] });
   });
   assert.equal(readCalls, 0);
 });
@@ -374,12 +377,17 @@ test("proxy returns structured 413 when an unknown-length stream exceeds the lim
   });
 });
 
-test("proxy preserves MediaAccessError status and unknown paths reach next middleware", timeout, async () => {
-  const dependencies = createDependencies({ resolveDirectDownload: async () => { throw new MediaAccessError(403, "forbidden"); } });
-  await withTestRouter([createMediaRouter(dependencies)], async ({ request }) => {
-    const denied = await request(`/api/download/proxy?${songQuery}`);
-    assert.equal(denied.status, 403);
-    assert.deepEqual(denied.body, { message: "forbidden" });
+test("proxy error JSON has no download disposition and unknown paths reach next middleware", timeout, async () => {
+  let activeError: Error = new MediaAccessError(403, "forbidden");
+  const dependencies = createDependencies({ resolveDirectDownload: async () => { throw activeError; } });
+  await withTestRouter([createMediaRouter(dependencies)], async ({ request, requestRaw }) => {
+    for (const [error, status] of [[new MediaAccessError(403, "forbidden"), 403], [new Error("upstream failed"), 502]] as const) {
+      activeError = error;
+      const denied = await requestRaw(`/api/download/proxy?${songQuery}`);
+      assert.equal(denied.status, status);
+      assert.equal(denied.headers.get("content-disposition"), null);
+      assert.deepEqual(await denied.json(), { message: error.message });
+    }
     const fallback = await request("/api/media/unknown");
     assert.equal(fallback.status, 404);
     assert.deepEqual(fallback.body, { message: "test fallback" });

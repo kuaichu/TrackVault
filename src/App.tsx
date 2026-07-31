@@ -84,6 +84,7 @@ import {
   startDirectSongDownload,
   startRawDirectSongDownload,
   startServerSongDownload,
+  SERVER_DOWNLOAD_HANDOFF_MESSAGE,
   startNeteaseImportAuditJob,
   startPlaylistCompareJob,
   startPlaylistTransferRunJob,
@@ -4527,7 +4528,7 @@ export default function App() {
   }
 
   function isDownloadProgressActive(progress: DownloadProgressDialog | null) {
-    return progress?.status === "preparing" || progress?.status === "downloading";
+    return !progress?.handedOff && (progress?.status === "preparing" || progress?.status === "downloading");
   }
 
   function closeDownloadProgress() {
@@ -4585,7 +4586,7 @@ export default function App() {
     setDownloadMethodPicker(null);
   }
 
-  async function runServerFallbackDownload(song: Song, level: DownloadQualityLevel, selectedLabel: string, metadata: "tagged" | "raw" = "tagged") {
+  function runServerFallbackDownload(song: Song, level: DownloadQualityLevel, selectedLabel: string, metadata: "tagged" | "raw" = "tagged") {
     if (directDownloadingSongId || batchDownloading) {
       return;
     }
@@ -4627,40 +4628,25 @@ export default function App() {
         indeterminate: true,
         status: "preparing"
       });
-      await startServerSongDownload(song, level, {
-        metadata,
-        onStatus: (status) => {
-          setDownloadProgress((current) => current ? { ...current, detail: status } : current);
-          patchBrowserDownloadTask(fallbackTaskId, { detail: status });
-        },
-        onReady: ({ filename, quality }) => {
-          const resolvedQuality = quality || selectedLabel;
-          const delivery = metadata === "raw" ? "服务器将裸流响应交给浏览器。" : "服务器将写好标签的 MP3/FLAC 响应交给浏览器。";
-          const resolvedDetail = quality && quality !== selectedLabel
-            ? `实际下载音质为 ${quality}；${delivery}`
-            : delivery;
-          setDownloadProgress((current) => current ? { ...current, detail: resolvedDetail } : current);
-          patchBrowserDownloadTask(fallbackTaskId, { fileName: filename, quality: resolvedQuality, detail: resolvedDetail });
-        }
-      });
+      const handoff = startServerSongDownload(song, level, metadata);
       setDownloadProgress((current) => current ? {
         ...current,
         progress: 0,
         receivedBytes: undefined,
         speedBytesPerSecond: undefined,
         indeterminate: false,
-        handedOff: true,
-        status: "done",
-        detail: metadata === "raw" ? "服务器裸流已交给浏览器；不会写入标签。" : "MP3/FLAC 标签下载已交给浏览器；TrackVault 无法获知最终完成进度。"
+        handedOff: handoff.handedOff,
+        status: handoff.status,
+        detail: handoff.detail
       } : current);
       patchBrowserDownloadTask(fallbackTaskId, {
         progress: 0,
         speedBytesPerSecond: undefined,
-        status: "done",
+        status: handoff.status,
         delivery: "browser-handoff",
-        detail: metadata === "raw" ? "服务器裸流已交给浏览器；不会写入标签。" : "MP3/FLAC 标签下载已交给浏览器；TrackVault 无法获知最终完成进度。"
+        detail: handoff.detail
       });
-      setMessage(`方案C已交给浏览器流式下载：${song.title}`);
+      setMessage(SERVER_DOWNLOAD_HANDOFF_MESSAGE);
     } catch (fallbackError) {
       const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : "备用下载失败";
       setDownloadProgress((current) => current ? {
@@ -4834,7 +4820,7 @@ export default function App() {
       return;
     }
 
-    await runServerFallbackDownload(picker.song, picker.level, picker.label, method === "server-raw" ? "raw" : "tagged");
+    runServerFallbackDownload(picker.song, picker.level, picker.label, method === "server-raw" ? "raw" : "tagged");
   }
 
   async function handleDownload(song: Song) {

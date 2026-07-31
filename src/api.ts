@@ -718,29 +718,21 @@ export async function startRawDirectSongDownload(song: Song, level: DownloadQual
   return directDownload;
 }
 
-export async function startServerSongDownload(
-  song: Song,
-  level: DownloadQualityLevel,
-  callbacks: {
-    metadata?: "tagged" | "raw";
-    onStatus?: (status: string) => void;
-    onReady?: (info: { filename: string; quality?: string }) => void;
-  } = {}
-) {
-  const metadata = callbacks.metadata ?? "tagged";
-  const directResponse = await apiFetch(getDirectDownloadUrl(song, level, metadata));
-  if (!directResponse.ok) {
-    const data = (await directResponse.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(data?.message ?? "备用下载失败");
-  }
+export const SERVER_DOWNLOAD_HANDOFF_MESSAGE = "已打开服务器下载页；服务器准备完成后浏览器会开始保存，失败原因会显示在新标签页。";
 
-  const directDownload = (await directResponse.json()) as DirectDownloadInfo;
-  callbacks.onReady?.({ filename: directDownload.filename, quality: directDownload.quality ?? undefined });
-  callbacks.onStatus?.(metadata === "raw"
-    ? "服务器裸流已交给浏览器下载；不会写入标签，也不会在前端缓冲音频。"
-    : "服务器将为 MP3/FLAC 获取歌词和封面并写入标签，再交给浏览器原生下载；TrackVault 不会在前端缓冲音频。");
-  startNativeDownload(getServerDownloadUrl(song, level, metadata), directDownload.filename);
-  return directDownload;
+export function startServerSongDownload(song: Song, level: DownloadQualityLevel, metadata: "tagged" | "raw" = "tagged") {
+  const link = document.createElement("a");
+  link.href = getServerDownloadUrl(song, level, metadata);
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  return {
+    status: "preparing" as const,
+    handedOff: true as const,
+    detail: SERVER_DOWNLOAD_HANDOFF_MESSAGE
+  };
 }
 
 export async function searchSongs(query: string, provider = "netease"): Promise<Song[]> {
