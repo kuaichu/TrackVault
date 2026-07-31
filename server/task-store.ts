@@ -750,9 +750,14 @@ export async function probeSongAudio(song: Song, level: DownloadQualityLevel, mo
   return buildSongAudioProbe(song, mode, level, match);
 }
 
-export async function resolveDirectDownload(song: Song, level: DownloadQualityLevel, userCookieOverride?: string): Promise<DirectDownloadResolution> {
+export async function resolveDirectDownload(
+  song: Song,
+  level: DownloadQualityLevel,
+  userCookieOverride?: string,
+  options: { metadata?: "tagged" | "raw" } = {}
+): Promise<DirectDownloadResolution> {
   if (requireSupportedDownloadSource(song) === "qqmusic") {
-    return resolveQqDirectDownload(song, level);
+    return resolveQqDirectDownload(song, level, options);
   }
 
   const plan = await buildMediaCredentialPlan({ userCookieOverride });

@@ -160,7 +160,7 @@ export function isDirectDownloadBlockedError(error: unknown) {
   return error instanceof DirectDownloadBlockedError;
 }
 
-export function getDirectDownloadUrl(song: Song, level: DownloadQualityLevel) {
+export function getDirectDownloadUrl(song: Song, level: DownloadQualityLevel, metadata?: "tagged" | "raw") {
   const params = new URLSearchParams({
     id: song.id,
     title: song.title,
@@ -176,14 +176,22 @@ export function getDirectDownloadUrl(song: Song, level: DownloadQualityLevel) {
     params.set("mediaId", song.mediaId);
   }
 
+  if (song.providerSongId) {
+    params.set("providerSongId", song.providerSongId);
+  }
+
   if (song.coverUrl) {
     params.set("coverUrl", song.coverUrl);
+  }
+
+  if (metadata) {
+    params.set("metadata", metadata);
   }
 
   return `/api/download/direct?${params.toString()}`;
 }
 
-export function getServerDownloadUrl(song: Song, level: DownloadQualityLevel) {
+export function getServerDownloadUrl(song: Song, level: DownloadQualityLevel, metadata: "tagged" | "raw" = "tagged") {
   const params = new URLSearchParams({
     id: song.id,
     title: song.title,
@@ -192,16 +200,23 @@ export function getServerDownloadUrl(song: Song, level: DownloadQualityLevel) {
     duration: song.duration,
     source: song.source,
     level,
-    sid: getClientSessionId(),
-    metadata: "raw"
+    sid: getClientSessionId()
   });
 
   if (song.mediaId) {
     params.set("mediaId", song.mediaId);
   }
 
+  if (song.providerSongId) {
+    params.set("providerSongId", song.providerSongId);
+  }
+
   if (song.coverUrl) {
     params.set("coverUrl", song.coverUrl);
+  }
+
+  if (metadata === "raw") {
+    params.set("metadata", "raw");
   }
 
   return `/api/download/proxy?${params.toString()}`;
@@ -706,9 +721,14 @@ export async function startRawDirectSongDownload(song: Song, level: DownloadQual
 export async function startServerSongDownload(
   song: Song,
   level: DownloadQualityLevel,
-  callbacks: { onStatus?: (status: string) => void; onReady?: (info: { filename: string; quality?: string }) => void } = {}
+  callbacks: {
+    metadata?: "tagged" | "raw";
+    onStatus?: (status: string) => void;
+    onReady?: (info: { filename: string; quality?: string }) => void;
+  } = {}
 ) {
-  const directResponse = await apiFetch(getDirectDownloadUrl(song, level));
+  const metadata = callbacks.metadata ?? "tagged";
+  const directResponse = await apiFetch(getDirectDownloadUrl(song, level, metadata));
   if (!directResponse.ok) {
     const data = (await directResponse.json().catch(() => null)) as { message?: string } | null;
     throw new Error(data?.message ?? "备用下载失败");
@@ -716,8 +736,10 @@ export async function startServerSongDownload(
 
   const directDownload = (await directResponse.json()) as DirectDownloadInfo;
   callbacks.onReady?.({ filename: directDownload.filename, quality: directDownload.quality ?? undefined });
-  callbacks.onStatus?.("无标签流式响应已交给浏览器下载；TrackVault 不会在前端缓冲音频。");
-  startNativeDownload(getServerDownloadUrl(song, level), directDownload.filename);
+  callbacks.onStatus?.(metadata === "raw"
+    ? "服务器裸流已交给浏览器下载；不会写入标签，也不会在前端缓冲音频。"
+    : "服务器将为 MP3/FLAC 获取歌词和封面并写入标签，再交给浏览器原生下载；TrackVault 不会在前端缓冲音频。");
+  startNativeDownload(getServerDownloadUrl(song, level, metadata), directDownload.filename);
   return directDownload;
 }
 

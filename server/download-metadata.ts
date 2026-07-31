@@ -141,7 +141,7 @@ export function getHighResolutionCoverUrl(rawUrl: string) {
 async function fetchLyricsText(song: Song) {
   try {
     const lyrics = song.source === "qqmusic"
-      ? await getQqSongLyrics(song.id, song.mediaId)
+      ? await getQqSongLyrics(song.id, song.mediaId, song.providerSongId)
       : await getSongLyrics(song.id);
     return formatLyricsAsLrc(lyrics);
   } catch {
@@ -155,6 +155,7 @@ export async function addAudioMetadataToDownload(input: {
   filename?: string | null;
   type?: string | null;
   contentType?: string | null;
+  onMetadataResult?: (result: { lyricsFetched: boolean; coverFetched: boolean }) => void;
 }) {
   const target = getAudioMetadataTarget(input);
   if (!target) {
@@ -165,6 +166,7 @@ export async function addAudioMetadataToDownload(input: {
     fetchLyricsText(input.song),
     fetchCover(input.song).catch(() => null)
   ]);
+  input.onMetadataResult?.({ lyricsFetched: lyricsText.length > 0, coverFetched: cover !== null });
   return target === "flac"
     ? injectFlacMetadata(input.bytes, input.song, lyricsText, cover)
     : injectMp3Metadata(input.bytes, input.song, lyricsText, cover);

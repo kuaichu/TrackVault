@@ -1,6 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createQqPlaylistUsingApi } from "./qqmusic-provider.js";
+import { createQqPlaylistUsingApi, getQqSongLyrics, getQqTaggedDownloadFallbackTypes } from "./qqmusic-provider.js";
+
+test("tagged QQ downloads prefer FLAC, 320K MP3, and 128K MP3 before diagnosing M4A", () => {
+  assert.deepEqual(getQqTaggedDownloadFallbackTypes(), ["flac", "320", "128", "m4a"]);
+});
+
+test("QQ lyrics continue to the next songmid candidate after a fetch failure", async () => {
+  const candidates: string[] = [];
+  const result = await getQqSongLyrics("song-mid", "stale-media-mid", "12345", async (candidate) => {
+    candidates.push(candidate);
+    if (candidate === "stale-media-mid") throw new Error("stale");
+    return { lyric: "[00:01.00]next candidate works" };
+  });
+  assert.deepEqual(candidates, ["stale-media-mid", "song-mid"]);
+  assert.equal(result.lines[0]?.text, "next candidate works");
+});
 
 test("createQqPlaylistUsingApi creates a playlist and adds unique song mids in batches", async () => {
   const calls: Array<{ path: string; query?: Record<string, string | number> }> = [];

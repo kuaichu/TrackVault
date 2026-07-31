@@ -267,7 +267,7 @@ type DownloadProgressDialog = {
   handedOff?: boolean;
   status: "preparing" | "downloading" | "done" | "failed";
 };
-type DownloadMethod = "tagged" | "raw" | "server";
+type DownloadMethod = "tagged" | "raw" | "server" | "server-raw";
 type DownloadMethodPicker = {
   song: Song;
   level: DownloadQualityLevel;
@@ -4585,7 +4585,7 @@ export default function App() {
     setDownloadMethodPicker(null);
   }
 
-  async function runServerFallbackDownload(song: Song, level: DownloadQualityLevel, selectedLabel: string) {
+  async function runServerFallbackDownload(song: Song, level: DownloadQualityLevel, selectedLabel: string, metadata: "tagged" | "raw" = "tagged") {
     if (directDownloadingSongId || batchDownloading) {
       return;
     }
@@ -4595,7 +4595,9 @@ export default function App() {
 
     try {
       fallbackTaskId = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const fallbackDetail = "服务器正在准备无标签流式响应，音频不会进入浏览器 JavaScript 内存。";
+      const fallbackDetail = metadata === "raw"
+        ? "服务器正在准备显式裸流响应，不写标签，音频不会进入浏览器 JavaScript 内存。"
+        : "服务器正在获取音频、歌词和封面，并为 MP3/FLAC 写入标签；音频不会进入浏览器 JavaScript 内存。";
       const fallbackCreatedAt = new Date().toISOString();
       setMessage(`正在通过服务器备用下载：${song.title} · ${selectedLabel}`);
       setDownloadProgressMinimized(false);
@@ -4626,15 +4628,17 @@ export default function App() {
         status: "preparing"
       });
       await startServerSongDownload(song, level, {
+        metadata,
         onStatus: (status) => {
           setDownloadProgress((current) => current ? { ...current, detail: status } : current);
           patchBrowserDownloadTask(fallbackTaskId, { detail: status });
         },
         onReady: ({ filename, quality }) => {
           const resolvedQuality = quality || selectedLabel;
+          const delivery = metadata === "raw" ? "服务器将裸流响应交给浏览器。" : "服务器将写好标签的 MP3/FLAC 响应交给浏览器。";
           const resolvedDetail = quality && quality !== selectedLabel
-            ? `实际下载音质为 ${quality}；服务器将无标签流式响应交给浏览器。`
-            : "服务器将无标签流式响应交给浏览器。";
+            ? `实际下载音质为 ${quality}；${delivery}`
+            : delivery;
           setDownloadProgress((current) => current ? { ...current, detail: resolvedDetail } : current);
           patchBrowserDownloadTask(fallbackTaskId, { fileName: filename, quality: resolvedQuality, detail: resolvedDetail });
         }
@@ -4647,14 +4651,14 @@ export default function App() {
         indeterminate: false,
         handedOff: true,
         status: "done",
-        detail: "无标签流式下载已交给浏览器；TrackVault 无法获知最终完成进度。"
+        detail: metadata === "raw" ? "服务器裸流已交给浏览器；不会写入标签。" : "MP3/FLAC 标签下载已交给浏览器；TrackVault 无法获知最终完成进度。"
       } : current);
       patchBrowserDownloadTask(fallbackTaskId, {
         progress: 0,
         speedBytesPerSecond: undefined,
         status: "done",
         delivery: "browser-handoff",
-        detail: "无标签流式下载已交给浏览器；TrackVault 无法获知最终完成进度。"
+        detail: metadata === "raw" ? "服务器裸流已交给浏览器；不会写入标签。" : "MP3/FLAC 标签下载已交给浏览器；TrackVault 无法获知最终完成进度。"
       });
       setMessage(`方案C已交给浏览器流式下载：${song.title}`);
     } catch (fallbackError) {
@@ -4736,7 +4740,7 @@ export default function App() {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "启动下载失败";
       const displayMessage = isMediaMemoryLimitExceededError(error)
-        ? `方案A已停止：${errorMessage}。请选择方案B裸直链或方案C无标签服务器流式下载。`
+        ? `方案A已停止：${errorMessage}。请选择方案B裸直链、方案C服务器标签下载或显式服务器裸流。`
         : isDirectDownloadBlockedError(error)
           ? `方案A被浏览器跨域策略拦截：${errorMessage}。可以重新点击下载，选择方案B裸直链或方案C服务器备用。`
           : `方案A下载失败：${errorMessage}。未保存无标签文件；如需继续，请选择方案B或方案C。`;
@@ -4830,7 +4834,7 @@ export default function App() {
       return;
     }
 
-    await runServerFallbackDownload(picker.song, picker.level, picker.label);
+    await runServerFallbackDownload(picker.song, picker.level, picker.label, method === "server-raw" ? "raw" : "tagged");
   }
 
   async function handleDownload(song: Song) {
@@ -11872,9 +11876,14 @@ export default function App() {
                 <small>直接把 CDN 地址交给浏览器；不写封面/歌词标签，文件名可能由浏览器或 CDN 决定。</small>
               </button>
               <button type="button" className="download-method-option server" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => void runDownloadMethod("server")}>
-                <span>方案C：服务器无标签流式下载</span>
-                <strong>不在浏览器或 Node 中完整缓存音频</strong>
-                <small>服务器校验权限后流式转发并交给浏览器；不会写入封面或歌词标签，也不显示虚假字节进度。</small>
+                <span>方案C：服务器下载并写入标签</span>
+                <strong>服务器为 MP3/FLAC 获取歌词与封面并写入标签</strong>
+                <small>保留 96 MiB 安全上限并串行处理标签，再交给浏览器原生下载；不在前端创建整首音频 Blob。M4A 不支持写标签。</small>
+              </button>
+              <button type="button" className="download-method-option server" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => void runDownloadMethod("server-raw")}>
+                <span>方案C fallback：服务器裸下载</span>
+                <strong>用于仅有 M4A 或无需标签时</strong>
+                <small>显式使用 metadata=raw，由服务器原样流式转发；不会写入封面或歌词标签。</small>
               </button>
             </div>
           </section>

@@ -14,7 +14,9 @@ const testSong: Song = {
   duration: "01:00",
   quality: "MP3 320K",
   availableQualities: [{ level: "exhigh", label: "MP3 320K" }],
-  source: "netease"
+  source: "qqmusic",
+  mediaId: "qq-media-mid",
+  providerSongId: "10086"
 };
 
 function buildMinimalMp3() {
@@ -133,4 +135,14 @@ test("injectMp3Metadata replaces an existing ID3v2 tag", () => {
 
   assert.deepEqual(Array.from(tagged.slice(10 + tagLength, 10 + tagLength + 4)), [0xff, 0xfb, 0x90, 0x64]);
   assert.equal(Boolean(getFrame(readId3Frames(tagged), "TIT2")), true);
+});
+
+test("NetEase MP3 metadata remains compatible with ID3 lyrics and cover frames", () => {
+  const tagged = injectMp3Metadata(buildMinimalMp3(), { ...testSong, source: "netease", mediaId: undefined, providerSongId: undefined }, "[00:00.00]网易歌词", {
+    mimeType: "image/jpeg",
+    bytes: new Uint8Array([0xff, 0xd8, 0xff])
+  });
+  const frames = readId3Frames(tagged);
+  assert.equal(readUnsyncedLyrics(getFrame(frames, "USLT")!), "[00:00.00]网易歌词");
+  assert.equal(Boolean(getFrame(frames, "APIC")), true);
 });

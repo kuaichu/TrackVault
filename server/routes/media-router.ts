@@ -111,6 +111,7 @@ function getDownloadSongFromQuery(request: express.Request): Song {
     artist: typeof request.query.artist === "string" ? request.query.artist : "",
     album: typeof request.query.album === "string" ? request.query.album : "",
     mediaId: typeof request.query.mediaId === "string" ? request.query.mediaId : undefined,
+    providerSongId: typeof request.query.providerSongId === "string" ? request.query.providerSongId : undefined,
     coverUrl: typeof request.query.coverUrl === "string" ? request.query.coverUrl : undefined,
     duration: typeof request.query.duration === "string" ? request.query.duration : "",
     quality: "",
@@ -256,7 +257,19 @@ export function createMediaRouter(dependencies: MediaRouterDependencies) {
     }
 
     try {
-      const directDownload = await dependencies.resolveDirectDownload(song, level as DownloadQualityLevel, userCookieOverride);
+      const metadata = request.query.metadata === "tagged" ? "tagged" : request.query.metadata === "raw" ? "raw" : undefined;
+      const directDownload = metadata
+        ? await dependencies.resolveDirectDownload(song, level as DownloadQualityLevel, userCookieOverride, { metadata })
+        : await dependencies.resolveDirectDownload(song, level as DownloadQualityLevel, userCookieOverride);
+      if (metadata === "tagged" && !dependencies.getAudioMetadataTarget(directDownload)) {
+        response.status(415).json({
+          code: "METADATA_FORMAT_UNSUPPORTED",
+          message: "当前仅有 M4A 或其他不可写标签格式；请选择方案 C 的服务器裸下载。",
+          format: directDownload.type || "unknown",
+          fallbackModes: ["server-raw"]
+        });
+        return;
+      }
       response.json({
         ...directDownload,
         maxInMemoryMediaBytes: dependencies.getMaxInMemoryMediaBytes()
@@ -272,15 +285,30 @@ export function createMediaRouter(dependencies: MediaRouterDependencies) {
     const song = getDownloadSongFromQuery(request);
     const level = typeof request.query.level === "string" ? request.query.level : "standard";
     const userCookieOverride = typeof request.headers["x-user-cookie"] === "string" ? request.headers["x-user-cookie"] : undefined;
+    const metadataRequested = request.query.metadata !== "raw";
 
     if (!song.id || !song.title || !song.artist) {
       response.status(400).json({ message: "缺少歌曲信息" });
       return;
     }
 
+    if (request.headers.range && metadataRequested) {
+      response.status(409).json({
+        code: "METADATA_RANGE_UNSUPPORTED",
+        message: "标签下载不支持 Range 续传；如需原样续传，请显式使用服务器裸下载。",
+        fallbackModes: ["server-raw"]
+      });
+      return;
+    }
+
     const upstreamAbort = bindUpstreamAbort(request, response);
     try {
-      const directDownload = await dependencies.resolveDirectDownload(song, level as DownloadQualityLevel, userCookieOverride);
+      const directDownload = await dependencies.resolveDirectDownload(
+        song,
+        level as DownloadQualityLevel,
+        userCookieOverride,
+        { metadata: metadataRequested ? "tagged" : "raw" }
+      );
       const upstream = await dependencies.fetchImpl(directDownload.url, {
         headers: request.headers.range ? { Range: request.headers.range } : undefined,
         signal: upstreamAbort.controller.signal
@@ -296,12 +324,22 @@ export function createMediaRouter(dependencies: MediaRouterDependencies) {
       const contentLength = upstream.headers.get("content-length");
       const contentRange = upstream.headers.get("content-range");
       const maxInMemoryMediaBytes = dependencies.getMaxInMemoryMediaBytes();
-      const metadataRequested = !request.headers.range && request.query.metadata !== "raw";
       const metadataTarget = metadataRequested ? dependencies.getAudioMetadataTarget({
         filename: directDownload.filename,
         type: directDownload.type,
         contentType
       }) : null;
+      if (metadataRequested && !metadataTarget) {
+        upstreamAbort.controller.abort(new Error("当前音频格式不支持写入标签"));
+        await upstream.body.cancel().catch(() => undefined);
+        response.status(415).json({
+          code: "METADATA_FORMAT_UNSUPPORTED",
+          message: "当前仅有 M4A 或其他不可写标签格式；可改用服务器裸下载。",
+          format: directDownload.type || "unknown",
+          fallbackModes: ["server-raw"]
+        });
+        return;
+      }
       const decision = dependencies.decideServerMediaHandling({
         metadataRequested,
         metadataTarget,
@@ -340,20 +378,24 @@ export function createMediaRouter(dependencies: MediaRouterDependencies) {
           limitBytes: maxInMemoryMediaBytes,
           abortController: upstreamAbort.controller
         });
+        let metadataResult = { lyricsFetched: false, coverFetched: false };
         const taggedBytes = await dependencies.addAudioMetadataToDownload({
           song,
           bytes: originalBytes,
           filename: directDownload.filename,
           type: directDownload.type,
-          contentType
+          contentType,
+          onMetadataResult: (result) => { metadataResult = result; }
         });
         response.setHeader("Content-Disposition", buildContentDisposition(directDownload.filename));
         if (directDownload.quality) {
           response.setHeader("X-TrackVault-Quality", directDownload.quality);
         }
         response.setHeader("X-TrackVault-Max-In-Memory-Media-Bytes", String(maxInMemoryMediaBytes));
+        response.setHeader("X-TrackVault-Lyrics", metadataResult.lyricsFetched ? "fetched" : "missing");
+        response.setHeader("X-TrackVault-Cover", metadataResult.coverFetched ? "fetched" : "missing");
         response.setHeader("Access-Control-Allow-Origin", "*");
-        response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, Content-Length, X-TrackVault-Quality, X-TrackVault-Max-In-Memory-Media-Bytes");
+        response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, Content-Length, X-TrackVault-Quality, X-TrackVault-Max-In-Memory-Media-Bytes, X-TrackVault-Lyrics, X-TrackVault-Cover");
         response.setHeader("Content-Type", metadataTarget === "flac" ? "audio/flac" : "audio/mpeg");
         response.setHeader("Content-Length", String(taggedBytes.byteLength));
         response.status(upstream.status);

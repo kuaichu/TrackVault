@@ -116,7 +116,7 @@ type QqSearchSong = {
   };
 };
 
-type QqLyricResult = {
+export type QqLyricResult = {
   lyric?: string;
   trans?: string;
 };
@@ -689,6 +689,10 @@ export async function createQqPlaylistFromTrackMids(name: string, trackMids: str
     const cookieObj = await getRequiredQqCookie();
     return createQqPlaylistUsingApi(name, trackMids, (path, query) => callQqMusicApi(cookieObj, path, query));
   });
+}
+
+export function getQqTaggedDownloadFallbackTypes(): QqAudioType[] {
+  return ["flac", "320", "128", "m4a"];
 }
 
 function getQqPlaylistId(playlist: QqUserSonglistItem | QqSonglistDetail) {
@@ -1492,8 +1496,13 @@ export async function getQqPlaylistSongs(playlistId: string, page = 1, limit = 1
   };
 }
 
-export async function getQqSongLyrics(songId: string, mediaId?: string): Promise<SongLyrics> {
-  const candidates = Array.from(new Set([mediaId, songId].map((item) => item?.trim()).filter((item): item is string => Boolean(item))))
+export async function getQqSongLyrics(
+  songId: string,
+  mediaId?: string,
+  providerSongId?: string,
+  fetchLyrics: (songMid: string) => Promise<QqLyricResult> = fetchQqSongLyrics
+): Promise<SongLyrics> {
+  const candidates = Array.from(new Set([mediaId, songId, providerSongId].map((item) => item?.trim()).filter((item): item is string => Boolean(item))))
     .sort((left, right) => Number(/^\d+$/.test(left)) - Number(/^\d+$/.test(right)));
   if (candidates.length === 0) {
     throw new Error("缺少 QQ 音乐 songmid。");
@@ -1502,10 +1511,14 @@ export async function getQqSongLyrics(songId: string, mediaId?: string): Promise
   let lines: LyricLine[] = [];
 
   for (const candidate of candidates) {
-    const data = await fetchQqSongLyrics(candidate);
-    lines = mergeQqTranslations(parseQqLrc(data.lyric), parseQqLrc(data.trans));
-    if (lines.length > 0) {
-      break;
+    try {
+      const data = await fetchLyrics(candidate);
+      lines = mergeQqTranslations(parseQqLrc(data.lyric), parseQqLrc(data.trans));
+      if (lines.length > 0) {
+        break;
+      }
+    } catch {
+      // A media_mid can be stale while another songmid candidate remains valid.
     }
   }
 
@@ -1594,8 +1607,10 @@ export async function resolveQqSongStream(song: Song, level: DownloadQualityLeve
   throw new Error(`QQ 音乐未返回可播放链接（已尝试 ${triedText}）。${suffix}`);
 }
 
-export async function resolveQqDirectDownload(song: Song, level: DownloadQualityLevel) {
-  const fallbackTypes = getQqPlaybackFallbackTypes(level);
+export async function resolveQqDirectDownload(song: Song, level: DownloadQualityLevel, options: { metadata?: "tagged" | "raw" } = {}) {
+  const fallbackTypes = options.metadata === "tagged"
+    ? getQqTaggedDownloadFallbackTypes()
+    : getQqPlaybackFallbackTypes(level);
   let resolved: QqResolvedSong | null = null;
   let lastError: Error | null = null;
 

@@ -8,7 +8,7 @@ import { withTestRouter } from "./router-test-http.js";
 
 const timeout = { timeout: 5_000 };
 const bytes = (...values: number[]) => new Uint8Array(values);
-const songQuery = "id=1&title=Track&artist=Artist&album=Album&mediaId=mid&coverUrl=cover&duration=03%3A00&source=netease&level=lossless";
+const songQuery = "id=1&title=Track&artist=Artist&album=Album&mediaId=mid&providerSongId=provider-id&coverUrl=cover&duration=03%3A00&source=netease&level=lossless";
 
 function unexpectedDependency(name: string): never {
   throw new Error(`Unexpected media dependency call: ${name}`);
@@ -196,7 +196,7 @@ test("direct download maps the full Song, cookie and memory limit", timeout, asy
     assert.equal(response.status, 200);
     assert.deepEqual(response.body, { ...directDownload(), maxInMemoryMediaBytes: 1234 });
   });
-  assert.deepEqual(observed, [{ id: "1", title: "Track", artist: "Artist", album: "Album", mediaId: "mid", coverUrl: "cover", duration: "03:00", quality: "", availableQualities: [], source: "netease" }, "lossless", "secret"]);
+  assert.deepEqual(observed, [{ id: "1", title: "Track", artist: "Artist", album: "Album", mediaId: "mid", providerSongId: "provider-id", coverUrl: "cover", duration: "03:00", quality: "", availableQualities: [], source: "netease" }, "lossless", "secret"]);
 });
 
 test("direct download preserves validation and error statuses", timeout, async () => {
@@ -213,7 +213,7 @@ test("direct download preserves validation and error statuses", timeout, async (
   }
 });
 
-test("proxy raw and Range paths stream bytes with original status and headers", timeout, async () => {
+test("proxy explicit raw paths stream bytes with original status and headers", timeout, async () => {
   const observedRanges: (string | null)[] = [];
   const dependencies = createDependencies({
     getMaxInMemoryMediaBytes: () => 4096,
@@ -224,7 +224,7 @@ test("proxy raw and Range paths stream bytes with original status and headers", 
     }
   });
   await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
-    for (const [suffix, range] of [[`metadata=raw&${songQuery}`, undefined], [songQuery, "bytes=1-2"]] as const) {
+    for (const [suffix, range] of [[`metadata=raw&${songQuery}`, undefined], [`metadata=raw&${songQuery}`, "bytes=1-2"]] as const) {
       const response = await requestRaw(`/api/download/proxy?${suffix}`, { headers: range ? { Range: range } : undefined });
       assert.equal(response.status, 206);
       assert.equal(response.headers.get("content-disposition"), "attachment; filename=\"__.mp3\"; filename*=UTF-8''%E6%9B%B2%E7%9B%AE.mp3");
@@ -238,6 +238,50 @@ test("proxy raw and Range paths stream bytes with original status and headers", 
   assert.deepEqual(observedRanges, [null, "bytes=1-2"]);
 });
 
+test("proxy never silently turns a tagged Range request into raw audio", timeout, async () => {
+  await withTestRouter([createMediaRouter(createDependencies())], async ({ request }) => {
+    const response = await request(`/api/download/proxy?${songQuery}`, { headers: { Range: "bytes=1-2" } });
+    assert.equal(response.status, 409);
+    assert.deepEqual(response.body, {
+      code: "METADATA_RANGE_UNSUPPORTED",
+      message: "标签下载不支持 Range 续传；如需原样续传，请显式使用服务器裸下载。",
+      fallbackModes: ["server-raw"]
+    });
+  });
+});
+
+test("direct tagged preflight reports M4A before native browser handoff", timeout, async () => {
+  const dependencies = createDependencies({
+    resolveDirectDownload: async () => directDownload({ filename: "track.m4a", type: "m4a", quality: "M4A 128K" }),
+    getAudioMetadataTarget: () => null
+  });
+  await withTestRouter([createMediaRouter(dependencies)], async ({ request }) => {
+    const response = await request(`/api/download/direct?metadata=tagged&${songQuery.replace("source=netease", "source=qqmusic")}`);
+    assert.equal(response.status, 415);
+    assert.equal(response.body.code, "METADATA_FORMAT_UNSUPPORTED");
+    assert.deepEqual(response.body.fallbackModes, ["server-raw"]);
+  });
+});
+
+test("proxy preserves the NetEase song fields and forwards tagged and raw modes to the resolver", timeout, async () => {
+  const calls: unknown[][] = [];
+  const dependencies = createDependencies({
+    resolveDirectDownload: async (...args) => { calls.push(args); return directDownload(); },
+    fetchImpl: async () => new Response(bytes(1), { headers: { "content-type": "audio/mpeg", "content-length": "1" } }),
+    getAudioMetadataTarget: () => "mp3",
+    addAudioMetadataToDownload: async ({ bytes: original }) => original
+  });
+  await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
+    assert.equal((await requestRaw(`/api/download/proxy?${songQuery}`)).status, 200);
+    assert.equal((await requestRaw(`/api/download/proxy?metadata=raw&${songQuery}`)).status, 200);
+  });
+  assert.equal((calls[0][0] as Song).source, "netease");
+  assert.equal((calls[0][0] as Song).mediaId, "mid");
+  assert.equal((calls[0][0] as Song).providerSongId, "provider-id");
+  assert.equal((calls[0][0] as Song).coverUrl, "cover");
+  assert.deepEqual(calls.map((args) => args[3]), [{ metadata: "tagged" }, { metadata: "raw" }]);
+});
+
 test("proxy tags small MP3 and FLAC responses inside the serial slot", timeout, async () => {
   let slotCalls = 0;
   const targets: string[] = [];
@@ -247,18 +291,45 @@ test("proxy tags small MP3 and FLAC responses inside the serial slot", timeout, 
     fetchImpl: async () => new Response(bytes(1, 2), { headers: { "content-type": "application/octet-stream", "content-length": "2" } }),
     getAudioMetadataTarget: ({ type }) => type === "flac" ? "flac" : "mp3",
     withMediaTaggingSlot: async (operation) => { slotCalls += 1; return operation(); },
-    addAudioMetadataToDownload: async ({ bytes: original, type }) => { targets.push(type ?? ""); return bytes(...original, 9); }
+    addAudioMetadataToDownload: async ({ bytes: original, type, onMetadataResult }) => {
+      targets.push(type ?? "");
+      onMetadataResult?.({ lyricsFetched: true, coverFetched: type === "flac" });
+      return bytes(...original, 9);
+    }
   });
   await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
     for (const [level, mime] of [["mp3", "audio/mpeg"], ["flac", "audio/flac"]]) {
       const response = await requestRaw(`/api/download/proxy?${songQuery.replace("level=lossless", `level=${level}`)}`);
       assert.equal(response.headers.get("content-type"), mime);
       assert.equal(response.headers.get("content-length"), "3");
+      assert.equal(response.headers.get("x-trackvault-lyrics"), "fetched");
+      assert.equal(response.headers.get("x-trackvault-cover"), level === "flac" ? "fetched" : "missing");
       assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes(1, 2, 9));
     }
   });
   assert.equal(slotCalls, 2);
   assert.deepEqual(targets, ["mp3", "flac"]);
+});
+
+test("tagged M4A returns an explicit unsupported error while raw M4A still streams", timeout, async () => {
+  const dependencies = createDependencies({
+    resolveDirectDownload: async () => directDownload({ filename: "track.m4a", type: "m4a", quality: "M4A 128K" }),
+    fetchImpl: async () => new Response(bytes(4, 5), { headers: { "content-type": "audio/mp4", "content-length": "2" } }),
+    getAudioMetadataTarget: () => null
+  });
+  await withTestRouter([createMediaRouter(dependencies)], async ({ request, requestRaw }) => {
+    const tagged = await request(`/api/download/proxy?${songQuery.replace("source=netease", "source=qqmusic")}`);
+    assert.equal(tagged.status, 415);
+    assert.deepEqual(tagged.body, {
+      code: "METADATA_FORMAT_UNSUPPORTED",
+      message: "当前仅有 M4A 或其他不可写标签格式；可改用服务器裸下载。",
+      format: "m4a",
+      fallbackModes: ["server-raw"]
+    });
+    const raw = await requestRaw(`/api/download/proxy?metadata=raw&${songQuery.replace("source=netease", "source=qqmusic")}`);
+    assert.equal(raw.status, 200);
+    assert.deepEqual(new Uint8Array(await raw.arrayBuffer()), bytes(4, 5));
+  });
 });
 
 test("proxy returns structured 413 before reading a known oversized response", timeout, async () => {

@@ -14,7 +14,9 @@ const testSong: Song = {
   duration: "01:00",
   quality: "FLAC",
   availableQualities: [{ level: "lossless", label: "FLAC" }],
-  source: "netease"
+  source: "qqmusic",
+  mediaId: "qq-media-mid",
+  providerSongId: "10086"
 };
 
 function buildBlock(type: number, data: Uint8Array, isLast: boolean) {
@@ -82,6 +84,19 @@ function readVorbisTags(bytes: Uint8Array) {
   return {};
 }
 
+function readFlacBlockTypes(bytes: Uint8Array) {
+  const types: number[] = [];
+  let offset = 4;
+  while (offset + 4 <= bytes.length) {
+    const header = bytes[offset];
+    types.push(header & 0x7f);
+    const length = (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3];
+    offset += 4 + length;
+    if (header & 0x80) break;
+  }
+  return types;
+}
+
 test("injectFlacMetadata writes readable Vorbis comment tags", () => {
   const tagged = injectFlacMetadata(buildMinimalFlac(), testSong, "[00:00.00]一句歌词", {
     mimeType: "image/jpeg",
@@ -94,6 +109,7 @@ test("injectFlacMetadata writes readable Vorbis comment tags", () => {
   assert.equal(tags.ALBUM, "测试专辑");
   assert.equal(tags.LYRICS, "[00:00.00]一句歌词");
   assert.equal(tags.UNSYNCEDLYRICS, "[00:00.00]一句歌词");
+  assert.equal(readFlacBlockTypes(tagged).includes(6), true, "QQ FLAC contains a PICTURE metadata block");
 });
 
 test("injectFlacMetadata handles FLAC files with an ID3v2 prefix", () => {
@@ -115,4 +131,13 @@ test("injectFlacMetadata handles FLAC files with an ID3v2 prefix", () => {
   assert.equal(isFlacBytes(dirtyFlac), true);
   assert.deepEqual(Array.from(tagged.slice(0, 4)), [0x66, 0x4c, 0x61, 0x43]);
   assert.equal(readVorbisTags(tagged).TITLE, "测试歌曲");
+});
+
+test("NetEase FLAC metadata remains compatible with lyrics and picture blocks", () => {
+  const tagged = injectFlacMetadata(buildMinimalFlac(), { ...testSong, source: "netease", mediaId: undefined, providerSongId: undefined }, "[00:00.00]网易歌词", {
+    mimeType: "image/jpeg",
+    bytes: new Uint8Array([0xff, 0xd8, 0xff])
+  });
+  assert.equal(readVorbisTags(tagged).LYRICS, "[00:00.00]网易歌词");
+  assert.equal(readFlacBlockTypes(tagged).includes(6), true);
 });
