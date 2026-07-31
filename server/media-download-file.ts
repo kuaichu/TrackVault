@@ -53,19 +53,18 @@ export async function downloadMediaResponseToFile(input: {
   let taggedTempCreated = false;
 
   try {
-    const source = Readable.fromWeb(input.response.body as import("node:stream/web").ReadableStream<Uint8Array>);
-    const progress = new Transform({
-      transform(chunk: Buffer, _encoding, callback) {
-        receivedBytes += chunk.byteLength;
-        input.onProgress?.(receivedBytes, contentLength);
-        callback(null, chunk);
-      }
-    });
-
     try {
-      const rawWriteStream = fs.createWriteStream(rawTempPath, { flags: "wx" });
-      rawWriteStream.once("open", () => {
-        rawTempCreated = true;
+      const rawFileHandle = await fsPromises.open(rawTempPath, "wx");
+      rawTempCreated = true;
+      await rawFileHandle.close();
+      const rawWriteStream = fs.createWriteStream(rawTempPath, { flags: "w" });
+      const source = Readable.fromWeb(input.response.body as import("node:stream/web").ReadableStream<Uint8Array>);
+      const progress = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          receivedBytes += chunk.byteLength;
+          input.onProgress?.(receivedBytes, contentLength);
+          callback(null, chunk);
+        }
       });
       await pipeline(source, progress, rawWriteStream);
     } catch (error) {
@@ -101,10 +100,10 @@ export async function downloadMediaResponseToFile(input: {
           throw new Error("媒体文件在标签处理前超过安全内存上限");
         }
         const taggedBytes = await (input.writeMetadata?.(originalBytes) ?? originalBytes);
-        const taggedWriteStream = fs.createWriteStream(taggedTempPath, { flags: "wx" });
-        taggedWriteStream.once("open", () => {
-          taggedTempCreated = true;
-        });
+        const taggedFileHandle = await fsPromises.open(taggedTempPath, "wx");
+        taggedTempCreated = true;
+        await taggedFileHandle.close();
+        const taggedWriteStream = fs.createWriteStream(taggedTempPath, { flags: "w" });
         await pipeline(Readable.from([taggedBytes]), taggedWriteStream);
         return taggedBytes.byteLength;
       });
