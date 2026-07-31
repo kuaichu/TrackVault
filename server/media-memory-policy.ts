@@ -74,7 +74,7 @@ export function decideServerMediaHandling(input: {
   contentLength?: number;
   limitBytes: number;
 }): ServerMediaHandlingDecision {
-  if (!input.metadataRequested || !input.metadataTarget) {
+  if (!input.metadataRequested) {
     return { kind: "stream" };
   }
 

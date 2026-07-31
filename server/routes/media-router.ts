@@ -4,7 +4,8 @@ import { pipeline } from "node:stream/promises";
 import type {
   addAudioMetadataToDownload,
   getAudioMetadataTarget,
-  getHighResolutionCoverUrl
+  getHighResolutionCoverUrl,
+  hasConflictingAudioFormatDeclaration
 } from "../download-metadata.js";
 import type { MediaMemoryLimitExceededError } from "../media-memory-policy.js";
 import type {
@@ -25,6 +26,7 @@ export type MediaRouterDependencies = {
   fetchImpl: typeof globalThis.fetch;
   getHighResolutionCoverUrl: typeof getHighResolutionCoverUrl;
   getAudioMetadataTarget: typeof getAudioMetadataTarget;
+  hasConflictingAudioFormatDeclaration: typeof hasConflictingAudioFormatDeclaration;
   addAudioMetadataToDownload: typeof addAudioMetadataToDownload;
   decideServerMediaHandling: typeof decideServerMediaHandling;
   getMaxInMemoryMediaBytes: typeof getMaxInMemoryMediaBytes;
@@ -326,25 +328,9 @@ export function createMediaRouter(dependencies: MediaRouterDependencies) {
       const contentLength = upstream.headers.get("content-length");
       const contentRange = upstream.headers.get("content-range");
       const maxInMemoryMediaBytes = dependencies.getMaxInMemoryMediaBytes();
-      const metadataTarget = metadataRequested ? dependencies.getAudioMetadataTarget({
-        filename: directDownload.filename,
-        type: directDownload.type,
-        contentType
-      }) : null;
-      if (metadataRequested && !metadataTarget) {
-        upstreamAbort.controller.abort(new Error("当前音频格式不支持写入标签"));
-        await upstream.body.cancel().catch(() => undefined);
-        response.status(415).json({
-          code: "METADATA_FORMAT_UNSUPPORTED",
-          message: "当前仅有 M4A 或其他不可写标签格式；可改用服务器裸下载。",
-          format: directDownload.type || "unknown",
-          fallbackModes: ["server-raw"]
-        });
-        return;
-      }
       const decision = dependencies.decideServerMediaHandling({
         metadataRequested,
-        metadataTarget,
+        metadataTarget: null,
         contentLength: dependencies.getResponseContentLength(upstream),
         limitBytes: maxInMemoryMediaBytes
       });
@@ -381,11 +367,17 @@ export function createMediaRouter(dependencies: MediaRouterDependencies) {
           abortController: upstreamAbort.controller
         });
         const verifiedMetadataTarget = dependencies.getAudioMetadataTarget({ bytes: originalBytes });
-        if (!verifiedMetadataTarget || verifiedMetadataTarget !== metadataTarget) {
+        if (!verifiedMetadataTarget || dependencies.hasConflictingAudioFormatDeclaration({
+          filename: directDownload.filename,
+          type: directDownload.type,
+          contentType
+        }, verifiedMetadataTarget)) {
           if (!response.destroyed) {
             response.status(415).json({
               code: "METADATA_FORMAT_UNSUPPORTED",
-              message: "音频内容不是与声明格式一致的 MP3/FLAC；可改用服务器裸下载。",
+              message: verifiedMetadataTarget
+                ? "音频内容不是与声明格式一致的 MP3/FLAC；可改用服务器裸下载。"
+                : "当前仅有 M4A 或其他不可写标签格式；可改用服务器裸下载。",
               format: directDownload.type || "unknown",
               fallbackModes: ["server-raw"]
             });

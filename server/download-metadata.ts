@@ -12,6 +12,44 @@ function normalizeAudioType(type: string | null | undefined) {
   return type?.replace(/^\./, "").toLowerCase() ?? "";
 }
 
+type DeclaredAudioFormat = "flac" | "mp3" | "m4a";
+
+function getFilenameAudioFormat(filename: string | null | undefined): DeclaredAudioFormat | null {
+  const normalized = filename?.toLowerCase() ?? "";
+  if (normalized.endsWith(".flac")) return "flac";
+  if (normalized.endsWith(".mp3")) return "mp3";
+  if (normalized.endsWith(".m4a") || normalized.endsWith(".mp4")) return "m4a";
+  return null;
+}
+
+function getResolverAudioFormat(type: string | null | undefined): DeclaredAudioFormat | null {
+  const normalized = normalizeAudioType(type);
+  if (normalized === "flac") return "flac";
+  if (normalized === "mp3") return "mp3";
+  if (normalized === "m4a" || normalized === "mp4") return "m4a";
+  return null;
+}
+
+function getContentTypeAudioFormat(contentType: string | null | undefined): DeclaredAudioFormat | null {
+  const normalized = contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (normalized === "audio/flac" || normalized === "audio/x-flac") return "flac";
+  if (normalized === "audio/mpeg" || normalized === "audio/mp3") return "mp3";
+  if (normalized === "audio/mp4" || normalized === "audio/m4a" || normalized === "audio/x-m4a") return "m4a";
+  return null;
+}
+
+export function hasConflictingAudioFormatDeclaration(input: {
+  filename?: string | null;
+  type?: string | null;
+  contentType?: string | null;
+}, actualFormat: "flac" | "mp3") {
+  return [
+    getFilenameAudioFormat(input.filename),
+    getResolverAudioFormat(input.type),
+    getContentTypeAudioFormat(input.contentType)
+  ].some((declaredFormat) => declaredFormat !== null && declaredFormat !== actualFormat);
+}
+
 export function isFlacDownloadTarget(input: {
   filename?: string | null;
   type?: string | null;

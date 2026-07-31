@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addAudioMetadataToDownload, getAudioMetadataTarget } from "../download-metadata.js";
+import { addAudioMetadataToDownload, getAudioMetadataTarget, hasConflictingAudioFormatDeclaration } from "../download-metadata.js";
 import { MediaMemoryLimitExceededError, decideServerMediaHandling, getResponseContentLength, readResponseBytesWithLimit } from "../media-memory-policy.js";
 import { withMediaTaggingSlot } from "../media-memory-policy.js";
 import { MediaAccessError } from "../media-security.js";
@@ -22,6 +22,7 @@ function createDependencies(overrides: Partial<MediaRouterDependencies> = {}): M
     fetchImpl: async () => unexpectedDependency("fetchImpl"),
     getHighResolutionCoverUrl: (url) => url,
     getAudioMetadataTarget: () => unexpectedDependency("getAudioMetadataTarget"),
+    hasConflictingAudioFormatDeclaration,
     addAudioMetadataToDownload: async () => unexpectedDependency("addAudioMetadataToDownload"),
     decideServerMediaHandling,
     getMaxInMemoryMediaBytes: () => 96 * 1024 * 1024,
@@ -324,8 +325,8 @@ test("proxy tags small MP3 and FLAC responses inside the serial slot", timeout, 
 test("tagged M4A returns an explicit unsupported error while raw M4A still streams", timeout, async () => {
   const dependencies = createDependencies({
     resolveDirectDownload: async () => directDownload({ filename: "track.m4a", type: "m4a", quality: "M4A 128K" }),
-    fetchImpl: async () => new Response(bytes(4, 5), { headers: { "content-type": "audio/mp4", "content-length": "2" } }),
-    getAudioMetadataTarget: () => null
+    fetchImpl: async () => new Response(bytes(0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70), { headers: { "content-type": "audio/mp4", "content-length": "8" } }),
+    getAudioMetadataTarget
   });
   await withTestRouter([createMediaRouter(dependencies)], async ({ request, requestRaw }) => {
     const tagged = await request(`/api/download/proxy?${songQuery.replace("source=netease", "source=qqmusic")}`);
@@ -338,7 +339,7 @@ test("tagged M4A returns an explicit unsupported error while raw M4A still strea
     });
     const raw = await requestRaw(`/api/download/proxy?metadata=raw&${songQuery.replace("source=netease", "source=qqmusic")}`);
     assert.equal(raw.status, 200);
-    assert.deepEqual(new Uint8Array(await raw.arrayBuffer()), bytes(4, 5));
+    assert.deepEqual(new Uint8Array(await raw.arrayBuffer()), bytes(0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70));
   });
 });
 
@@ -388,26 +389,46 @@ test("proxy preserves MediaAccessError status and unknown paths reach next middl
 test("tagged proxy rejects non-audio bytes and declared-format conflicts with structured 415", timeout, async () => {
   const cases = [
     { filename: "track.mp3", type: "mp3", contentType: "text/html", content: bytes(0x3c, 0x68, 0x74, 0x6d, 0x6c) },
-    { filename: "track.mp3", type: "mp3", contentType: "audio/mpeg", content: bytes(0x66, 0x4c, 0x61, 0x43) },
+    { filename: "track.mp3", type: "mp3", contentType: "audio/flac", content: bytes(0x66, 0x4c, 0x61, 0x43) },
     { filename: "track.flac", type: "flac", contentType: "audio/flac", content: bytes(0xff, 0xfb, 0x90, 0x64) },
+    { filename: "track.m4a", type: "m4a", contentType: "audio/mpeg", content: bytes(0xff, 0xfb, 0x90, 0x64) },
     { filename: "track.mp3", type: "mp3", contentType: "audio/mpeg", content: bytes(0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70) }
   ];
   let taggerCalls = 0;
-  for (const item of cases) {
-    const dependencies = createDependencies({
-      resolveDirectDownload: async () => directDownload({ filename: item.filename, type: item.type }),
-      fetchImpl: async () => new Response(item.content, { headers: { "content-type": item.contentType, "content-length": String(item.content.byteLength) } }),
-      getAudioMetadataTarget,
-      addAudioMetadataToDownload: async ({ bytes: original }) => { taggerCalls += 1; return original; }
-    });
-    await withTestRouter([createMediaRouter(dependencies)], async ({ request }) => {
+  let current = cases[0];
+  const dependencies = createDependencies({
+    resolveDirectDownload: async () => directDownload({ filename: current.filename, type: current.type }),
+    fetchImpl: async () => new Response(current.content, { headers: { "content-type": current.contentType, "content-length": String(current.content.byteLength) } }),
+    getAudioMetadataTarget,
+    addAudioMetadataToDownload: async ({ bytes: original }) => { taggerCalls += 1; return original; }
+  });
+  await withTestRouter([createMediaRouter(dependencies)], async ({ request }) => {
+    for (const item of cases) {
+      current = item;
       const response = await request(`/api/download/proxy?${songQuery}`);
       assert.equal(response.status, 415);
       assert.equal((response.body as { code?: string }).code, "METADATA_FORMAT_UNSUPPORTED");
       assert.deepEqual((response.body as { fallbackModes?: string[] }).fallbackModes, ["server-raw"]);
-    });
-  }
+    }
+  });
   assert.equal(taggerCalls, 0);
+});
+
+test("tagged proxy accepts MP3 magic when filename, resolver type, and Content-Type are unknown", timeout, async () => {
+  let taggerCalls = 0;
+  const dependencies = createDependencies({
+    resolveDirectDownload: async () => directDownload({ filename: "track.bin", type: "unknown" }),
+    fetchImpl: async () => new Response(bytes(0xff, 0xfb, 0x90, 0x64), { headers: { "content-type": "application/octet-stream", "content-length": "4" } }),
+    getAudioMetadataTarget,
+    addAudioMetadataToDownload: async ({ bytes: original }) => { taggerCalls += 1; return original; }
+  });
+  await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
+    const response = await requestRaw(`/api/download/proxy?${songQuery}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "audio/mpeg");
+    assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes(0xff, 0xfb, 0x90, 0x64));
+  });
+  assert.equal(taggerCalls, 1);
 });
 
 test("a tagged metadata disconnect releases the serial slot for the next request", { timeout: 10_000 }, async () => {

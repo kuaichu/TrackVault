@@ -12,7 +12,7 @@ import { getCloudSongs } from "./cloud-provider.js";
 import { getSongCommentReplies, getSongComments, replyToSongComment, setSongCommentLiked } from "./comment-provider.js";
 import { getDiscoverSongs } from "./discover-provider.js";
 import { getAccountState, getDataScopeId } from "./data-scope.js";
-import { addAudioMetadataToDownload, getAudioMetadataTarget, getHighResolutionCoverUrl } from "./download-metadata.js";
+import { addAudioMetadataToDownload, getAudioMetadataTarget, getHighResolutionCoverUrl, hasConflictingAudioFormatDeclaration } from "./download-metadata.js";
 import { getHeartbeatSongs } from "./heartbeat-provider.js";
 import { getArtistProfile, resolveArtistIdByName } from "./artist-provider.js";
 import { getPlayHistory, getSearchHistory, removeSearchHistory, savePlayHistory, saveSearchHistory } from "./history-store.js";
@@ -180,6 +180,7 @@ app.use(createMediaRouter({
   fetchImpl: fetch,
   getHighResolutionCoverUrl,
   getAudioMetadataTarget,
+  hasConflictingAudioFormatDeclaration,
   addAudioMetadataToDownload,
   decideServerMediaHandling,
   getMaxInMemoryMediaBytes,

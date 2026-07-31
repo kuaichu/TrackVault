@@ -131,7 +131,10 @@ test("server metadata policy returns a structured oversized rejection with fallb
 
 test("server metadata policy chooses streaming for a raw proxy", () => {
   assert.deepEqual(decideServerMediaHandling({ metadataRequested: false, metadataTarget: "flac", contentLength: 999, limitBytes: 4 }), { kind: "stream" });
-  assert.deepEqual(decideServerMediaHandling({ metadataRequested: true, metadataTarget: null, contentLength: 999, limitBytes: 4 }), { kind: "stream" });
+});
+
+test("server metadata policy buffers tagged media with unknown declarations for magic-byte classification", () => {
+  assert.deepEqual(decideServerMediaHandling({ metadataRequested: true, metadataTarget: null, contentLength: 4, limitBytes: 4 }), { kind: "buffer-and-tag" });
 });
 
 test("server media tagging slot serializes full-memory operations", async () => {
