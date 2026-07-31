@@ -2,8 +2,28 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createQqPlaylistUsingApi, getQqSongLyrics, getQqTaggedDownloadFallbackTypes } from "./qqmusic-provider.js";
 
-test("tagged QQ downloads prefer FLAC, 320K MP3, and 128K MP3 before diagnosing M4A", () => {
-  assert.deepEqual(getQqTaggedDownloadFallbackTypes(), ["flac", "320", "128", "m4a"]);
+test("tagged QQ downloads respect the requested quality fallback chain", () => {
+  assert.deepEqual(getQqTaggedDownloadFallbackTypes("standard"), ["128", "m4a"]);
+  assert.deepEqual(getQqTaggedDownloadFallbackTypes("exhigh"), ["320", "128", "m4a"]);
+  assert.deepEqual(getQqTaggedDownloadFallbackTypes("lossless"), ["flac", "320", "128", "m4a"]);
+  assert.deepEqual(getQqTaggedDownloadFallbackTypes("hires"), ["flac", "320", "128", "m4a"]);
+});
+
+test("QQ lyrics return empty only when at least one candidate request succeeds", async () => {
+  const empty = await getQqSongLyrics("song-mid", "stale-mid", undefined, async (candidate) => {
+    if (candidate === "stale-mid") throw new Error("stale");
+    return { lyric: "" };
+  });
+  assert.deepEqual(empty.lines, []);
+
+  const lastError = new Error("last candidate failed");
+  await assert.rejects(
+    () => getQqSongLyrics("song-mid", "stale-mid", undefined, async (candidate) => {
+      if (candidate === "song-mid") throw lastError;
+      throw new Error("first candidate failed");
+    }),
+    (error) => error === lastError
+  );
 });
 
 test("QQ lyrics continue to the next songmid candidate after a fetch failure", async () => {

@@ -11878,7 +11878,7 @@ export default function App() {
               <button type="button" className="download-method-option server" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => void runDownloadMethod("server")}>
                 <span>方案C：服务器下载并写入标签</span>
                 <strong>服务器为 MP3/FLAC 获取歌词与封面并写入标签</strong>
-                <small>保留 96 MiB 安全上限并串行处理标签，再交给浏览器原生下载；不在前端创建整首音频 Blob。M4A 不支持写标签。</small>
+                <small>默认使用 96 MiB 安全上限（可配置）并串行处理标签，再交给浏览器原生下载；不在前端创建整首音频 Blob。M4A 不支持写标签。</small>
               </button>
               <button type="button" className="download-method-option server" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => void runDownloadMethod("server-raw")}>
                 <span>方案C fallback：服务器裸下载</span>

@@ -66,11 +66,20 @@ function stripExistingId3Tags(bytes: Uint8Array) {
 export function isMp3Bytes(input: Uint8Array) {
   const id3v2Length = getId3v2TagLength(input);
   const offset = id3v2Length > 0 ? id3v2Length : 0;
+  const versionBits = (input[offset + 1] ?? 0) & 0x18;
+  const layerBits = (input[offset + 1] ?? 0) & 0x06;
+  const bitrateBits = (input[offset + 2] ?? 0) & 0xf0;
+  const sampleRateBits = (input[offset + 2] ?? 0) & 0x0c;
 
   return (
-    input.length >= offset + 2 &&
+    input.length >= offset + 4 &&
     input[offset] === 0xff &&
-    (input[offset + 1] & 0xe0) === 0xe0
+    (input[offset + 1] & 0xe0) === 0xe0 &&
+    versionBits !== 0x08 &&
+    layerBits !== 0 &&
+    bitrateBits !== 0 &&
+    bitrateBits !== 0xf0 &&
+    sampleRateBits !== 0x0c
   );
 }
 

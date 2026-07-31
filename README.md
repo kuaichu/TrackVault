@@ -48,7 +48,7 @@ TrackVault 目前提供三种下载方式：
 - MP3 写入 ID3v2.3 标签。
 - FLAC / Hi-Res FLAC 写入 Vorbis Comment 和封面块。
 - 标签内容包括标题、歌手、专辑、封面和歌词。
-- 方案 C 保留 96 MiB 安全上限和串行标签处理，不在前端创建整首音频 Blob。
+- 方案 C 默认使用 96 MiB 安全上限（可通过 `TRACKVAULT_MAX_IN_MEMORY_MEDIA_MB` 配置）并串行处理标签，不在前端创建整首音频 Blob。
 - 方案 C 仅为 MP3/FLAC 写标签；只有 M4A 可用时会明确提示 `METADATA_FORMAT_UNSUPPORTED`，可选择显式服务器裸下载（`metadata=raw`）。项目不会新增 MP4 atom 标签器。
 - 封面会尽量使用高清图。
 - 备用下载显示当前速度和文件大小。
@@ -209,7 +209,7 @@ systemctl restart trackvault.service
 - 网易云和 QQ 音乐接口都不是稳定的公开业务 API，接口返回可能随时变化。
 - 部分音源依赖账号权限、版权状态和平台限制，项目不会保证所有歌曲都可播放或可下载。
 - 方案 A 和方案 B 都依赖浏览器能读取 CDN 音频流；被跨域策略拦截时需要使用方案 C。
-- QQ 音乐方案 C 按 FLAC、320K MP3、128K MP3 的顺序选择可写标签格式，不会静默降级为无标签 M4A。
+- QQ 音乐方案 C 尊重所选音质逐级降级：标准音质为 128K MP3 → M4A，极高音质为 320K MP3 → 128K MP3 → M4A，无损/Hi-Res 为 FLAC → 320K MP3 → 128K MP3 → M4A；M4A 会明确提示改用裸下载。
 - QQ 音乐接入仍在打磨，暂时不等同于完整 QQ 音乐客户端。
 - 当前代码仍偏快速迭代形态，后续需要按模块拆分播放、下载、歌单和平台适配层。
 

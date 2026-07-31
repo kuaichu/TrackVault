@@ -137,6 +137,14 @@ test("injectMp3Metadata replaces an existing ID3v2 tag", () => {
   assert.equal(Boolean(getFrame(readId3Frames(tagged), "TIT2")), true);
 });
 
+test("isMp3Bytes rejects reserved or incomplete MPEG frame headers", () => {
+  assert.equal(isMp3Bytes(new Uint8Array([0xff, 0xfb])), false);
+  assert.equal(isMp3Bytes(new Uint8Array([0xff, 0xe0, 0x90, 0x64])), false);
+  assert.equal(isMp3Bytes(new Uint8Array([0xff, 0xfb, 0x00, 0x64])), false);
+  assert.equal(isMp3Bytes(new Uint8Array([0xff, 0xfb, 0xfc, 0x64])), false);
+  assert.equal(isMp3Bytes(buildMinimalMp3()), true);
+});
+
 test("NetEase MP3 metadata remains compatible with ID3 lyrics and cover frames", () => {
   const tagged = injectMp3Metadata(buildMinimalMp3(), { ...testSong, source: "netease", mediaId: undefined, providerSongId: undefined }, "[00:00.00]网易歌词", {
     mimeType: "image/jpeg",

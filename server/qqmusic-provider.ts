@@ -691,8 +691,8 @@ export async function createQqPlaylistFromTrackMids(name: string, trackMids: str
   });
 }
 
-export function getQqTaggedDownloadFallbackTypes(): QqAudioType[] {
-  return ["flac", "320", "128", "m4a"];
+export function getQqTaggedDownloadFallbackTypes(level: DownloadQualityLevel): QqAudioType[] {
+  return getQqPlaybackFallbackTypes(level);
 }
 
 function getQqPlaylistId(playlist: QqUserSonglistItem | QqSonglistDetail) {
@@ -1017,7 +1017,7 @@ function decodeQqBase64Text(value: unknown) {
   }
 }
 
-async function fetchQqSongLyrics(songMid: string): Promise<QqLyricResult> {
+async function fetchQqSongLyrics(songMid: string, signal?: AbortSignal): Promise<QqLyricResult> {
   const params = new URLSearchParams({
     songmid: songMid,
     pcachetime: String(Date.now()),
@@ -1031,6 +1031,7 @@ async function fetchQqSongLyrics(songMid: string): Promise<QqLyricResult> {
     needNewCode: "0"
   });
   const response = await fetch(`https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?${params.toString()}`, {
+    signal,
     headers: {
       Referer: "https://y.qq.com"
     }
@@ -1500,7 +1501,8 @@ export async function getQqSongLyrics(
   songId: string,
   mediaId?: string,
   providerSongId?: string,
-  fetchLyrics: (songMid: string) => Promise<QqLyricResult> = fetchQqSongLyrics
+  fetchLyrics: (songMid: string, signal?: AbortSignal) => Promise<QqLyricResult> = fetchQqSongLyrics,
+  signal?: AbortSignal
 ): Promise<SongLyrics> {
   const candidates = Array.from(new Set([mediaId, songId, providerSongId].map((item) => item?.trim()).filter((item): item is string => Boolean(item))))
     .sort((left, right) => Number(/^\d+$/.test(left)) - Number(/^\d+$/.test(right)));
@@ -1509,17 +1511,25 @@ export async function getQqSongLyrics(
   }
 
   let lines: LyricLine[] = [];
+  let hadSuccessfulRequest = false;
+  let lastError: unknown;
 
   for (const candidate of candidates) {
     try {
-      const data = await fetchLyrics(candidate);
+      const data = await fetchLyrics(candidate, signal);
+      hadSuccessfulRequest = true;
       lines = mergeQqTranslations(parseQqLrc(data.lyric), parseQqLrc(data.trans));
       if (lines.length > 0) {
         break;
       }
-    } catch {
+    } catch (error) {
+      lastError = error;
       // A media_mid can be stale while another songmid candidate remains valid.
     }
+  }
+
+  if (!hadSuccessfulRequest && lastError !== undefined) {
+    throw lastError;
   }
 
   return {
@@ -1607,16 +1617,16 @@ export async function resolveQqSongStream(song: Song, level: DownloadQualityLeve
   throw new Error(`QQ 音乐未返回可播放链接（已尝试 ${triedText}）。${suffix}`);
 }
 
-export async function resolveQqDirectDownload(song: Song, level: DownloadQualityLevel, options: { metadata?: "tagged" | "raw" } = {}) {
+export async function resolveQqDirectDownload(song: Song, level: DownloadQualityLevel, options: { metadata?: "tagged" | "raw" } = {}, resolveByType = resolveQqSongUrlByType) {
   const fallbackTypes = options.metadata === "tagged"
-    ? getQqTaggedDownloadFallbackTypes()
+    ? getQqTaggedDownloadFallbackTypes(level)
     : getQqPlaybackFallbackTypes(level);
   let resolved: QqResolvedSong | null = null;
   let lastError: Error | null = null;
 
   for (const qqType of fallbackTypes) {
     try {
-      resolved = await resolveQqSongUrlByType(song, qqType);
+      resolved = await resolveByType(song, qqType);
       break;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error("下载链接获取失败");

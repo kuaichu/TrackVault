@@ -53,12 +53,14 @@ function bindUpstreamAbort(request: express.Request, response: express.Response)
 
   request.once("aborted", abort);
   response.once("close", abortOnIncompleteClose);
+  response.once("error", abort);
 
   return {
     controller,
     cleanup() {
       request.off("aborted", abort);
       response.off("close", abortOnIncompleteClose);
+      response.off("error", abort);
     }
   };
 }
@@ -378,6 +380,18 @@ export function createMediaRouter(dependencies: MediaRouterDependencies) {
           limitBytes: maxInMemoryMediaBytes,
           abortController: upstreamAbort.controller
         });
+        const verifiedMetadataTarget = dependencies.getAudioMetadataTarget({ bytes: originalBytes });
+        if (!verifiedMetadataTarget || verifiedMetadataTarget !== metadataTarget) {
+          if (!response.destroyed) {
+            response.status(415).json({
+              code: "METADATA_FORMAT_UNSUPPORTED",
+              message: "音频内容不是与声明格式一致的 MP3/FLAC；可改用服务器裸下载。",
+              format: directDownload.type || "unknown",
+              fallbackModes: ["server-raw"]
+            });
+          }
+          return;
+        }
         let metadataResult = { lyricsFetched: false, coverFetched: false };
         const taggedBytes = await dependencies.addAudioMetadataToDownload({
           song,
@@ -385,8 +399,12 @@ export function createMediaRouter(dependencies: MediaRouterDependencies) {
           filename: directDownload.filename,
           type: directDownload.type,
           contentType,
+          signal: upstreamAbort.controller.signal,
           onMetadataResult: (result) => { metadataResult = result; }
         });
+        if (response.destroyed) {
+          return;
+        }
         response.setHeader("Content-Disposition", buildContentDisposition(directDownload.filename));
         if (directDownload.quality) {
           response.setHeader("X-TrackVault-Quality", directDownload.quality);
@@ -396,7 +414,7 @@ export function createMediaRouter(dependencies: MediaRouterDependencies) {
         response.setHeader("X-TrackVault-Cover", metadataResult.coverFetched ? "fetched" : "missing");
         response.setHeader("Access-Control-Allow-Origin", "*");
         response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, Content-Length, X-TrackVault-Quality, X-TrackVault-Max-In-Memory-Media-Bytes, X-TrackVault-Lyrics, X-TrackVault-Cover");
-        response.setHeader("Content-Type", metadataTarget === "flac" ? "audio/flac" : "audio/mpeg");
+        response.setHeader("Content-Type", verifiedMetadataTarget === "flac" ? "audio/flac" : "audio/mpeg");
         response.setHeader("Content-Length", String(taggedBytes.byteLength));
         response.status(upstream.status);
 

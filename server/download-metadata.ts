@@ -6,6 +6,7 @@ import { readResponseBytesWithLimit } from "./media-memory-policy.js";
 import type { Song } from "./types.js";
 
 const COVER_MAX_BYTES = 5 * 1024 * 1024;
+const METADATA_REQUEST_TIMEOUT_MS = 15_000;
 
 function normalizeAudioType(type: string | null | undefined) {
   return type?.replace(/^\./, "").toLowerCase() ?? "";
@@ -55,6 +56,12 @@ export function getAudioMetadataTarget(input: {
   contentType?: string | null;
   bytes?: Uint8Array | null;
 }): "flac" | "mp3" | null {
+  if (input.bytes) {
+    if (isFlacBytes(input.bytes)) return "flac";
+    if (isMp3Bytes(input.bytes)) return "mp3";
+    return null;
+  }
+
   if (isFlacDownloadTarget(input)) {
     return "flac";
   }
@@ -79,7 +86,7 @@ function isAllowedCoverHost(hostname: string) {
   );
 }
 
-async function fetchCover(song: Song): Promise<FlacCoverData | null> {
+async function fetchCover(song: Song, signal: AbortSignal): Promise<FlacCoverData | null> {
   if (!song.coverUrl?.trim()) {
     return null;
   }
@@ -89,7 +96,7 @@ async function fetchCover(song: Song): Promise<FlacCoverData | null> {
     return null;
   }
 
-  const response = await fetch(coverUrl);
+  const response = await fetch(coverUrl, { signal });
   if (!response.ok) {
     return null;
   }
@@ -138,13 +145,14 @@ export function getHighResolutionCoverUrl(rawUrl: string) {
   }
 }
 
-async function fetchLyricsText(song: Song) {
+async function fetchLyricsText(song: Song, signal: AbortSignal) {
   try {
     const lyrics = song.source === "qqmusic"
-      ? await getQqSongLyrics(song.id, song.mediaId, song.providerSongId)
-      : await getSongLyrics(song.id);
+      ? await getQqSongLyrics(song.id, song.mediaId, song.providerSongId, undefined, signal)
+      : await getSongLyrics(song.id, signal);
     return formatLyricsAsLrc(lyrics);
-  } catch {
+  } catch (error) {
+    if (signal.aborted) throw error;
     return "";
   }
 }
@@ -155,6 +163,7 @@ export async function addAudioMetadataToDownload(input: {
   filename?: string | null;
   type?: string | null;
   contentType?: string | null;
+  signal?: AbortSignal;
   onMetadataResult?: (result: { lyricsFetched: boolean; coverFetched: boolean }) => void;
 }) {
   const target = getAudioMetadataTarget(input);
@@ -162,12 +171,22 @@ export async function addAudioMetadataToDownload(input: {
     return input.bytes;
   }
 
-  const [lyricsText, cover] = await Promise.all([
-    fetchLyricsText(input.song),
-    fetchCover(input.song).catch(() => null)
-  ]);
-  input.onMetadataResult?.({ lyricsFetched: lyricsText.length > 0, coverFetched: cover !== null });
-  return target === "flac"
-    ? injectFlacMetadata(input.bytes, input.song, lyricsText, cover)
-    : injectMp3Metadata(input.bytes, input.song, lyricsText, cover);
+  const timeoutController = new AbortController();
+  const timeout = setTimeout(() => timeoutController.abort(new Error("歌词或封面请求超时")), METADATA_REQUEST_TIMEOUT_MS);
+  const signal = input.signal ? AbortSignal.any([input.signal, timeoutController.signal]) : timeoutController.signal;
+  try {
+    const [lyricsText, cover] = await Promise.all([
+      fetchLyricsText(input.song, signal),
+      fetchCover(input.song, signal).catch((error) => {
+        if (signal.aborted) throw error;
+        return null;
+      })
+    ]);
+    input.onMetadataResult?.({ lyricsFetched: lyricsText.length > 0, coverFetched: cover !== null });
+    return target === "flac"
+      ? injectFlacMetadata(input.bytes, input.song, lyricsText, cover)
+      : injectMp3Metadata(input.bytes, input.song, lyricsText, cover);
+  } finally {
+    clearTimeout(timeout);
+  }
 }

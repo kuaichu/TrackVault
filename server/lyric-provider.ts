@@ -108,7 +108,21 @@ function mergeTranslations(lines: LyricLine[], translations: LyricLine[]) {
   }));
 }
 
-async function requestLyrics(songId: string, source: "lyric_new" | "lyric") {
+function awaitWithAbort<T>(operation: Promise<T>, signal: AbortSignal) {
+  if (signal.aborted) return Promise.reject<T>(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    signal.addEventListener("abort", abort, { once: true });
+    operation.then(
+      (value) => { cleanup(); resolve(value); },
+      (error) => { cleanup(); reject(error); }
+    );
+  });
+}
+
+async function requestLyrics(songId: string, source: "lyric_new" | "lyric", signal?: AbortSignal) {
+  signal?.throwIfAborted();
   const settings = await getSettings();
   const cookie = settings.neteaseCookie.trim();
   const request = source === "lyric_new" ? lyric_new : lyric;
@@ -117,14 +131,16 @@ async function requestLyrics(songId: string, source: "lyric_new" | "lyric") {
   try {
     response = await request({
       id: songId,
-      ...(cookie ? { cookie } : {})
-    });
+      ...(cookie ? { cookie } : {}),
+      signal
+    } as Parameters<typeof request>[0]);
   } catch (error) {
     if (!cookie) {
       throw error;
     }
 
-    response = await request({ id: songId });
+    signal?.throwIfAborted();
+    response = await request({ id: songId, signal } as Parameters<typeof request>[0]);
   }
 
   const body = response.body as LyricBody;
@@ -139,22 +155,23 @@ async function requestLyrics(songId: string, source: "lyric_new" | "lyric") {
   };
 }
 
-export async function getSongLyrics(songId: string): Promise<SongLyrics> {
+export async function getSongLyrics(songId: string, signal?: AbortSignal): Promise<SongLyrics> {
   const cached = lyricCache.get(songId);
   if (cached && Date.now() - cached.savedAt < LYRIC_CACHE_TTL_MS) {
     return cached.lyrics;
   }
 
   const attempts: Array<() => Promise<SongLyrics>> = [
-    () => requestLyrics(songId, "lyric_new"),
-    () => requestLyrics(songId, "lyric")
+    () => requestLyrics(songId, "lyric_new", signal),
+    () => requestLyrics(songId, "lyric", signal)
   ];
   const errors: Error[] = [];
   let emptyResult: SongLyrics | null = null;
 
   for (const attempt of attempts) {
     try {
-      const result = await attempt();
+      signal?.throwIfAborted();
+      const result = signal ? await awaitWithAbort(attempt(), signal) : await attempt();
       if (result.lines.length > 0) {
         lyricCache.set(songId, {
           savedAt: Date.now(),
