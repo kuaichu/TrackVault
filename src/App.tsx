@@ -84,14 +84,12 @@ import {
   startDirectSongDownload,
   startRawDirectSongDownload,
   startServerSongDownload,
-  SERVER_DOWNLOAD_HANDOFF_MESSAGE,
   startNeteaseImportAuditJob,
   startPlaylistCompareJob,
   startPlaylistTransferRunJob,
   replyToSongComment,
   searchSongs
 } from "./api";
-import { isMediaMemoryLimitExceededError } from "./media-memory";
 import { buildSelectedSourceTracks, getPlaylistSourceBlockReason, getPlaylistSourceKey, isCurrentPlaylistSourceRequest } from "./playlist-transfer-source";
 import { filterTransferTracks, getCompletedTransferImportName, getDefaultTransferPlaylistName, getDefaultTransferResultFilter, resolveTransferImportName, type TransferResultFilter } from "./playlist-transfer-results";
 import type { AccountState, AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferImportResult, PlaylistTransferJob, PlaylistTransferRunJob, QqMusicAccountStatus, QqMusicUserProfile, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, SongInsight, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferTrack, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
@@ -265,10 +263,9 @@ type DownloadProgressDialog = {
   fileSizeBytes?: number;
   speedBytesPerSecond?: number;
   indeterminate: boolean;
-  handedOff?: boolean;
   status: "preparing" | "downloading" | "done" | "failed";
 };
-type DownloadMethod = "tagged" | "raw" | "server" | "server-raw";
+type DownloadMethod = "tagged" | "raw" | "server";
 type DownloadMethodPicker = {
   song: Song;
   level: DownloadQualityLevel;
@@ -291,7 +288,6 @@ type BrowserDownloadTask = {
   fileSizeBytes?: number;
   receivedBytes?: number;
   speedBytesPerSecond?: number;
-  delivery?: "saved" | "browser-handoff";
   createdAt: string;
   updatedAt: string;
 };
@@ -792,10 +788,7 @@ function normalizeBrowserDownloadTask(rawTask: unknown): BrowserDownloadTask | n
 
   const loadedStatus = normalizeBrowserDownloadStatus(task.status);
   const status = loadedStatus === "queued" || loadedStatus === "preparing" || loadedStatus === "downloading" ? "failed" : loadedStatus;
-  const delivery = task.delivery === "browser-handoff" ? "browser-handoff" : task.delivery === "saved" ? "saved" : undefined;
-  const progress = delivery === "browser-handoff"
-    ? 0
-    : Number.isFinite(task.progress) ? Math.max(0, Math.min(100, Math.round(Number(task.progress)))) : status === "done" ? 100 : 0;
+  const progress = Number.isFinite(task.progress) ? Math.max(0, Math.min(100, Math.round(Number(task.progress)))) : status === "done" ? 100 : 0;
   const now = new Date().toISOString();
 
   return {
@@ -808,14 +801,13 @@ function normalizeBrowserDownloadTask(rawTask: unknown): BrowserDownloadTask | n
     coverUrl: typeof task.coverUrl === "string" ? task.coverUrl : undefined,
     quality: typeof task.quality === "string" ? task.quality : "备用下载",
     requestedLevel: task.requestedLevel ?? "standard",
-    progress: status === "done" && delivery !== "browser-handoff" ? 100 : progress,
+    progress: status === "done" ? 100 : progress,
     status,
     detail: status === "failed" && loadedStatus !== "failed" ? "页面刷新后下载中断，请重新下载。" : typeof task.detail === "string" ? task.detail : "",
     fileName: typeof task.fileName === "string" ? task.fileName : undefined,
     fileSizeBytes: Number.isFinite(task.fileSizeBytes) ? Number(task.fileSizeBytes) : undefined,
     receivedBytes: Number.isFinite(task.receivedBytes) ? Number(task.receivedBytes) : undefined,
     speedBytesPerSecond: Number.isFinite(task.speedBytesPerSecond) ? Number(task.speedBytesPerSecond) : undefined,
-    delivery,
     createdAt: typeof task.createdAt === "string" ? task.createdAt : now,
     updatedAt: typeof task.updatedAt === "string" ? task.updatedAt : now
   };
@@ -4528,7 +4520,7 @@ export default function App() {
   }
 
   function isDownloadProgressActive(progress: DownloadProgressDialog | null) {
-    return !progress?.handedOff && (progress?.status === "preparing" || progress?.status === "downloading");
+    return progress?.status === "preparing" || progress?.status === "downloading";
   }
 
   function closeDownloadProgress() {
@@ -4586,7 +4578,7 @@ export default function App() {
     setDownloadMethodPicker(null);
   }
 
-  function runServerFallbackDownload(song: Song, level: DownloadQualityLevel, selectedLabel: string, metadata: "tagged" | "raw" = "tagged") {
+  async function runServerFallbackDownload(song: Song, level: DownloadQualityLevel, selectedLabel: string) {
     if (directDownloadingSongId || batchDownloading) {
       return;
     }
@@ -4596,9 +4588,7 @@ export default function App() {
 
     try {
       fallbackTaskId = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const fallbackDetail = metadata === "raw"
-        ? "服务器正在准备显式裸流响应，不写标签，音频不会进入浏览器 JavaScript 内存。"
-        : "服务器正在获取音频、歌词和封面，并为 MP3/FLAC 写入标签；音频不会进入浏览器 JavaScript 内存。";
+      const fallbackDetail = "服务器正在拉取音源，并写入封面、歌手、专辑和歌词信息。";
       const fallbackCreatedAt = new Date().toISOString();
       setMessage(`正在通过服务器备用下载：${song.title} · ${selectedLabel}`);
       setDownloadProgressMinimized(false);
@@ -4628,25 +4618,60 @@ export default function App() {
         indeterminate: true,
         status: "preparing"
       });
-      const handoff = startServerSongDownload(song, level, metadata);
+      await startServerSongDownload(song, level, {
+        onStatus: (status) => {
+          setDownloadProgress((current) => current ? { ...current, detail: status, status: "downloading" } : current);
+          patchBrowserDownloadTask(fallbackTaskId, { detail: status, status: "downloading" });
+        },
+        onReady: ({ filename, sizeBytes, quality }) => {
+          const resolvedQuality = quality || selectedLabel;
+          const resolvedDetail = quality && quality !== selectedLabel
+            ? `服务器已返回文件，实际下载音质为 ${quality}，正在保存到本机。`
+            : "服务器已返回文件，正在保存到本机。";
+          setDownloadProgress((current) => current ? { ...current, fileSizeBytes: sizeBytes, detail: resolvedDetail } : current);
+          patchBrowserDownloadTask(fallbackTaskId, { fileName: filename, fileSizeBytes: sizeBytes, quality: resolvedQuality, detail: resolvedDetail });
+        },
+        onProgress: ({ progress, receivedBytes, totalBytes, speedBytesPerSecond }) => {
+          const taskProgressPatch: Partial<BrowserDownloadTask> = {
+            progress,
+            receivedBytes,
+            speedBytesPerSecond,
+            status: progress >= 100 ? "done" : "downloading",
+            detail: progress >= 100 ? "文件已准备完成，浏览器正在保存到本机。" : "正在传输备用下载文件。"
+          };
+          if (totalBytes) {
+            taskProgressPatch.fileSizeBytes = totalBytes;
+          }
+
+          setDownloadProgress((current) => current ? {
+            ...current,
+            progress,
+            receivedBytes,
+            fileSizeBytes: totalBytes ?? current.fileSizeBytes,
+            speedBytesPerSecond,
+            indeterminate: false,
+            status: progress >= 100 ? "done" : "downloading",
+            detail: progress >= 100 ? "文件已准备完成，浏览器正在保存到本机。" : "正在传输备用下载文件。"
+          } : current);
+          patchBrowserDownloadTask(fallbackTaskId, taskProgressPatch);
+        }
+      });
       setDownloadProgress((current) => current ? {
         ...current,
-        progress: 0,
-        receivedBytes: undefined,
+        progress: 100,
+        receivedBytes: current.fileSizeBytes ?? current.receivedBytes,
         speedBytesPerSecond: undefined,
         indeterminate: false,
-        handedOff: handoff.handedOff,
-        status: handoff.status,
-        detail: handoff.detail
+        status: "done",
+        detail: "已开始保存到本机，可以在浏览器下载列表中查看。"
       } : current);
       patchBrowserDownloadTask(fallbackTaskId, {
-        progress: 0,
+        progress: 100,
         speedBytesPerSecond: undefined,
-        status: handoff.status,
-        delivery: "browser-handoff",
-        detail: handoff.detail
+        status: "done",
+        detail: "已开始保存到本机，可以在浏览器下载列表中查看。"
       });
-      setMessage(SERVER_DOWNLOAD_HANDOFF_MESSAGE);
+      setMessage(`已开始保存备用下载：${song.title}`);
     } catch (fallbackError) {
       const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : "备用下载失败";
       setDownloadProgress((current) => current ? {
@@ -4718,18 +4743,15 @@ export default function App() {
       patchBrowserDownloadTask(taskId, {
         progress: 100,
         status: "done",
-        delivery: "saved",
         quality: resolvedQuality,
         detail: doneDetail
       });
       setMessage(directDownload.quality && directDownload.quality !== selectedLabel ? `方案A已保存：${song.title} · 实际 ${directDownload.quality}` : `方案A已保存到本机下载：${song.title}`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "启动下载失败";
-      const displayMessage = isMediaMemoryLimitExceededError(error)
-        ? `方案A已停止：${errorMessage}。请选择方案B裸直链、方案C服务器标签下载或显式服务器裸流。`
-        : isDirectDownloadBlockedError(error)
-          ? `方案A被浏览器跨域策略拦截：${errorMessage}。可以重新点击下载，选择方案B裸直链或方案C服务器备用。`
-          : `方案A下载失败：${errorMessage}。未保存无标签文件；如需继续，请选择方案B或方案C。`;
+      const displayMessage = isDirectDownloadBlockedError(error)
+        ? `方案A被浏览器跨域策略拦截：${errorMessage}。可以重新点击下载，选择方案B裸直链或方案C服务器备用。`
+        : `方案A下载失败：${errorMessage}`;
       patchBrowserDownloadTask(taskId, { status: "failed", detail: displayMessage });
       if (showIssueDialog) {
         setDownloadIssue({
@@ -4776,9 +4798,8 @@ export default function App() {
       setMessage(`方案B正在获取裸直链：${song.title}`);
       const rawDirectDownload = await startRawDirectSongDownload(song, level);
       patchBrowserDownloadTask(taskId, {
-        progress: 0,
+        progress: 100,
         status: "done",
-        delivery: "browser-handoff",
         detail: "已把 CDN 裸直链交给浏览器处理，不经过服务器中转，也不会写入封面和歌词标签；文件名可能由 CDN 决定。",
         fileName: rawDirectDownload.filename,
         quality: rawDirectDownload.quality || selectedLabel
@@ -4820,7 +4841,7 @@ export default function App() {
       return;
     }
 
-    runServerFallbackDownload(picker.song, picker.level, picker.label, method === "server-raw" ? "raw" : "tagged");
+    await runServerFallbackDownload(picker.song, picker.level, picker.label);
   }
 
   async function handleDownload(song: Song) {
@@ -4944,14 +4965,12 @@ export default function App() {
         } catch (error) {
           failedCount += 1;
           if (!firstFailureMessage) {
-            firstFailureMessage = isMediaMemoryLimitExceededError(error)
-              ? "文件超过浏览器安全标签处理上限。批量下载已停止，请单首下载并选择裸直链或无标签服务器流式下载。"
-              : isDirectDownloadBlockedError(error)
-                ? "浏览器拦截网易云 CDN 跨域直连。批量下载已停止，请单首下载并选择备用下载。"
-                : error instanceof Error ? error.message : "启动下载失败";
+            firstFailureMessage = isDirectDownloadBlockedError(error)
+              ? "浏览器拦截网易云 CDN 跨域直连。批量下载已停止，请单首下载并选择备用下载。"
+              : error instanceof Error ? error.message : "启动下载失败";
           }
 
-          if (isDirectDownloadBlockedError(error) || isMediaMemoryLimitExceededError(error)) {
+          if (isDirectDownloadBlockedError(error)) {
             break;
           }
         }
@@ -7517,7 +7536,7 @@ export default function App() {
       browserDownloadTasks.filter((task) => task.status === "queued" || task.status === "downloading" || task.status === "preparing").length,
     [browserDownloadTasks, tasks]
   );
-  const completedCount = useMemo(() => tasks.filter((task) => task.status === "done").length + browserDownloadTasks.filter((task) => task.status === "done" && task.delivery !== "browser-handoff").length, [browserDownloadTasks, tasks]);
+  const completedCount = useMemo(() => tasks.filter((task) => task.status === "done").length + browserDownloadTasks.filter((task) => task.status === "done").length, [browserDownloadTasks, tasks]);
   const failedCount = useMemo(() => tasks.filter((task) => task.status === "failed").length + browserDownloadTasks.filter((task) => task.status === "failed").length, [browserDownloadTasks, tasks]);
   const downloadTaskTotal = tasks.length + browserDownloadTasks.length;
   const visibleSongs = useMemo(() => {
@@ -10058,11 +10077,11 @@ export default function App() {
                         </div>
                         <div className="download-task-progress-block">
                           <div className="download-task-progress-head">
-                            <span className={`download-task-status ${task.status}`}>{task.delivery === "browser-handoff" ? "已交浏览器" : statusLabel(task.status)}</span>
-                            <strong>{task.delivery === "browser-handoff" ? "已交接" : `${task.progress}%`}</strong>
+                            <span className={`download-task-status ${task.status}`}>{statusLabel(task.status)}</span>
+                            <strong>{`${task.progress}%`}</strong>
                           </div>
                           <div className="progress-track">
-                            <div className="progress-fill" style={{ width: task.delivery === "browser-handoff" ? "0%" : `${task.progress}%` }} />
+                            <div className="progress-fill" style={{ width: `${task.progress}%` }} />
                           </div>
                         </div>
                         <div className="download-task-meta">
@@ -10106,7 +10125,7 @@ export default function App() {
                               <span>查看</span>
                             </button>
                           ) : (
-                            <span className="download-local-note">{task.delivery === "browser-handoff" ? "浏览器处理中" : task.status === "done" ? "已保存" : task.status === "failed" ? "已停止" : "后台中"}</span>
+                            <span className="download-local-note">{task.status === "done" ? "已保存" : task.status === "failed" ? "已停止" : "后台中"}</span>
                           )}
                         </div>
                       </article>
@@ -11862,14 +11881,9 @@ export default function App() {
                 <small>直接把 CDN 地址交给浏览器；不写封面/歌词标签，文件名可能由浏览器或 CDN 决定。</small>
               </button>
               <button type="button" className="download-method-option server" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => void runDownloadMethod("server")}>
-                <span>方案C：服务器下载并写入标签</span>
-                <strong>服务器为 MP3/FLAC 获取歌词与封面并写入标签</strong>
-                <small>默认使用 96 MiB 安全上限（可配置）并串行处理标签，再交给浏览器原生下载；不在前端创建整首音频 Blob。M4A 不支持写标签。</small>
-              </button>
-              <button type="button" className="download-method-option server" disabled={Boolean(directDownloadingSongId || batchDownloading)} onClick={() => void runDownloadMethod("server-raw")}>
-                <span>方案C fallback：服务器裸下载</span>
-                <strong>用于仅有 M4A 或无需标签时</strong>
-                <small>显式使用 metadata=raw，由服务器原样流式转发；不会写入封面或歌词标签。</small>
+                <span>方案C：服务器备用下载</span>
+                <strong>服务器为 MP3/FLAC 获取歌词和封面并写入标签</strong>
+                <small>在当前页面读取服务器响应，显示大小、速度和进度，最后保存到本机。</small>
               </button>
             </div>
           </section>
@@ -11906,7 +11920,7 @@ export default function App() {
             <div className={`server-download-progress ${downloadProgress.indeterminate ? "indeterminate" : ""} ${downloadProgress.status}`}>
               <div className="download-task-progress-head">
                 <span>{downloadProgress.detail}</span>
-                <strong>{downloadProgress.handedOff ? "已交接" : downloadProgress.indeterminate ? "处理中" : `${downloadProgress.progress}%`}</strong>
+                <strong>{downloadProgress.indeterminate ? "处理中" : `${downloadProgress.progress}%`}</strong>
               </div>
               <div className="progress-track">
                 <div className="progress-fill" style={{ width: downloadProgress.indeterminate ? "42%" : `${downloadProgress.progress}%` }} />
@@ -11930,7 +11944,7 @@ export default function App() {
                 </button>
               ) : (
                 <button type="button" className="secondary-button compact operation-button" onClick={closeDownloadProgress}>
-                  {downloadProgress.status === "failed" || downloadProgress.handedOff ? "关闭" : "完成"}
+                  {downloadProgress.status === "failed" ? "关闭" : "完成"}
                 </button>
               )}
             </div>
@@ -11948,10 +11962,10 @@ export default function App() {
         >
           <CoverArt song={downloadProgress.song} className="download-progress-dock-cover" />
           <span className="download-progress-dock-copy">
-            <strong>{downloadProgress.status === "failed" ? "备用下载失败" : downloadProgress.handedOff ? "已交给浏览器" : downloadProgress.status === "done" ? "备用下载完成" : "备用下载中"}</strong>
+            <strong>{downloadProgress.status === "failed" ? "备用下载失败" : downloadProgress.status === "done" ? "备用下载完成" : "备用下载中"}</strong>
             <span>{downloadProgress.song.title}</span>
           </span>
-          <span className="download-progress-dock-percent">{downloadProgress.handedOff ? "已交接" : downloadProgress.indeterminate ? "处理中" : `${downloadProgress.progress}%`}</span>
+          <span className="download-progress-dock-percent">{downloadProgress.indeterminate ? "处理中" : `${downloadProgress.progress}%`}</span>
           <span className="download-progress-dock-bar" aria-hidden="true">
             <span style={{ width: downloadProgress.indeterminate ? "42%" : `${downloadProgress.progress}%` }} />
           </span>

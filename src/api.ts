@@ -52,8 +52,6 @@ import type {
   UserSocialPage,
   UserPlaylist
 } from "./types";
-import { isMediaMemoryLimitExceededError, readResponseBytesWithLimit } from "./media-memory";
-
 const CLIENT_SESSION_STORAGE_KEY = "trackvault:client-session-id";
 const STREAM_URL_VERSION = "2";
 
@@ -141,7 +139,13 @@ export type DirectDownloadInfo = {
   type?: string | null;
   quality?: string | null;
   time?: number | null;
-  maxInMemoryMediaBytes: number;
+};
+
+export type ServerDownloadProgressInfo = {
+  progress: number;
+  receivedBytes: number;
+  totalBytes?: number;
+  speedBytesPerSecond?: number;
 };
 
 type DownloadCoverData = {
@@ -160,7 +164,7 @@ export function isDirectDownloadBlockedError(error: unknown) {
   return error instanceof DirectDownloadBlockedError;
 }
 
-export function getDirectDownloadUrl(song: Song, level: DownloadQualityLevel, metadata?: "tagged" | "raw") {
+export function getDirectDownloadUrl(song: Song, level: DownloadQualityLevel) {
   const params = new URLSearchParams({
     id: song.id,
     title: song.title,
@@ -182,16 +186,12 @@ export function getDirectDownloadUrl(song: Song, level: DownloadQualityLevel, me
 
   if (song.coverUrl) {
     params.set("coverUrl", song.coverUrl);
-  }
-
-  if (metadata) {
-    params.set("metadata", metadata);
   }
 
   return `/api/download/direct?${params.toString()}`;
 }
 
-export function getServerDownloadUrl(song: Song, level: DownloadQualityLevel, metadata: "tagged" | "raw" = "tagged") {
+export function getServerDownloadUrl(song: Song, level: DownloadQualityLevel) {
   const params = new URLSearchParams({
     id: song.id,
     title: song.title,
@@ -213,10 +213,6 @@ export function getServerDownloadUrl(song: Song, level: DownloadQualityLevel, me
 
   if (song.coverUrl) {
     params.set("coverUrl", song.coverUrl);
-  }
-
-  if (metadata === "raw") {
-    params.set("metadata", "raw");
   }
 
   return `/api/download/proxy?${params.toString()}`;
@@ -246,9 +242,9 @@ function startNativeDownload(url: string, filename: string, openInNewTab = false
   link.remove();
 }
 
-function isFlacDownload(song: Song, directDownload: DirectDownloadInfo, mediaResponse: Response) {
+function isFlacDownload(song: Song, directDownload: DirectDownloadInfo, mediaResponse: Response, blob: Blob) {
   const normalizedType = directDownload.type?.replace(/^\./, "").toLowerCase();
-  const contentType = mediaResponse.headers.get("content-type")?.toLowerCase() ?? "";
+  const contentType = mediaResponse.headers.get("content-type")?.toLowerCase() ?? blob.type.toLowerCase();
   const filename = directDownload.filename.toLowerCase();
   return (
     normalizedType === "flac" ||
@@ -260,9 +256,9 @@ function isFlacDownload(song: Song, directDownload: DirectDownloadInfo, mediaRes
   );
 }
 
-function isMp3Download(directDownload: DirectDownloadInfo, mediaResponse: Response) {
+function isMp3Download(directDownload: DirectDownloadInfo, mediaResponse: Response, blob: Blob) {
   const normalizedType = directDownload.type?.replace(/^\./, "").toLowerCase();
-  const contentType = mediaResponse.headers.get("content-type")?.toLowerCase() ?? "";
+  const contentType = mediaResponse.headers.get("content-type")?.toLowerCase() ?? blob.type.toLowerCase();
   const filename = directDownload.filename.toLowerCase();
   return (
     normalizedType === "mp3" ||
@@ -272,12 +268,12 @@ function isMp3Download(directDownload: DirectDownloadInfo, mediaResponse: Respon
   );
 }
 
-function getDownloadMetadataTarget(song: Song, directDownload: DirectDownloadInfo, mediaResponse: Response) {
-  if (isFlacDownload(song, directDownload, mediaResponse)) {
+function getDownloadMetadataTarget(song: Song, directDownload: DirectDownloadInfo, mediaResponse: Response, blob: Blob) {
+  if (isFlacDownload(song, directDownload, mediaResponse, blob)) {
     return "flac";
   }
 
-  if (isMp3Download(directDownload, mediaResponse)) {
+  if (isMp3Download(directDownload, mediaResponse, blob)) {
     return "mp3";
   }
 
@@ -636,29 +632,26 @@ async function fetchDownloadCover(song: Song): Promise<DownloadCoverData | null>
   };
 }
 
-async function addMetadataToDownloadBytes(
-  song: Song,
-  directDownload: DirectDownloadInfo,
-  mediaResponse: Response,
-  originalBytes: Uint8Array<ArrayBuffer>
-) {
-  const metadataTarget = getDownloadMetadataTarget(song, directDownload, mediaResponse);
+async function addMetadataToDownloadBlob(song: Song, directDownload: DirectDownloadInfo, mediaResponse: Response, blob: Blob) {
+  const metadataTarget = getDownloadMetadataTarget(song, directDownload, mediaResponse, blob);
   if (!metadataTarget) {
-    throw new Error("当前音频格式无法安全写入标签，未生成文件；请选择裸直链或服务器流式下载。");
+    return blob;
   }
 
-  const [lyricsResult, cover] = await Promise.allSettled([
-    getLyrics(song),
-    fetchDownloadCover(song)
-  ]);
-  const lyricsText = lyricsResult.status === "fulfilled" ? formatLyricsAsLrc(lyricsResult.value) : "";
-  const taggedBytes = metadataTarget === "flac"
-    ? injectFlacMetadata(originalBytes, song, lyricsText, cover.status === "fulfilled" ? cover.value : null)
-    : injectMp3Metadata(originalBytes, song, lyricsText, cover.status === "fulfilled" ? cover.value : null);
-  return {
-    bytes: taggedBytes,
-    mimeType: metadataTarget === "flac" ? "audio/flac" : "audio/mpeg"
-  };
+  try {
+    const [lyricsResult, cover] = await Promise.allSettled([
+      getLyrics(song),
+      fetchDownloadCover(song)
+    ]);
+    const lyricsText = lyricsResult.status === "fulfilled" ? formatLyricsAsLrc(lyricsResult.value) : "";
+    const originalBytes = new Uint8Array(await blob.arrayBuffer());
+    const taggedBytes = metadataTarget === "flac"
+      ? injectFlacMetadata(originalBytes, song, lyricsText, cover.status === "fulfilled" ? cover.value : null)
+      : injectMp3Metadata(originalBytes, song, lyricsText, cover.status === "fulfilled" ? cover.value : null);
+    return new Blob([taggedBytes], { type: metadataTarget === "flac" ? "audio/flac" : "audio/mpeg" });
+  } catch {
+    return blob;
+  }
 }
 
 export async function startDirectSongDownload(song: Song, level: DownloadQualityLevel, onProgress?: (progress: number) => void) {
@@ -670,13 +663,11 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
 
   const directDownload = (await directResponse.json()) as DirectDownloadInfo;
   const providerLabel = song.source === "qqmusic" ? "QQ 音乐 CDN" : "网易云 CDN";
-  const abortController = new AbortController();
   let mediaResponse: Response;
   try {
     mediaResponse = await fetch(directDownload.url, {
       credentials: "omit",
-      mode: "cors",
-      signal: abortController.signal
+      mode: "cors"
     });
   } catch {
     throw new DirectDownloadBlockedError(`浏览器被${providerLabel}跨域策略拦截，无法无中转保存到本机。`);
@@ -686,22 +677,40 @@ export async function startDirectSongDownload(song: Song, level: DownloadQuality
     throw new Error(`${providerLabel}下载失败：HTTP ${mediaResponse.status}`);
   }
 
-  let originalBytes: Uint8Array<ArrayBuffer>;
-  try {
-    originalBytes = await readResponseBytesWithLimit(mediaResponse, {
-      limitBytes: directDownload.maxInMemoryMediaBytes,
-      abortController,
-      onProgress
-    });
-  } catch (error) {
-    if (isMediaMemoryLimitExceededError(error)) {
-      throw error;
+  const contentLength = Number(mediaResponse.headers.get("content-length") ?? "0");
+  if (!mediaResponse.body || !contentLength) {
+    try {
+      const blob = await mediaResponse.blob();
+      saveBlob(await addMetadataToDownloadBlob(song, directDownload, mediaResponse, blob), directDownload.filename);
+    } catch {
+      throw new DirectDownloadBlockedError(`${providerLabel}下载流中断，浏览器无法稳定直连保存到本机。`);
     }
+    return directDownload;
+  }
+
+  const reader = mediaResponse.body.getReader();
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
+  let receivedBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      if (value) {
+        chunks.push(value);
+        receivedBytes += value.length;
+        onProgress?.(Math.max(1, Math.min(99, Math.round((receivedBytes / contentLength) * 100))));
+      }
+    }
+  } catch {
     throw new DirectDownloadBlockedError(`${providerLabel}下载流中断，浏览器无法稳定直连保存到本机。`);
   }
 
-  const tagged = await addMetadataToDownloadBytes(song, directDownload, mediaResponse, originalBytes);
-  saveBlob(new Blob([tagged.bytes], { type: tagged.mimeType }), directDownload.filename);
+  const blob = new Blob(chunks, { type: mediaResponse.headers.get("content-type") ?? "application/octet-stream" });
+  saveBlob(await addMetadataToDownloadBlob(song, directDownload, mediaResponse, blob), directDownload.filename);
   onProgress?.(100);
   return directDownload;
 }
@@ -714,25 +723,91 @@ export async function startRawDirectSongDownload(song: Song, level: DownloadQual
   }
 
   const directDownload = (await directResponse.json()) as DirectDownloadInfo;
-  startNativeDownload(directDownload.url, directDownload.filename, true);
-  return directDownload;
-}
-
-export const SERVER_DOWNLOAD_HANDOFF_MESSAGE = "已打开服务器下载页；服务器准备完成后浏览器会开始保存，失败原因会显示在新标签页。";
-
-export function startServerSongDownload(song: Song, level: DownloadQualityLevel, metadata: "tagged" | "raw" = "tagged") {
   const link = document.createElement("a");
-  link.href = getServerDownloadUrl(song, level, metadata);
+  link.href = directDownload.url;
+  link.download = directDownload.filename;
   link.target = "_blank";
   link.rel = "noopener noreferrer";
   document.body.appendChild(link);
   link.click();
   link.remove();
-  return {
-    status: "preparing" as const,
-    handedOff: true as const,
-    detail: SERVER_DOWNLOAD_HANDOFF_MESSAGE
-  };
+  return directDownload;
+}
+
+function getFilenameFromContentDisposition(contentDisposition: string | null) {
+  if (!contentDisposition) {
+    return "";
+  }
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1].trim());
+  }
+
+  const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+  return filenameMatch?.[1]?.trim() ?? "";
+}
+
+export async function startServerSongDownload(
+  song: Song,
+  level: DownloadQualityLevel,
+  callbacks: { onStatus?: (status: string) => void; onProgress?: (info: ServerDownloadProgressInfo) => void; onReady?: (info: { filename: string; sizeBytes?: number; quality?: string }) => void } = {}
+) {
+  const response = await apiFetch(getServerDownloadUrl(song, level));
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "备用下载失败");
+  }
+
+  const filename = getFilenameFromContentDisposition(response.headers.get("content-disposition")) || `${song.title}-${song.artist}.${level === "standard" ? "mp3" : "flac"}`;
+  const contentLength = Number(response.headers.get("content-length") ?? "0");
+  const quality = response.headers.get("x-trackvault-quality") ?? undefined;
+
+  callbacks.onStatus?.("服务器已返回文件，正在保存到本机。");
+
+  if (!response.body || !contentLength) {
+    const blob = await response.blob();
+    callbacks.onReady?.({ filename, sizeBytes: blob.size, quality });
+    callbacks.onProgress?.({ progress: 100, receivedBytes: blob.size, totalBytes: blob.size });
+    saveBlob(blob, filename);
+    return;
+  }
+
+  callbacks.onReady?.({ filename, sizeBytes: contentLength, quality });
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
+  let receivedBytes = 0;
+  const startedAt = performance.now();
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    if (value) {
+      chunks.push(value);
+      receivedBytes += value.length;
+      const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.001);
+      callbacks.onProgress?.({
+        progress: Math.max(1, Math.min(99, Math.round((receivedBytes / contentLength) * 100))),
+        receivedBytes,
+        totalBytes: contentLength,
+        speedBytesPerSecond: receivedBytes / elapsedSeconds
+      });
+    }
+  }
+
+  const blob = new Blob(chunks, { type: response.headers.get("content-type") ?? "application/octet-stream" });
+  const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.001);
+  callbacks.onProgress?.({
+    progress: 100,
+    receivedBytes,
+    totalBytes: contentLength,
+    speedBytesPerSecond: receivedBytes / elapsedSeconds
+  });
+  saveBlob(blob, filename);
 }
 
 export async function searchSongs(query: string, provider = "netease"): Promise<Song[]> {

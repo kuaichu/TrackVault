@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addAudioMetadataToDownload, getAudioMetadataTarget, hasConflictingAudioFormatDeclaration } from "../download-metadata.js";
-import { MediaMemoryLimitExceededError, decideServerMediaHandling, getResponseContentLength, readResponseBytesWithLimit } from "../media-memory-policy.js";
-import { withMediaTaggingSlot } from "../media-memory-policy.js";
+import { addAudioMetadataToDownload, getAudioMetadataTarget } from "../download-metadata.js";
+import { MediaMemoryLimitExceededError, readResponseBytesWithLimit } from "../media-memory-policy.js";
 import { MediaAccessError } from "../media-security.js";
 import { resolveQqDirectDownload } from "../qqmusic-provider.js";
 import type { Song } from "../types.js";
@@ -22,13 +21,8 @@ function createDependencies(overrides: Partial<MediaRouterDependencies> = {}): M
     fetchImpl: async () => unexpectedDependency("fetchImpl"),
     getHighResolutionCoverUrl: (url) => url,
     getAudioMetadataTarget: () => unexpectedDependency("getAudioMetadataTarget"),
-    hasConflictingAudioFormatDeclaration,
     addAudioMetadataToDownload: async () => unexpectedDependency("addAudioMetadataToDownload"),
-    decideServerMediaHandling,
-    getMaxInMemoryMediaBytes: () => 96 * 1024 * 1024,
-    getResponseContentLength,
     readResponseBytesWithLimit,
-    withMediaTaggingSlot: async (operation) => operation(),
     resolveQqSongStream: async () => unexpectedDependency("resolveQqSongStream"),
     resolveSongStream: async () => unexpectedDependency("resolveSongStream"),
     resolveDirectDownload: async () => unexpectedDependency("resolveDirectDownload"),
@@ -186,10 +180,9 @@ test("stream preserves MediaAccessError, QQ and Netease error statuses", timeout
   }
 });
 
-test("direct download maps the full Song, cookie and memory limit", timeout, async () => {
+test("direct download maps the full Song and cookie", timeout, async () => {
   let observed: unknown[] = [];
   const dependencies = createDependencies({
-    getMaxInMemoryMediaBytes: () => 1234,
     resolveDirectDownload: async (...args) => {
       observed = args;
       return directDownload();
@@ -198,7 +191,7 @@ test("direct download maps the full Song, cookie and memory limit", timeout, asy
   await withTestRouter([createMediaRouter(dependencies)], async ({ request }) => {
     const response = await request(`/api/download/direct?${songQuery}`, { headers: { "x-user-cookie": "secret" } });
     assert.equal(response.status, 200);
-    assert.deepEqual(response.body, { ...directDownload(), maxInMemoryMediaBytes: 1234 });
+    assert.deepEqual(response.body, directDownload());
   });
   assert.deepEqual(observed, [{ id: "1", title: "Track", artist: "Artist", album: "Album", mediaId: "mid", providerSongId: "provider-id", coverUrl: "cover", duration: "03:00", quality: "", availableQualities: [], source: "netease" }, "lossless", "secret"]);
 });
@@ -217,163 +210,104 @@ test("direct download preserves validation and error statuses", timeout, async (
   }
 });
 
-test("proxy explicit raw paths stream bytes with original status and headers", timeout, async () => {
+test("proxy forwards CDN responses and Range without a metadata mode", timeout, async () => {
   const observedRanges: (string | null)[] = [];
+  const calls: unknown[][] = [];
   const dependencies = createDependencies({
-    getMaxInMemoryMediaBytes: () => 4096,
-    resolveDirectDownload: async () => directDownload(),
+    getAudioMetadataTarget: () => null,
+    resolveDirectDownload: async (...args) => {
+      calls.push(args);
+      return directDownload({ filename: "track.m4a", type: "m4a" });
+    },
     fetchImpl: async (_input, init) => {
       observedRanges.push(new Headers(init?.headers).get("range"));
-      return new Response(bytes(7, 8), { status: 206, headers: { "content-type": "audio/mpeg", "content-length": "2", "content-range": "bytes 1-2/3" } });
+      return new Response(bytes(7, 8), { status: 206, headers: { "content-type": "audio/mp4", "content-length": "2", "content-range": "bytes 1-2/3" } });
     }
   });
   await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
-    for (const [suffix, range] of [[`metadata=raw&${songQuery}`, undefined], [`metadata=raw&${songQuery}`, "bytes=1-2"]] as const) {
-      const response = await requestRaw(`/api/download/proxy?${suffix}`, { headers: range ? { Range: range } : undefined });
+    for (const range of [undefined, "bytes=1-2"] as const) {
+      const response = await requestRaw(`/api/download/proxy?${songQuery}`, { headers: range ? { Range: range } : undefined });
       assert.equal(response.status, 206);
-      assert.equal(response.headers.get("content-disposition"), "attachment; filename=\"__.mp3\"; filename*=UTF-8''%E6%9B%B2%E7%9B%AE.mp3");
+      assert.equal(response.headers.get("content-type"), "audio/mp4");
+      assert.equal(response.headers.get("content-disposition"), "attachment; filename=\"track.m4a\"; filename*=UTF-8''track.m4a");
       assert.equal(response.headers.get("content-length"), "2");
       assert.equal(response.headers.get("content-range"), "bytes 1-2/3");
       assert.equal(response.headers.get("x-trackvault-quality"), "lossless");
-      assert.equal(response.headers.get("x-trackvault-max-in-memory-media-bytes"), "4096");
       assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes(7, 8));
     }
   });
   assert.deepEqual(observedRanges, [null, "bytes=1-2"]);
+  assert.equal(calls.every((call) => call.length === 3), true);
 });
 
-test("proxy never silently turns a tagged Range request into raw audio", timeout, async () => {
-  await withTestRouter([createMediaRouter(createDependencies())], async ({ request }) => {
-    const response = await request(`/api/download/proxy?${songQuery}`, { headers: { Range: "bytes=1-2" } });
-    assert.equal(response.status, 409);
-    assert.deepEqual(response.body, {
-      code: "METADATA_RANGE_UNSUPPORTED",
-      message: "标签下载不支持 Range 续传；如需原样续传，请显式使用服务器裸下载。",
-      fallbackModes: ["server-raw"]
-    });
-  });
-});
-
-test("direct tagged preflight reports M4A before native browser handoff", timeout, async () => {
+test("direct ignores obsolete metadata product parameters and returns M4A", timeout, async () => {
   const dependencies = createDependencies({
     resolveDirectDownload: async () => directDownload({ filename: "track.m4a", type: "m4a", quality: "M4A 128K" }),
-    getAudioMetadataTarget: () => null
   });
   await withTestRouter([createMediaRouter(dependencies)], async ({ request }) => {
     const response = await request(`/api/download/direct?metadata=tagged&${songQuery.replace("source=netease", "source=qqmusic")}`);
-    assert.equal(response.status, 415);
-    assert.equal(response.body.code, "METADATA_FORMAT_UNSUPPORTED");
-    assert.deepEqual(response.body.fallbackModes, ["server-raw"]);
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body, directDownload({ filename: "track.m4a", type: "m4a", quality: "M4A 128K" }));
   });
 });
 
-test("proxy preserves the NetEase song fields and forwards tagged and raw modes to the resolver", timeout, async () => {
+test("proxy preserves source identifiers and tags declared MP3 and FLAC responses", timeout, async () => {
   const calls: unknown[][] = [];
+  let resolvedType = "mp3";
   const dependencies = createDependencies({
-    resolveDirectDownload: async (...args) => { calls.push(args); return directDownload(); },
-    fetchImpl: async () => new Response(bytes(1), { headers: { "content-type": "audio/mpeg", "content-length": "1" } }),
-    getAudioMetadataTarget: () => "mp3",
-    addAudioMetadataToDownload: async ({ bytes: original }) => original
+    resolveDirectDownload: async (...args) => {
+      calls.push(args);
+      return directDownload({ filename: `track.${resolvedType}`, type: resolvedType });
+    },
+    fetchImpl: async () => new Response(resolvedType === "flac" ? bytes(0x66, 0x4c, 0x61, 0x43) : bytes(0xff, 0xfb, 0x90, 0x64), { headers: { "content-type": "application/octet-stream", "content-length": "4" } }),
+    getAudioMetadataTarget: ({ type }) => type === "flac" ? "flac" : "mp3",
+    addAudioMetadataToDownload: async ({ bytes: original }) => bytes(...original, 9)
   });
   await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
-    assert.equal((await requestRaw(`/api/download/proxy?${songQuery}`)).status, 200);
-    assert.equal((await requestRaw(`/api/download/proxy?metadata=raw&${songQuery}`)).status, 200);
+    for (const type of ["mp3", "flac"]) {
+      resolvedType = type;
+      const response = await requestRaw(`/api/download/proxy?${songQuery}`);
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-type"), type === "flac" ? "audio/flac" : "audio/mpeg");
+      assert.equal(response.headers.get("content-length"), "5");
+      assert.deepEqual(new Uint8Array(await response.arrayBuffer()), type === "flac" ? bytes(0x66, 0x4c, 0x61, 0x43, 9) : bytes(0xff, 0xfb, 0x90, 0x64, 9));
+    }
   });
   assert.equal((calls[0][0] as Song).source, "netease");
   assert.equal((calls[0][0] as Song).mediaId, "mid");
   assert.equal((calls[0][0] as Song).providerSongId, "provider-id");
   assert.equal((calls[0][0] as Song).coverUrl, "cover");
-  assert.deepEqual(calls.map((args) => args[3]), [{ metadata: "tagged" }, { metadata: "raw" }]);
+  assert.equal(calls.every((args) => args.length === 3), true);
 });
 
-test("proxy tags small MP3 and FLAC responses inside the serial slot", timeout, async () => {
-  let slotCalls = 0;
-  let resolvedType = "mp3";
-  const targets: string[] = [];
-  const dependencies = createDependencies({
-    getMaxInMemoryMediaBytes: () => 16,
-    resolveDirectDownload: async (_song, level) => {
-      resolvedType = String(level);
-      return directDownload({ filename: `track.${level}`, type: String(level) });
-    },
-    fetchImpl: async () => {
-      const content = resolvedType === "flac" ? bytes(0x66, 0x4c, 0x61, 0x43) : bytes(0xff, 0xfb, 0x90, 0x64);
-      return new Response(content, { headers: { "content-type": "application/octet-stream", "content-length": String(content.byteLength) } });
-    },
-    getAudioMetadataTarget: ({ type, bytes: content }) => content ? getAudioMetadataTarget({ bytes: content }) : type === "flac" ? "flac" : "mp3",
-    withMediaTaggingSlot: async (operation) => { slotCalls += 1; return operation(); },
-    addAudioMetadataToDownload: async ({ bytes: original, type, onMetadataResult }) => {
-      targets.push(type ?? "");
-      onMetadataResult?.({ lyricsFetched: true, coverFetched: type === "flac" });
-      return bytes(...original, 9);
-    }
-  });
-  await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
-    for (const [level, mime] of [["mp3", "audio/mpeg"], ["flac", "audio/flac"]]) {
-      const response = await requestRaw(`/api/download/proxy?${songQuery.replace("level=lossless", `level=${level}`)}`);
-      assert.equal(response.headers.get("content-type"), mime);
-      assert.equal(response.headers.get("content-disposition"), `attachment; filename="track.${level}"; filename*=UTF-8''track.${level}`);
-      assert.equal(response.headers.get("content-length"), "5");
-      assert.equal(response.headers.get("x-trackvault-lyrics"), "fetched");
-      assert.equal(response.headers.get("x-trackvault-cover"), level === "flac" ? "fetched" : "missing");
-      assert.deepEqual(new Uint8Array(await response.arrayBuffer()), level === "flac" ? bytes(0x66, 0x4c, 0x61, 0x43, 9) : bytes(0xff, 0xfb, 0x90, 0x64, 9));
-    }
-  });
-  assert.equal(slotCalls, 2);
-  assert.deepEqual(targets, ["mp3", "flac"]);
-});
-
-test("tagged M4A returns an explicit unsupported error while raw M4A still streams", timeout, async () => {
+test("proxy downloads M4A as original audio instead of returning 415", timeout, async () => {
   const dependencies = createDependencies({
     resolveDirectDownload: async () => directDownload({ filename: "track.m4a", type: "m4a", quality: "M4A 128K" }),
     fetchImpl: async () => new Response(bytes(0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70), { headers: { "content-type": "audio/mp4", "content-length": "8" } }),
     getAudioMetadataTarget
   });
   await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
-    const tagged = await requestRaw(`/api/download/proxy?${songQuery.replace("source=netease", "source=qqmusic")}`);
-    assert.equal(tagged.status, 415);
-    assert.equal(tagged.headers.get("content-disposition"), null);
-    assert.deepEqual(await tagged.json(), {
-      code: "METADATA_FORMAT_UNSUPPORTED",
-      message: "当前仅有 M4A 或其他不可写标签格式；可改用服务器裸下载。",
-      format: "m4a",
-      fallbackModes: ["server-raw"]
-    });
-    const raw = await requestRaw(`/api/download/proxy?metadata=raw&${songQuery.replace("source=netease", "source=qqmusic")}`);
-    assert.equal(raw.status, 200);
-    assert.deepEqual(new Uint8Array(await raw.arrayBuffer()), bytes(0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70));
+    const response = await requestRaw(`/api/download/proxy?metadata=raw&${songQuery.replace("source=netease", "source=qqmusic")}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "audio/mp4");
+    assert.equal(response.headers.get("content-disposition"), "attachment; filename=\"track.m4a\"; filename*=UTF-8''track.m4a");
+    assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes(0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70));
   });
 });
 
-test("proxy returns structured 413 before reading a known oversized response", timeout, async () => {
-  let readCalls = 0;
+test("proxy returns original audio when tag writing fails", timeout, async () => {
   const dependencies = createDependencies({
-    getMaxInMemoryMediaBytes: () => 4,
     resolveDirectDownload: async () => directDownload(),
-    fetchImpl: async () => new Response(bytes(1), { headers: { "content-type": "audio/mpeg", "content-length": "5" } }),
+    fetchImpl: async () => new Response(bytes(0xff, 0xfb, 0x90, 0x64), { headers: { "content-type": "audio/mpeg", "content-length": "4" } }),
     getAudioMetadataTarget: () => "mp3",
-    readResponseBytesWithLimit: async () => { readCalls += 1; return bytes(); }
+    addAudioMetadataToDownload: async () => { throw new Error("标签写入失败"); }
   });
   await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
     const response = await requestRaw(`/api/download/proxy?${songQuery}`);
-    assert.equal(response.status, 413);
-    assert.equal(response.headers.get("content-disposition"), null);
-    assert.deepEqual(await response.json(), { code: "MEDIA_MEMORY_LIMIT_EXCEEDED", message: "媒体文件超过 0 MiB 的安全内存处理上限", limitBytes: 4, contentLength: 5, fallbackModes: ["raw-direct", "server-raw"] });
-  });
-  assert.equal(readCalls, 0);
-});
-
-test("proxy returns structured 413 when an unknown-length stream exceeds the limit", timeout, async () => {
-  const dependencies = createDependencies({
-    getMaxInMemoryMediaBytes: () => 3,
-    resolveDirectDownload: async () => directDownload(),
-    fetchImpl: async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes(1, 2)); controller.enqueue(bytes(3, 4)); controller.close(); } }), { headers: { "content-type": "audio/mpeg" } }),
-    getAudioMetadataTarget: () => "mp3"
-  });
-  await withTestRouter([createMediaRouter(dependencies)], async ({ request }) => {
-    const response = await request(`/api/download/proxy?${songQuery}`);
-    assert.equal(response.status, 413);
-    assert.deepEqual(response.body, { code: "MEDIA_MEMORY_LIMIT_EXCEEDED", message: "媒体文件超过 0 MiB 的安全内存处理上限", limitBytes: 3, fallbackModes: ["raw-direct", "server-raw"] });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "audio/mpeg");
+    assert.equal(response.headers.get("content-length"), "4");
+    assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes(0xff, 0xfb, 0x90, 0x64));
   });
 });
 
@@ -394,7 +328,7 @@ test("proxy error JSON has no download disposition and unknown paths reach next 
   });
 });
 
-test("tagged proxy rejects non-audio bytes and declared-format conflicts with structured 415", timeout, async () => {
+test("proxy does not reject declared-format conflicts and only tags donor-declared MP3/FLAC", timeout, async () => {
   const cases = [
     { filename: "track.mp3", type: "mp3", contentType: "text/html", content: bytes(0x3c, 0x68, 0x74, 0x6d, 0x6c) },
     { filename: "track.mp3", type: "mp3", contentType: "audio/flac", content: bytes(0x66, 0x4c, 0x61, 0x43) },
@@ -407,22 +341,22 @@ test("tagged proxy rejects non-audio bytes and declared-format conflicts with st
   const dependencies = createDependencies({
     resolveDirectDownload: async () => directDownload({ filename: current.filename, type: current.type }),
     fetchImpl: async () => new Response(current.content, { headers: { "content-type": current.contentType, "content-length": String(current.content.byteLength) } }),
-    getAudioMetadataTarget,
+    getAudioMetadataTarget: ({ type }) => type === "flac" ? "flac" : type === "mp3" ? "mp3" : null,
     addAudioMetadataToDownload: async ({ bytes: original }) => { taggerCalls += 1; return original; }
   });
-  await withTestRouter([createMediaRouter(dependencies)], async ({ request }) => {
+  await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
     for (const item of cases) {
       current = item;
-      const response = await request(`/api/download/proxy?${songQuery}`);
-      assert.equal(response.status, 415);
-      assert.equal((response.body as { code?: string }).code, "METADATA_FORMAT_UNSUPPORTED");
-      assert.deepEqual((response.body as { fallbackModes?: string[] }).fallbackModes, ["server-raw"]);
+      const response = await requestRaw(`/api/download/proxy?${songQuery}`);
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-disposition"), `attachment; filename="${item.filename}"; filename*=UTF-8''${item.filename}`);
+      assert.deepEqual(new Uint8Array(await response.arrayBuffer()), item.content);
     }
   });
-  assert.equal(taggerCalls, 0);
+  assert.equal(taggerCalls, 4);
 });
 
-test("tagged proxy accepts MP3 magic when filename, resolver type, and Content-Type are unknown", timeout, async () => {
+test("proxy does not infer a metadata target from magic bytes alone", timeout, async () => {
   let taggerCalls = 0;
   const dependencies = createDependencies({
     resolveDirectDownload: async () => directDownload({ filename: "track.bin", type: "unknown" }),
@@ -433,44 +367,10 @@ test("tagged proxy accepts MP3 magic when filename, resolver type, and Content-T
   await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
     const response = await requestRaw(`/api/download/proxy?${songQuery}`);
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get("content-type"), "audio/mpeg");
+    assert.equal(response.headers.get("content-type"), "application/octet-stream");
     assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes(0xff, 0xfb, 0x90, 0x64));
   });
-  assert.equal(taggerCalls, 1);
-});
-
-test("a tagged metadata disconnect releases the serial slot for the next request", { timeout: 10_000 }, async () => {
-  let metadataCalls = 0;
-  let firstMetadataStarted!: () => void;
-  const firstStarted = new Promise<void>((resolve) => { firstMetadataStarted = resolve; });
-  const dependencies = createDependencies({
-    resolveDirectDownload: async () => directDownload(),
-    fetchImpl: async () => new Response(bytes(0xff, 0xfb, 0x90, 0x64), { headers: { "content-type": "audio/mpeg", "content-length": "4" } }),
-    getAudioMetadataTarget,
-    withMediaTaggingSlot,
-    addAudioMetadataToDownload: async ({ bytes: original, signal }) => {
-      metadataCalls += 1;
-      if (metadataCalls === 1) {
-        firstMetadataStarted();
-        await new Promise<never>((_resolve, reject) => {
-          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
-        });
-      }
-      return original;
-    }
-  });
-  await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
-    const clientAbort = new AbortController();
-    const first = requestRaw(`/api/download/proxy?${songQuery}`, { signal: clientAbort.signal, headers: { Connection: "close" } });
-    await firstStarted;
-    clientAbort.abort();
-    await first.catch(() => undefined);
-
-    const second = await requestRaw(`/api/download/proxy?${songQuery}`, { headers: { Connection: "close" } });
-    assert.equal(second.status, 200);
-    assert.deepEqual(new Uint8Array(await second.arrayBuffer()), bytes(0xff, 0xfb, 0x90, 0x64));
-  });
-  assert.equal(metadataCalls, 2);
+  assert.equal(taggerCalls, 0);
 });
 
 test("QQ resolver, metadata loader, tagger, and proxy run as one composed tagged chain", timeout, async () => {
@@ -488,14 +388,12 @@ test("QQ resolver, metadata loader, tagger, and proxy run as one composed tagged
       })),
       fetchImpl: async () => new Response(bytes(0xff, 0xfb, 0x90, 0x64), { headers: { "content-type": "audio/mpeg", "content-length": "4" } }),
       getAudioMetadataTarget,
-      addAudioMetadataToDownload,
-      withMediaTaggingSlot
+      addAudioMetadataToDownload
     });
     await withTestRouter([createMediaRouter(dependencies)], async ({ requestRaw }) => {
       const response = await requestRaw(`/api/download/proxy?${songQuery.replace("source=netease", "source=qqmusic").replace("level=lossless", "level=standard")}`);
       assert.equal(response.status, 200);
       assert.equal(response.headers.get("content-type"), "audio/mpeg");
-      assert.equal(response.headers.get("x-trackvault-lyrics"), "fetched");
       const tagged = new Uint8Array(await response.arrayBuffer());
       assert.equal(new TextDecoder().decode(tagged.subarray(0, 3)), "ID3");
       assert.ok(tagged.byteLength > 4);
@@ -505,13 +403,14 @@ test("QQ resolver, metadata loader, tagger, and proxy run as one composed tagged
   }
 });
 
-for (const route of ["/api/stream?id=1", `/api/download/proxy?metadata=raw&${songQuery}`]) {
+for (const route of ["/api/stream?id=1", `/api/download/proxy?${songQuery}`]) {
   test(`${route.split("?")[0]} aborts its upstream when the client disconnects`, timeout, async () => {
     let resolveAborted!: () => void;
     const aborted = new Promise<void>((resolve) => { resolveAborted = resolve; });
     const dependencies = createDependencies({
       resolveSongStream: async () => ({ url: "https://upstream.invalid/stream" }),
       resolveDirectDownload: async () => directDownload(),
+      getAudioMetadataTarget: () => null,
       fetchImpl: async (_input, init) => {
         init?.signal?.addEventListener("abort", resolveAborted, { once: true });
         return new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes(1)); } }), { headers: { "content-type": "audio/mpeg" } });

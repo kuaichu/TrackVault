@@ -4,17 +4,10 @@ import { pipeline } from "node:stream/promises";
 import type {
   addAudioMetadataToDownload,
   getAudioMetadataTarget,
-  getHighResolutionCoverUrl,
-  hasConflictingAudioFormatDeclaration
+  getHighResolutionCoverUrl
 } from "../download-metadata.js";
 import type { MediaMemoryLimitExceededError } from "../media-memory-policy.js";
-import type {
-  decideServerMediaHandling,
-  getMaxInMemoryMediaBytes,
-  getResponseContentLength,
-  readResponseBytesWithLimit,
-  withMediaTaggingSlot
-} from "../media-memory-policy.js";
+import type { readResponseBytesWithLimit } from "../media-memory-policy.js";
 import type { MediaAccessError } from "../media-security.js";
 import type { resolveQqSongStream } from "../qqmusic-provider.js";
 import type { resolveDirectDownload, resolveSongStream } from "../task-store.js";
@@ -26,13 +19,8 @@ export type MediaRouterDependencies = {
   fetchImpl: typeof globalThis.fetch;
   getHighResolutionCoverUrl: typeof getHighResolutionCoverUrl;
   getAudioMetadataTarget: typeof getAudioMetadataTarget;
-  hasConflictingAudioFormatDeclaration: typeof hasConflictingAudioFormatDeclaration;
   addAudioMetadataToDownload: typeof addAudioMetadataToDownload;
-  decideServerMediaHandling: typeof decideServerMediaHandling;
-  getMaxInMemoryMediaBytes: typeof getMaxInMemoryMediaBytes;
-  getResponseContentLength: typeof getResponseContentLength;
   readResponseBytesWithLimit: typeof readResponseBytesWithLimit;
-  withMediaTaggingSlot: typeof withMediaTaggingSlot;
   resolveQqSongStream: typeof resolveQqSongStream;
   resolveSongStream: typeof resolveSongStream;
   resolveDirectDownload: typeof resolveDirectDownload;
@@ -261,23 +249,8 @@ export function createMediaRouter(dependencies: MediaRouterDependencies) {
     }
 
     try {
-      const metadata = request.query.metadata === "tagged" ? "tagged" : request.query.metadata === "raw" ? "raw" : undefined;
-      const directDownload = metadata
-        ? await dependencies.resolveDirectDownload(song, level as DownloadQualityLevel, userCookieOverride, { metadata })
-        : await dependencies.resolveDirectDownload(song, level as DownloadQualityLevel, userCookieOverride);
-      if (metadata === "tagged" && !dependencies.getAudioMetadataTarget(directDownload)) {
-        response.status(415).json({
-          code: "METADATA_FORMAT_UNSUPPORTED",
-          message: "当前仅有 M4A 或其他不可写标签格式；请选择方案 C 的服务器裸下载。",
-          format: directDownload.type || "unknown",
-          fallbackModes: ["server-raw"]
-        });
-        return;
-      }
-      response.json({
-        ...directDownload,
-        maxInMemoryMediaBytes: dependencies.getMaxInMemoryMediaBytes()
-      });
+      const directDownload = await dependencies.resolveDirectDownload(song, level as DownloadQualityLevel, userCookieOverride);
+      response.json(directDownload);
     } catch (error) {
       response.status(dependencies.isMediaAccessError(error) ? error.status : 502).json({
         message: error instanceof Error ? error.message : "获取直连下载地址失败"
@@ -289,19 +262,8 @@ export function createMediaRouter(dependencies: MediaRouterDependencies) {
     const song = getDownloadSongFromQuery(request);
     const level = typeof request.query.level === "string" ? request.query.level : "standard";
     const userCookieOverride = typeof request.headers["x-user-cookie"] === "string" ? request.headers["x-user-cookie"] : undefined;
-    const metadataRequested = request.query.metadata !== "raw";
-
     if (!song.id || !song.title || !song.artist) {
       response.status(400).json({ message: "缺少歌曲信息" });
-      return;
-    }
-
-    if (request.headers.range && metadataRequested) {
-      response.status(409).json({
-        code: "METADATA_RANGE_UNSUPPORTED",
-        message: "标签下载不支持 Range 续传；如需原样续传，请显式使用服务器裸下载。",
-        fallbackModes: ["server-raw"]
-      });
       return;
     }
 
@@ -310,8 +272,7 @@ export function createMediaRouter(dependencies: MediaRouterDependencies) {
       const directDownload = await dependencies.resolveDirectDownload(
         song,
         level as DownloadQualityLevel,
-        userCookieOverride,
-        { metadata: metadataRequested ? "tagged" : "raw" }
+        userCookieOverride
       );
       const upstream = await dependencies.fetchImpl(directDownload.url, {
         headers: request.headers.range ? { Range: request.headers.range } : undefined,
@@ -327,131 +288,56 @@ export function createMediaRouter(dependencies: MediaRouterDependencies) {
       const contentType = upstream.headers.get("content-type") ?? "application/octet-stream";
       const contentLength = upstream.headers.get("content-length");
       const contentRange = upstream.headers.get("content-range");
-      const maxInMemoryMediaBytes = dependencies.getMaxInMemoryMediaBytes();
-      const decision = dependencies.decideServerMediaHandling({
-        metadataRequested,
-        metadataTarget: null,
-        contentLength: dependencies.getResponseContentLength(upstream),
-        limitBytes: maxInMemoryMediaBytes
-      });
-
-      if (decision.kind === "reject") {
-        upstreamAbort.controller.abort(decision.error);
-        await upstream.body.cancel(decision.error).catch(() => undefined);
-        throw decision.error;
+      response.setHeader("Content-Type", contentType);
+      response.setHeader("Content-Disposition", buildContentDisposition(directDownload.filename));
+      if (directDownload.quality) {
+        response.setHeader("X-TrackVault-Quality", directDownload.quality);
       }
+      response.setHeader("Access-Control-Allow-Origin", "*");
+      response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, Content-Length, Content-Range, X-TrackVault-Quality");
 
-      if (decision.kind === "stream") {
-        response.setHeader("Content-Disposition", buildContentDisposition(directDownload.filename));
-        if (directDownload.quality) {
-          response.setHeader("X-TrackVault-Quality", directDownload.quality);
+      const metadataTarget = !request.headers.range ? dependencies.getAudioMetadataTarget({
+        filename: directDownload.filename,
+        type: directDownload.type,
+        contentType
+      }) : null;
+
+      if (metadataTarget) {
+        const originalBytes = new Uint8Array(await upstream.arrayBuffer());
+        let taggedBytes: Uint8Array<ArrayBufferLike> = originalBytes;
+        try {
+          taggedBytes = await dependencies.addAudioMetadataToDownload({
+            song,
+            bytes: originalBytes,
+            filename: directDownload.filename,
+            type: directDownload.type,
+            contentType
+          });
+        } catch {
+          taggedBytes = originalBytes;
         }
-        response.setHeader("X-TrackVault-Max-In-Memory-Media-Bytes", String(maxInMemoryMediaBytes));
-        response.setHeader("Access-Control-Allow-Origin", "*");
-        response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, Content-Length, Content-Range, X-TrackVault-Quality, X-TrackVault-Max-In-Memory-Media-Bytes");
-        response.setHeader("Content-Type", contentType);
-        if (contentLength) {
-          response.setHeader("Content-Length", contentLength);
-        }
-        if (contentRange) {
-          response.setHeader("Content-Range", contentRange);
-        }
-        response.status(upstream.status);
-        await pipeline(toNodeReadable(upstream.body), response);
+
+        response.setHeader("Content-Type", metadataTarget === "flac" ? "audio/flac" : "audio/mpeg");
+        response.setHeader("Content-Length", String(taggedBytes.byteLength));
+        response.send(Buffer.from(taggedBytes));
         return;
       }
 
-      await dependencies.withMediaTaggingSlot(async () => {
-        const originalBytes = await dependencies.readResponseBytesWithLimit(upstream, {
-          limitBytes: maxInMemoryMediaBytes,
-          abortController: upstreamAbort.controller
-        });
-        const verifiedMetadataTarget = dependencies.getAudioMetadataTarget({ bytes: originalBytes });
-        if (!verifiedMetadataTarget || dependencies.hasConflictingAudioFormatDeclaration({
-          filename: directDownload.filename,
-          type: directDownload.type,
-          contentType
-        }, verifiedMetadataTarget)) {
-          if (!response.destroyed) {
-            response.status(415).json({
-              code: "METADATA_FORMAT_UNSUPPORTED",
-              message: verifiedMetadataTarget
-                ? "音频内容不是与声明格式一致的 MP3/FLAC；可改用服务器裸下载。"
-                : "当前仅有 M4A 或其他不可写标签格式；可改用服务器裸下载。",
-              format: directDownload.type || "unknown",
-              fallbackModes: ["server-raw"]
-            });
-          }
-          return;
-        }
-        let metadataResult = { lyricsFetched: false, coverFetched: false };
-        const taggedBytes = await dependencies.addAudioMetadataToDownload({
-          song,
-          bytes: originalBytes,
-          filename: directDownload.filename,
-          type: directDownload.type,
-          contentType,
-          signal: upstreamAbort.controller.signal,
-          onMetadataResult: (result) => { metadataResult = result; }
-        });
-        if (response.destroyed) {
-          return;
-        }
-        response.setHeader("Content-Disposition", buildContentDisposition(directDownload.filename));
-        if (directDownload.quality) {
-          response.setHeader("X-TrackVault-Quality", directDownload.quality);
-        }
-        response.setHeader("X-TrackVault-Max-In-Memory-Media-Bytes", String(maxInMemoryMediaBytes));
-        response.setHeader("X-TrackVault-Lyrics", metadataResult.lyricsFetched ? "fetched" : "missing");
-        response.setHeader("X-TrackVault-Cover", metadataResult.coverFetched ? "fetched" : "missing");
-        response.setHeader("Access-Control-Allow-Origin", "*");
-        response.setHeader("Access-Control-Expose-Headers", "Content-Disposition, Content-Length, X-TrackVault-Quality, X-TrackVault-Max-In-Memory-Media-Bytes, X-TrackVault-Lyrics, X-TrackVault-Cover");
-        response.setHeader("Content-Type", verifiedMetadataTarget === "flac" ? "audio/flac" : "audio/mpeg");
-        response.setHeader("Content-Length", String(taggedBytes.byteLength));
-        response.status(upstream.status);
+      if (contentLength) {
+        response.setHeader("Content-Length", contentLength);
+      }
 
-        await new Promise<void>((resolve, reject) => {
-          let settled = false;
-          const cleanup = () => {
-            response.off("error", fail);
-            response.off("close", onClose);
-          };
-          const succeed = () => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            resolve();
-          };
-          const fail = (error: Error) => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            reject(error);
-          };
-          const onClose = () => {
-            if (response.writableFinished) {
-              succeed();
-            } else {
-              fail(new Error("客户端在标签文件发送完成前断开"));
-            }
-          };
+      if (contentRange) {
+        response.setHeader("Content-Range", contentRange);
+        response.status(206);
+      }
 
-          response.once("error", fail);
-          response.once("close", onClose);
-          response.end(Buffer.from(taggedBytes.buffer, taggedBytes.byteOffset, taggedBytes.byteLength), succeed);
-        });
-      });
+      await pipeline(toNodeReadable(upstream.body), response);
     } catch (error) {
       if (response.destroyed || response.headersSent) {
-        console.warn("Proxy download stream interrupted:", error instanceof Error ? error.message : error);
         if (!response.destroyed) {
           response.destroy(error instanceof Error ? error : undefined);
         }
-        return;
-      }
-
-      if (dependencies.isMediaMemoryLimitExceededError(error)) {
-        response.status(413).json(error.toJSON());
         return;
       }
 

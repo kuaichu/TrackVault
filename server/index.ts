@@ -12,19 +12,15 @@ import { getCloudSongs } from "./cloud-provider.js";
 import { getSongCommentReplies, getSongComments, replyToSongComment, setSongCommentLiked } from "./comment-provider.js";
 import { getDiscoverSongs } from "./discover-provider.js";
 import { getAccountState, getDataScopeId } from "./data-scope.js";
-import { addAudioMetadataToDownload, getAudioMetadataTarget, getHighResolutionCoverUrl, hasConflictingAudioFormatDeclaration } from "./download-metadata.js";
+import { addAudioMetadataToDownload, getAudioMetadataTarget, getHighResolutionCoverUrl } from "./download-metadata.js";
 import { getHeartbeatSongs } from "./heartbeat-provider.js";
 import { getArtistProfile, resolveArtistIdByName } from "./artist-provider.js";
 import { getPlayHistory, getSearchHistory, removeSearchHistory, savePlayHistory, saveSearchHistory } from "./history-store.js";
 import { getSongLyrics } from "./lyric-provider.js";
 import { MediaAccessError } from "./media-security.js";
 import {
-  decideServerMediaHandling,
-  getMaxInMemoryMediaBytes,
-  getResponseContentLength,
   MediaMemoryLimitExceededError,
-  readResponseBytesWithLimit,
-  withMediaTaggingSlot
+  readResponseBytesWithLimit
 } from "./media-memory-policy.js";
 import { addSongToUserPlaylist, getPlaylistSongs, getUserPlaylists, removeSongsFromUserPlaylist } from "./playlist-provider.js";
 import { searchProvider } from "./provider.js";
@@ -180,13 +176,8 @@ app.use(createMediaRouter({
   fetchImpl: fetch,
   getHighResolutionCoverUrl,
   getAudioMetadataTarget,
-  hasConflictingAudioFormatDeclaration,
   addAudioMetadataToDownload,
-  decideServerMediaHandling,
-  getMaxInMemoryMediaBytes,
-  getResponseContentLength,
   readResponseBytesWithLimit,
-  withMediaTaggingSlot,
   resolveQqSongStream,
   resolveSongStream,
   resolveDirectDownload,
