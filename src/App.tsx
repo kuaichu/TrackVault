@@ -44,6 +44,11 @@ import {
   getQqMusicAccountStatus,
   getQqMusicUserProfile,
   getCloudSongs,
+  getCloudVirtualPlaylistState,
+  createCloudVirtualPlaylist,
+  deleteCloudVirtualPlaylist,
+  moveCloudVirtualPlaylistSongs,
+  renameCloudVirtualPlaylist,
   getDailyRecommendSongs,
   getDiscoverSongs,
   getHeartbeatSongs,
@@ -92,7 +97,7 @@ import {
 } from "./api";
 import { buildSelectedSourceTracks, getPlaylistSourceBlockReason, getPlaylistSourceKey, isCurrentPlaylistSourceRequest } from "./playlist-transfer-source";
 import { filterTransferTracks, getCompletedTransferImportName, getDefaultTransferPlaylistName, getDefaultTransferResultFilter, resolveTransferImportName, type TransferResultFilter } from "./playlist-transfer-results";
-import type { AccountState, AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferImportResult, PlaylistTransferJob, PlaylistTransferRunJob, QqMusicAccountStatus, QqMusicUserProfile, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, SongInsight, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferTrack, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
+import type { AccountState, AdminConfigUpdate, AdminConfigView, AlbumProfile, AppSettings, ArtistProfile, CloudVirtualPlaylist, CloudVirtualPlaylistState, DownloadQualityLevel, DownloadTask, LyricLine, NeteaseCookieCheckResult, NeteaseImportAudit, NeteaseImportAuditJob, NeteaseImportAuditStatus, NeteaseTransferImportResult, PersistedPlayerState, PersonalRadioKind, PlaybackMode, PlaylistCompareJob, PlaylistCompareResult, PlaylistCompareStatus, PlaylistTransferImportResult, PlaylistTransferJob, PlaylistTransferRunJob, QqMusicAccountStatus, QqMusicUserProfile, Song, SongArtist, SongAudioProbe, SongComment, SongCommentRepliesPage, SongCommentsPage, SongInsight, TransferExportFormat, TransferSourceProvider, TransferTargetProvider, TransferTrack, TransferExportResult, UserEventItem, UserEventsPage, UserPlaylist, UserProfile, UserSocialListKind, UserSocialPage, UserSocialUser } from "./types";
 
 const quickKeywords = ["周杰伦", "陈奕迅", "林俊杰", "告五人", "Taylor Swift"];
 const PLAYLIST_SONGS_PAGE_SIZE = 100;
@@ -100,8 +105,43 @@ const COMMENT_PAGE_SIZE = 20;
 const COMMENT_REPLY_PAGE_SIZE = 20;
 const USER_SOCIAL_PAGE_SIZE = 30;
 const USER_EVENTS_PAGE_SIZE = 20;
+const CLOUD_ALL_PLAYLIST_ID = "__cloud_all__";
+const CLOUD_UNCLASSIFIED_PLAYLIST_ID = "__cloud_unclassified__";
+const CLOUD_SONG_KEY_PREFIX = "netease-cloud:";
 const PLAYLIST_COMPARE_STATUSES: PlaylistCompareStatus[] = ["exact", "same_title_different_artist", "similar_title", "left_only", "right_only"];
 const DEFAULT_PLAYLIST_COMPARE_STATUSES: PlaylistCompareStatus[] = ["same_title_different_artist", "similar_title", "left_only", "right_only"];
+
+type CloudPlaylistEditorState = {
+  mode: "create" | "rename";
+  playlistId?: string;
+};
+
+function getCloudSongKey(song: Song) {
+  return `${CLOUD_SONG_KEY_PREFIX}${song.id}`;
+}
+
+function getUniqueCloudSongs(songs: Song[]) {
+  const seenSongIds = new Set<string>();
+
+  return songs.filter((song) => {
+    if (song.source !== "netease-cloud" || !song.id || seenSongIds.has(song.id)) {
+      return false;
+    }
+
+    seenSongIds.add(song.id);
+    return true;
+  });
+}
+
+function filterCloudSongs(songs: Song[], playlistId: string, assignments: Record<string, string>) {
+  if (playlistId === CLOUD_ALL_PLAYLIST_ID) {
+    return songs;
+  }
+  if (playlistId === CLOUD_UNCLASSIFIED_PLAYLIST_ID) {
+    return songs.filter((song) => !assignments[getCloudSongKey(song)]);
+  }
+  return songs.filter((song) => assignments[getCloudSongKey(song)] === playlistId);
+}
 const neteaseEmojiMap: Record<string, string> = {
   "[爱心]": "\u2764\uFE0F",
   "[心碎]": "\uD83D\uDC94",
@@ -1319,6 +1359,7 @@ export default function App() {
   const listRequestIdRef = useRef(0);
   const accountStateRequestIdRef = useRef(0);
   const dataScopeIdRef = useRef<string | null>(null);
+  const activeCloudPlaylistIdRef = useRef(CLOUD_ALL_PLAYLIST_ID);
   const historyMutationVersionRef = useRef(0);
   const scopedWriteQueueRef = useRef<ScopedWriteQueue | null>(null);
   if (!scopedWriteQueueRef.current) {
@@ -1335,6 +1376,7 @@ export default function App() {
   const playerMutationVersionRef = useRef(0);
   const playerStateFingerprintRef = useRef("");
   const playlistSortTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const cloudMoveTargetTriggerRef = useRef<HTMLButtonElement | null>(null);
   const qualityMenuAnchorRef = useRef<HTMLButtonElement | null>(null);
   const qualityMenuOptionCountRef = useRef(0);
   const settingsQualityMenuAnchorRef = useRef<HTMLButtonElement | null>(null);
@@ -1451,6 +1493,24 @@ export default function App() {
   const [playlistSearchKeyword, setPlaylistSearchKeyword] = useState("");
   const [playlistSortMode, setPlaylistSortMode] = useState<PlaylistSortMode>("default");
   const [cloudMeta, setCloudMeta] = useState({ count: 0, size: 0, maxSize: 0 });
+  const [cloudSongs, setCloudSongs] = useState<Song[]>([]);
+  const [cloudVirtualPlaylists, setCloudVirtualPlaylists] = useState<CloudVirtualPlaylist[]>([]);
+  const [cloudAssignments, setCloudAssignments] = useState<Record<string, string>>({});
+  const [activeCloudPlaylistId, setActiveCloudPlaylistId] = useState(CLOUD_ALL_PLAYLIST_ID);
+  const [cloudPlaylistMutation, setCloudPlaylistMutation] = useState(false);
+  const [cloudPlaylistEditor, setCloudPlaylistEditor] = useState<CloudPlaylistEditorState | null>(null);
+  const [cloudPlaylistNameInput, setCloudPlaylistNameInput] = useState("");
+  const [cloudPlaylistEditorError, setCloudPlaylistEditorError] = useState("");
+  const [cloudMoveSongs, setCloudMoveSongs] = useState<Song[]>([]);
+  const [cloudMoveTargetPlaylistId, setCloudMoveTargetPlaylistId] = useState<string | null>(null);
+  const [cloudMoveLoading, setCloudMoveLoading] = useState(false);
+  const [cloudMoveError, setCloudMoveError] = useState("");
+  const [openCloudMoveTargetMenu, setOpenCloudMoveTargetMenu] = useState(false);
+  const [cloudMoveTargetMenuStyle, setCloudMoveTargetMenuStyle] = useState<FloatingMenuStyle | null>(null);
+  const [cloudImportTargetPlaylistId, setCloudImportTargetPlaylistId] = useState<string | null>(null);
+  const [cloudImportSelectedSongIds, setCloudImportSelectedSongIds] = useState<string[]>([]);
+  const [cloudImportLoading, setCloudImportLoading] = useState(false);
+  const [cloudImportError, setCloudImportError] = useState("");
   const [savingSettings, setSavingSettings] = useState(false);
   const [loadingAdminConfig, setLoadingAdminConfig] = useState(false);
   const [savingAdminConfig, setSavingAdminConfig] = useState(false);
@@ -1586,6 +1646,7 @@ export default function App() {
   const [playerStateReady, setPlayerStateReady] = useState(false);
   const dataScopeId = session.dataScopeId || null;
   dataScopeIdRef.current = dataScopeId;
+  activeCloudPlaylistIdRef.current = activeCloudPlaylistId;
   playerStateFingerprintRef.current = getPlayerStateFingerprint({
     currentTrack,
     playQueue,
@@ -3534,13 +3595,36 @@ export default function App() {
     setMessage("正在读取网易云音乐云盘");
 
     try {
-      const data = await getCloudSongs();
+      const capturedScope = dataScopeIdRef.current;
+      const [data, virtualPlaylistState] = await Promise.all([
+        getCloudSongs(),
+        capturedScope
+          ? getCloudVirtualPlaylistState(capturedScope).catch(() => null)
+          : Promise.resolve(null)
+      ]);
       if (requestId !== listRequestIdRef.current) {
         return;
       }
+      if (capturedScope && !shouldApplyScopedResult(capturedScope, dataScopeIdRef.current)) {
+        return;
+      }
 
-      setResults(data.songs);
-      setPlayQueue(data.songs);
+      const nextPlaylists = virtualPlaylistState?.playlists ?? cloudVirtualPlaylists;
+      const nextAssignments = virtualPlaylistState?.assignments ?? cloudAssignments;
+      const currentActiveCloudPlaylistId = activeCloudPlaylistIdRef.current;
+      const nextActivePlaylistId = virtualPlaylistState && currentActiveCloudPlaylistId !== CLOUD_ALL_PLAYLIST_ID && currentActiveCloudPlaylistId !== CLOUD_UNCLASSIFIED_PLAYLIST_ID && !nextPlaylists.some((playlist) => playlist.id === currentActiveCloudPlaylistId)
+        ? CLOUD_ALL_PLAYLIST_ID
+        : currentActiveCloudPlaylistId;
+      const nextSongs = filterCloudSongs(data.songs, nextActivePlaylistId, nextAssignments);
+
+      setCloudSongs(data.songs);
+      if (virtualPlaylistState) {
+        setCloudVirtualPlaylists(nextPlaylists);
+        setCloudAssignments(nextAssignments);
+        setActiveCloudPlaylistId(nextActivePlaylistId);
+      }
+      setResults(nextSongs);
+      setPlayQueue(nextSongs);
       setResultSource("cloud");
       setCloudMeta({ count: data.count, size: data.size, maxSize: data.maxSize });
       applyQualityDefaults(data.songs);
@@ -3552,6 +3636,289 @@ export default function App() {
       setMessage(error instanceof Error ? error.message : "获取云盘音乐失败");
     } finally {
       if (requestId === listRequestIdRef.current) setLoadingCloudSongs(false);
+    }
+  }
+
+  function applyCloudVirtualPlaylistState(nextState: CloudVirtualPlaylistState, nextActivePlaylistId = activeCloudPlaylistId) {
+    const safeActivePlaylistId = nextActivePlaylistId === CLOUD_ALL_PLAYLIST_ID
+      || nextActivePlaylistId === CLOUD_UNCLASSIFIED_PLAYLIST_ID
+      || nextState.playlists.some((playlist) => playlist.id === nextActivePlaylistId)
+      ? nextActivePlaylistId
+      : CLOUD_ALL_PLAYLIST_ID;
+    setCloudVirtualPlaylists(nextState.playlists);
+    setCloudAssignments(nextState.assignments);
+    setActiveCloudPlaylistId(safeActivePlaylistId);
+    activeCloudPlaylistIdRef.current = safeActivePlaylistId;
+    if (resultSource === "cloud" || navKey === "cloud") {
+      const nextSongs = filterCloudSongs(cloudSongs, safeActivePlaylistId, nextState.assignments);
+      setResults(nextSongs);
+      setPlayQueue(nextSongs);
+    }
+  }
+
+  function handleCloudPlaylistSelect(nextPlaylistId: string) {
+    if (cloudPlaylistMutation || cloudMoveLoading) {
+      return;
+    }
+
+    const safePlaylistId = nextPlaylistId === CLOUD_ALL_PLAYLIST_ID || nextPlaylistId === CLOUD_UNCLASSIFIED_PLAYLIST_ID || cloudVirtualPlaylists.some((playlist) => playlist.id === nextPlaylistId)
+      ? nextPlaylistId
+      : CLOUD_ALL_PLAYLIST_ID;
+    setOpenCloudMoveTargetMenu(false);
+    setCloudMoveTargetMenuStyle(null);
+    setActiveCloudPlaylistId(safePlaylistId);
+    activeCloudPlaylistIdRef.current = safePlaylistId;
+    setSelectedSongIds([]);
+    setBatchSelectionMode(false);
+    const nextSongs = filterCloudSongs(cloudSongs, safePlaylistId, cloudAssignments);
+    setResults(nextSongs);
+    setPlayQueue(nextSongs);
+    setMessage(safePlaylistId === CLOUD_ALL_PLAYLIST_ID ? `云盘全部歌曲 · 共 ${cloudSongs.length} 首` : safePlaylistId === CLOUD_UNCLASSIFIED_PLAYLIST_ID ? `云盘未分类 · 共 ${nextSongs.length} 首` : `云盘歌单 · 共 ${nextSongs.length} 首`);
+  }
+
+  function openCloudPlaylistEditor(state: CloudPlaylistEditorState) {
+    const playlist = state.playlistId ? cloudVirtualPlaylists.find((item) => item.id === state.playlistId) : null;
+    setCloudPlaylistEditor(state);
+    setCloudPlaylistNameInput(playlist?.name ?? "");
+    setCloudPlaylistEditorError("");
+  }
+
+  function closeCloudPlaylistEditor() {
+    if (cloudPlaylistMutation) {
+      return;
+    }
+    setCloudPlaylistEditor(null);
+    setCloudPlaylistNameInput("");
+    setCloudPlaylistEditorError("");
+  }
+
+  async function handleCloudPlaylistEditorSubmit(event: FormEvent) {
+    event.preventDefault();
+    const scope = dataScopeIdRef.current;
+    if (!scope) {
+      setCloudPlaylistEditorError("当前账号作用域尚未准备好，请稍后重试。");
+      return;
+    }
+
+    listRequestIdRef.current += 1;
+    setCloudPlaylistMutation(true);
+    setCloudPlaylistEditorError("");
+    try {
+      const name = cloudPlaylistNameInput.trim();
+      if (!name) {
+        throw new Error("歌单名称不能为空。");
+      }
+
+      if (cloudPlaylistEditor?.mode === "rename" && cloudPlaylistEditor.playlistId) {
+        const playlist = await renameCloudVirtualPlaylist(cloudPlaylistEditor.playlistId, name, scope);
+        if (!shouldApplyScopedResult(scope, dataScopeIdRef.current)) {
+          return;
+        }
+        applyCloudVirtualPlaylistState({
+          version: 1,
+          playlists: cloudVirtualPlaylists.map((item) => item.id === playlist.id ? playlist : item),
+          assignments: cloudAssignments
+        });
+        setMessage(`已重命名云盘歌单「${playlist.name}」`);
+      } else {
+        const playlist = await createCloudVirtualPlaylist(name, scope);
+        if (!shouldApplyScopedResult(scope, dataScopeIdRef.current)) {
+          return;
+        }
+        applyCloudVirtualPlaylistState({
+          version: 1,
+          playlists: [...cloudVirtualPlaylists, playlist],
+          assignments: cloudAssignments
+        }, playlist.id);
+        setMessage(`已创建云盘歌单「${playlist.name}」`);
+      }
+      setCloudPlaylistEditor(null);
+      setCloudPlaylistNameInput("");
+    } catch (error) {
+      setCloudPlaylistEditorError(error instanceof Error ? error.message : "保存云盘歌单失败");
+    } finally {
+      setCloudPlaylistMutation(false);
+    }
+  }
+
+  async function handleDeleteCloudPlaylist(playlist: CloudVirtualPlaylist) {
+    if (!window.confirm(`确定删除本地云盘歌单「${playlist.name}」吗？歌曲会回到未分类，不会删除网易云歌曲。`)) {
+      return;
+    }
+
+    const scope = dataScopeIdRef.current;
+    if (!scope) {
+      setMessage("当前账号作用域尚未准备好，请稍后重试。");
+      return;
+    }
+
+    listRequestIdRef.current += 1;
+    setCloudPlaylistMutation(true);
+    try {
+      await deleteCloudVirtualPlaylist(playlist.id, scope);
+      if (!shouldApplyScopedResult(scope, dataScopeIdRef.current)) {
+        return;
+      }
+      const nextAssignments = Object.fromEntries(
+        Object.entries(cloudAssignments).filter(([, assignedPlaylistId]) => assignedPlaylistId !== playlist.id)
+      );
+      applyCloudVirtualPlaylistState({
+        version: 1,
+        playlists: cloudVirtualPlaylists.filter((item) => item.id !== playlist.id),
+        assignments: nextAssignments
+      }, CLOUD_ALL_PLAYLIST_ID);
+      setCloudMoveTargetPlaylistId(null);
+      setOpenCloudMoveTargetMenu(false);
+      setCloudMoveTargetMenuStyle(null);
+      setMessage(`已删除本地云盘歌单「${playlist.name}」，歌曲已回到未分类`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "删除云盘歌单失败");
+    } finally {
+      setCloudPlaylistMutation(false);
+    }
+  }
+
+  function openCloudMoveDialog(songs: Song[]) {
+    const safeSongs = getUniqueCloudSongs(songs);
+    if (safeSongs.length === 0) {
+      setMessage("当前没有可移动的云盘歌曲。");
+      return;
+    }
+
+    setOpenCloudMoveTargetMenu(false);
+    setCloudMoveTargetMenuStyle(null);
+    setCloudMoveSongs(safeSongs);
+    setCloudMoveTargetPlaylistId(activeCloudPlaylistId !== CLOUD_ALL_PLAYLIST_ID && activeCloudPlaylistId !== CLOUD_UNCLASSIFIED_PLAYLIST_ID ? activeCloudPlaylistId : null);
+    setCloudMoveError("");
+  }
+
+  function closeCloudMoveDialog() {
+    if (cloudMoveLoading) {
+      return;
+    }
+    setCloudMoveSongs([]);
+    setCloudMoveTargetPlaylistId(null);
+    setCloudMoveError("");
+    setOpenCloudMoveTargetMenu(false);
+    setCloudMoveTargetMenuStyle(null);
+  }
+
+  async function handleConfirmCloudMove() {
+    const scope = dataScopeIdRef.current;
+    if (!scope || cloudMoveSongs.length === 0 || cloudMoveLoading) {
+      return;
+    }
+
+    listRequestIdRef.current += 1;
+    setCloudMoveLoading(true);
+    setCloudMoveError("");
+    try {
+      const nextState = await moveCloudVirtualPlaylistSongs(
+        cloudMoveSongs.map((song) => song.id),
+        cloudMoveTargetPlaylistId,
+        scope
+      );
+      if (!shouldApplyScopedResult(scope, dataScopeIdRef.current)) {
+        return;
+      }
+      applyCloudVirtualPlaylistState(nextState);
+      setSelectedSongIds([]);
+      setBatchSelectionMode(false);
+      setCloudMoveSongs([]);
+      setCloudMoveTargetPlaylistId(null);
+      setMessage(`已移动 ${cloudMoveSongs.length} 首云盘歌曲`);
+    } catch (error) {
+      setCloudMoveError(error instanceof Error ? error.message : "移动云盘歌曲失败");
+    } finally {
+      setCloudMoveLoading(false);
+    }
+  }
+
+  function openCloudImportDialog() {
+    if (!activeCloudVirtualPlaylist) {
+      setMessage("请先打开一个自定义云盘歌单。");
+      return;
+    }
+
+    setCloudImportTargetPlaylistId(activeCloudVirtualPlaylist.id);
+    setCloudImportSelectedSongIds([]);
+    setCloudImportError("");
+  }
+
+  function closeCloudImportDialog() {
+    if (cloudImportLoading) {
+      return;
+    }
+
+    setCloudImportTargetPlaylistId(null);
+    setCloudImportSelectedSongIds([]);
+    setCloudImportError("");
+  }
+
+  function handleToggleCloudImportSong(song: Song) {
+    if (cloudImportLoading || !cloudImportTargetPlaylistId || cloudAssignments[getCloudSongKey(song)] === cloudImportTargetPlaylistId) {
+      return;
+    }
+
+    setCloudImportSelectedSongIds((current) => current.includes(song.id)
+      ? current.filter((songId) => songId !== song.id)
+      : [...current, song.id]);
+  }
+
+  function handleToggleAllCloudImportSongs() {
+    if (cloudImportLoading || cloudImportSelectableSongs.length === 0) {
+      return;
+    }
+
+    const selectableSongIds = new Set(cloudImportSelectableSongs.map((song) => song.id));
+    setCloudImportSelectedSongIds((current) => {
+      if (cloudImportSelectableSongs.every((song) => current.includes(song.id))) {
+        return current.filter((songId) => !selectableSongIds.has(songId));
+      }
+
+      return [...new Set([...current, ...selectableSongIds])];
+    });
+  }
+
+  async function handleConfirmCloudImport() {
+    const scope = dataScopeIdRef.current;
+    const targetPlaylistId = cloudImportTargetPlaylistId;
+    if (!scope || !targetPlaylistId || cloudImportLoading) {
+      return;
+    }
+
+    const selectedSongs = cloudImportSongs.filter((song) => cloudImportSelectedSongIds.includes(song.id));
+    const duplicateSongs = selectedSongs.filter((song) => cloudAssignments[getCloudSongKey(song)] === targetPlaylistId);
+    const songsToImport = selectedSongs.filter((song) => cloudAssignments[getCloudSongKey(song)] !== targetPlaylistId);
+    if (songsToImport.length === 0) {
+      setCloudImportError(duplicateSongs.length > 0 ? "所选歌曲已存在于当前歌单。" : "请至少选择一首歌曲。");
+      return;
+    }
+
+    listRequestIdRef.current += 1;
+    setCloudImportLoading(true);
+    setCloudImportError("");
+    try {
+      const nextState = await moveCloudVirtualPlaylistSongs(
+        songsToImport.map((song) => song.id),
+        targetPlaylistId,
+        scope
+      );
+      if (!shouldApplyScopedResult(scope, dataScopeIdRef.current)) {
+        return;
+      }
+
+      applyCloudVirtualPlaylistState(nextState, targetPlaylistId);
+      setSelectedSongIds([]);
+      setBatchSelectionMode(false);
+      setCloudImportTargetPlaylistId(null);
+      setCloudImportSelectedSongIds([]);
+      setCloudImportError("");
+      setMessage(`已导入 ${songsToImport.length} 首歌曲${duplicateSongs.length > 0 ? `，${duplicateSongs.length} 首已存在` : ""}`);
+    } catch (error) {
+      setCloudImportError(error instanceof Error ? error.message : "导入云盘歌曲失败");
+    } finally {
+      setCloudImportLoading(false);
     }
   }
 
@@ -5595,6 +5962,11 @@ export default function App() {
       return;
     }
 
+    if (resultSource === "cloud") {
+      openCloudMoveDialog(safeSongs);
+      return;
+    }
+
     if (activePlaylistProvider === "qq" || safeSongs.some((song) => song.source === "qqmusic")) {
       setMessage("QQ 音乐收藏到歌单还没接入，当前先支持读取、播放和下载。");
       return;
@@ -6084,6 +6456,44 @@ export default function App() {
     setPlaylistSortMenuStyle({ top, left, width, maxHeight });
   }
 
+  function updateCloudMoveTargetMenuStyle(trigger = cloudMoveTargetTriggerRef.current) {
+    if (!trigger || !document.body.contains(trigger)) {
+      setOpenCloudMoveTargetMenu(false);
+      setCloudMoveTargetMenuStyle(null);
+      return;
+    }
+
+    setCloudMoveTargetMenuStyle(getFloatingQualityMenuStyle(trigger, cloudVirtualPlaylists.length + 1, 220));
+  }
+
+  function toggleCloudMoveTargetMenu(trigger: HTMLButtonElement) {
+    if (cloudMoveLoading) {
+      return;
+    }
+
+    setOpenQualityMenuId(null);
+    setQualityMenuStyle(null);
+    setOpenSettingsQualityMenu(null);
+    setSettingsQualityMenuStyle(null);
+    setOpenPlaylistSortMenu(false);
+
+    if (openCloudMoveTargetMenu) {
+      setOpenCloudMoveTargetMenu(false);
+      setCloudMoveTargetMenuStyle(null);
+      return;
+    }
+
+    cloudMoveTargetTriggerRef.current = trigger;
+    updateCloudMoveTargetMenuStyle(trigger);
+    setOpenCloudMoveTargetMenu(true);
+  }
+
+  function handleCloudMoveTargetChange(nextPlaylistId: string) {
+    setCloudMoveTargetPlaylistId(nextPlaylistId === CLOUD_UNCLASSIFIED_PLAYLIST_ID ? null : nextPlaylistId);
+    setOpenCloudMoveTargetMenu(false);
+    setCloudMoveTargetMenuStyle(null);
+  }
+
   function togglePlaylistSortMenu(trigger: HTMLButtonElement) {
     setOpenQualityMenuId(null);
     setQualityMenuStyle(null);
@@ -6276,6 +6686,8 @@ export default function App() {
       setOpenSettingsQualityMenu(null);
       setSettingsQualityMenuStyle(null);
       setOpenPlaylistSortMenu(false);
+      setOpenCloudMoveTargetMenu(false);
+      setCloudMoveTargetMenuStyle(null);
       setAccountMenuOpen(false);
       closeSongContextMenu();
     }
@@ -6366,6 +6778,34 @@ export default function App() {
       window.removeEventListener("keydown", handleFloatingSortMenuKeydown);
     };
   }, [openPlaylistSortMenu]);
+
+  useEffect(() => {
+    if (!openCloudMoveTargetMenu) {
+      setCloudMoveTargetMenuStyle(null);
+      return;
+    }
+
+    function handleCloudMoveTargetMenuUpdate() {
+      updateCloudMoveTargetMenuStyle();
+    }
+
+    function handleCloudMoveTargetMenuKeydown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpenCloudMoveTargetMenu(false);
+        setCloudMoveTargetMenuStyle(null);
+      }
+    }
+
+    window.addEventListener("resize", handleCloudMoveTargetMenuUpdate);
+    window.addEventListener("scroll", handleCloudMoveTargetMenuUpdate, true);
+    window.addEventListener("keydown", handleCloudMoveTargetMenuKeydown);
+
+    return () => {
+      window.removeEventListener("resize", handleCloudMoveTargetMenuUpdate);
+      window.removeEventListener("scroll", handleCloudMoveTargetMenuUpdate, true);
+      window.removeEventListener("keydown", handleCloudMoveTargetMenuKeydown);
+    };
+  }, [openCloudMoveTargetMenu]);
 
   useEffect(() => {
     if (!songContextMenu) {
@@ -6569,6 +7009,41 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, [dataScopeId]);
+
+  useEffect(() => {
+    listRequestIdRef.current += 1;
+    setCloudSongs([]);
+    setCloudVirtualPlaylists([]);
+    setCloudAssignments({});
+    setCloudMeta({ count: 0, size: 0, maxSize: 0 });
+    setActiveCloudPlaylistId(CLOUD_ALL_PLAYLIST_ID);
+    activeCloudPlaylistIdRef.current = CLOUD_ALL_PLAYLIST_ID;
+    setSelectedSongIds([]);
+    setBatchSelectionMode(false);
+    setCloudMoveSongs([]);
+    setCloudMoveTargetPlaylistId(null);
+    setCloudPlaylistEditor(null);
+    setCloudPlaylistNameInput("");
+    setCloudPlaylistEditorError("");
+    setCloudMoveError("");
+    setOpenCloudMoveTargetMenu(false);
+    setCloudMoveTargetMenuStyle(null);
+    setCloudImportTargetPlaylistId(null);
+    setCloudImportSelectedSongIds([]);
+    setCloudImportError("");
+    if (navKey === "cloud" || resultSource === "cloud") {
+      setResults([]);
+      setPlayQueue([]);
+    }
+
+    if (!dataScopeId) {
+      return;
+    }
+
+    if (navKey === "cloud") {
+      void loadCloudSongs();
+    }
   }, [dataScopeId]);
 
   useEffect(() => {
@@ -7573,6 +8048,35 @@ export default function App() {
     [visibleSongs, selectedSongIds]
   );
   const allVisibleSelected = visibleSongs.length > 0 && selectedVisibleSongs.length === visibleSongs.length;
+  const cloudPlaylistCounts = useMemo(() => {
+    const counts: Record<string, number> = {
+      [CLOUD_ALL_PLAYLIST_ID]: cloudSongs.length,
+      [CLOUD_UNCLASSIFIED_PLAYLIST_ID]: 0
+    };
+    cloudSongs.forEach((song) => {
+      const assignedPlaylistId = cloudAssignments[getCloudSongKey(song)];
+      if (!assignedPlaylistId || !cloudVirtualPlaylists.some((playlist) => playlist.id === assignedPlaylistId)) {
+        counts[CLOUD_UNCLASSIFIED_PLAYLIST_ID] += 1;
+      } else {
+        counts[assignedPlaylistId] = (counts[assignedPlaylistId] ?? 0) + 1;
+      }
+    });
+    return counts;
+  }, [cloudAssignments, cloudSongs, cloudVirtualPlaylists]);
+  const isCloudSongsView = mainTab === "search" && navKey === "cloud" && resultSource === "cloud";
+  const activeCloudVirtualPlaylist = useMemo(
+    () => cloudVirtualPlaylists.find((playlist) => playlist.id === activeCloudPlaylistId) ?? null,
+    [activeCloudPlaylistId, cloudVirtualPlaylists]
+  );
+  const cloudImportSongs = useMemo(() => getUniqueCloudSongs(cloudSongs), [cloudSongs]);
+  const cloudImportSelectableSongs = useMemo(
+    () => cloudImportTargetPlaylistId
+      ? cloudImportSongs.filter((song) => cloudAssignments[getCloudSongKey(song)] !== cloudImportTargetPlaylistId)
+      : [],
+    [cloudAssignments, cloudImportSongs, cloudImportTargetPlaylistId]
+  );
+  const allCloudImportSelectableSelected = cloudImportSelectableSongs.length > 0
+    && cloudImportSelectableSongs.every((song) => cloudImportSelectedSongIds.includes(song.id));
   const createdPlaylists = useMemo(() => playlists.filter((playlist) => playlist.owned), [playlists]);
   const availablePlaylistPickerPlaylists = useMemo(
     () => createdPlaylists.filter((playlist) => playlist.id !== playlistPickerSourcePlaylistId),
@@ -9679,6 +10183,88 @@ export default function App() {
                   </div>
                 </div>
               ) : null}
+              {isCloudSongsView ? (
+                <div className="cloud-playlist-switcher" aria-label="云盘虚拟歌单">
+                  <div className="cloud-playlist-tabs" role="tablist" aria-label="选择云盘歌曲分类">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={activeCloudPlaylistId === CLOUD_ALL_PLAYLIST_ID}
+                      className={activeCloudPlaylistId === CLOUD_ALL_PLAYLIST_ID ? "cloud-playlist-tab active" : "cloud-playlist-tab"}
+                      onClick={() => handleCloudPlaylistSelect(CLOUD_ALL_PLAYLIST_ID)}
+                      disabled={cloudPlaylistMutation}
+                    >
+                      <span>全部歌曲</span>
+                      <small>{cloudPlaylistCounts[CLOUD_ALL_PLAYLIST_ID] ?? 0}</small>
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={activeCloudPlaylistId === CLOUD_UNCLASSIFIED_PLAYLIST_ID}
+                      className={activeCloudPlaylistId === CLOUD_UNCLASSIFIED_PLAYLIST_ID ? "cloud-playlist-tab active" : "cloud-playlist-tab"}
+                      onClick={() => handleCloudPlaylistSelect(CLOUD_UNCLASSIFIED_PLAYLIST_ID)}
+                      disabled={cloudPlaylistMutation}
+                    >
+                      <span>未分类</span>
+                      <small>{cloudPlaylistCounts[CLOUD_UNCLASSIFIED_PLAYLIST_ID] ?? 0}</small>
+                    </button>
+                    {cloudVirtualPlaylists.map((playlist) => (
+                      <div className="cloud-playlist-tab-group" key={playlist.id}>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={activeCloudPlaylistId === playlist.id}
+                          className={activeCloudPlaylistId === playlist.id ? "cloud-playlist-tab active" : "cloud-playlist-tab"}
+                          onClick={() => handleCloudPlaylistSelect(playlist.id)}
+                          disabled={cloudPlaylistMutation}
+                          title={playlist.name}
+                        >
+                          <span>{playlist.name}</span>
+                          <small>{cloudPlaylistCounts[playlist.id] ?? 0}</small>
+                        </button>
+                        <button
+                          type="button"
+                          className="cloud-playlist-action"
+                          aria-label={`重命名 ${playlist.name}`}
+                          title="重命名"
+                          onClick={() => openCloudPlaylistEditor({ mode: "rename", playlistId: playlist.id })}
+                          disabled={cloudPlaylistMutation}
+                        >
+                          ✎
+                        </button>
+                        <button
+                          type="button"
+                          className="cloud-playlist-action danger"
+                          aria-label={`删除 ${playlist.name}`}
+                          title="删除本地分类"
+                          onClick={() => void handleDeleteCloudPlaylist(playlist)}
+                          disabled={cloudPlaylistMutation}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  {activeCloudVirtualPlaylist && visibleSongs.length > 0 ? (
+                    <button
+                      type="button"
+                      className="secondary-button compact cloud-playlist-import"
+                      onClick={openCloudImportDialog}
+                      disabled={cloudPlaylistMutation || cloudImportLoading || cloudImportSongs.length === 0}
+                    >
+                      从全部歌曲导入
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="primary-button compact cloud-playlist-create"
+                    onClick={() => openCloudPlaylistEditor({ mode: "create" })}
+                    disabled={cloudPlaylistMutation}
+                  >
+                    + 新建歌单
+                  </button>
+                </div>
+              ) : null}
               {resultSource === "playlist" && activePlaylist ? (
                 <div className="form-actions playlist-toolbar">
                   <div className="playlist-toolbar-pagination">
@@ -9829,7 +10415,7 @@ export default function App() {
               ) : null}
               {visibleSongs.length > 0 ? (
                 <div className="form-actions results-selection-bar">
-                  <span>{batchSelectionMode ? `已选 ${selectedVisibleSongs.length} 首` : isQqDataMode ? "批量选择歌曲后可下载" : "批量选择歌曲后可下载、收藏或移除"}</span>
+                  <span>{batchSelectionMode ? `已选 ${selectedVisibleSongs.length} 首` : isCloudSongsView ? "批量选择云盘歌曲后可移动分类" : isQqDataMode ? "批量选择歌曲后可下载" : "批量选择歌曲后可下载、收藏或移除"}</span>
                   <div className="results-selection-actions">
                     {batchSelectionMode ? (
                       <>
@@ -9843,7 +10429,18 @@ export default function App() {
                           {!batchHasDownloadCredentials(selectedVisibleSongs) ? <LockIcon /> : <OperationIcon name="download" />}
                           <span>{batchDownloading ? "启动" : "下载"}</span>
                         </button>
-                        {!isQqResultMode ? (
+                        {isCloudSongsView ? (
+                          <button
+                            type="button"
+                            className="secondary-button compact operation-button"
+                            disabled={cloudMoveLoading || cloudPlaylistMutation || selectedVisibleSongs.length === 0}
+                            onClick={() => openCloudMoveDialog(selectedVisibleSongs)}
+                            title="移动已选云盘歌曲"
+                          >
+                            <OperationIcon name="playlist" />
+                            <span>移动</span>
+                          </button>
+                        ) : !isQqResultMode ? (
                           <button
                             type="button"
                             className={!neteaseAccountIsLoggedIn ? "secondary-button compact operation-button locked-action-button" : "secondary-button compact operation-button"}
@@ -9904,7 +10501,25 @@ export default function App() {
                   <div className="empty-box">{resultLoadingMessage}</div>
                 ) : null}
                 {!resultListLoading && visibleSongs.length === 0 ? (
-                  <div className="empty-box">{resultEmptyMessage}</div>
+                  isCloudSongsView && activeCloudVirtualPlaylist ? (
+                    <div className="empty-box cloud-playlist-empty">
+                      <div className="cloud-playlist-empty-copy">
+                        <strong>这个歌单还是空的</strong>
+                        <span>从云盘全部歌曲中选择要加入「{activeCloudVirtualPlaylist.name}」的歌曲。</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="primary-button compact"
+                        onClick={openCloudImportDialog}
+                        disabled={loadingCloudSongs || cloudImportSongs.length === 0}
+                      >
+                        <OperationIcon name="playlist" />
+                        {cloudImportSongs.length === 0 ? "暂无可导入歌曲" : "从全部歌曲导入"}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="empty-box">{resultEmptyMessage}</div>
+                  )
                 ) : null}
                 {visibleSongs.map((song) => (
                   <article
@@ -9960,17 +10575,17 @@ export default function App() {
                         <PreviewIcon />
                         {isPlaybackAuthLocked(song) || isSongPlaybackLocked(song) ? <span className="download-lock-badge"><LockIcon /></span> : null}
                       </button>
-                      {!isQqResultMode ? (
+                      {isCloudSongsView || !isQqResultMode ? (
                         <button
                           type="button"
-                          className={!neteaseAccountIsLoggedIn ? "row-icon-button playlist-add-button locked-download-button" : "row-icon-button playlist-add-button"}
-                          aria-label={!neteaseAccountIsLoggedIn ? `登录后收藏 ${song.title} 到歌单` : `收藏 ${song.title} 到歌单`}
-                          title={!neteaseAccountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
-                          disabled={Boolean(addingToPlaylistId)}
+                          className={isCloudSongsView ? "row-icon-button playlist-add-button" : !neteaseAccountIsLoggedIn ? "row-icon-button playlist-add-button locked-download-button" : "row-icon-button playlist-add-button"}
+                          aria-label={isCloudSongsView ? `移动 ${song.title} 到云盘歌单` : !neteaseAccountIsLoggedIn ? `登录后收藏 ${song.title} 到歌单` : `收藏 ${song.title} 到歌单`}
+                          title={isCloudSongsView ? "移动到云盘歌单" : !neteaseAccountIsLoggedIn ? "登录后收藏到歌单" : "收藏到歌单"}
+                          disabled={isCloudSongsView ? cloudMoveLoading || cloudPlaylistMutation : Boolean(addingToPlaylistId)}
                           onClick={(event) => { event.stopPropagation(); void handleOpenPlaylistPicker(song); }}
                         >
                           <PlaylistAddIcon />
-                          {!neteaseAccountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
+                          {!isCloudSongsView && !neteaseAccountIsLoggedIn ? <span className="download-lock-badge"><LockIcon /></span> : null}
                         </button>
                       ) : null}
                       <button
@@ -11972,6 +12587,219 @@ export default function App() {
         </button>
       ) : null}
 
+      {cloudPlaylistEditor ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={cloudPlaylistEditor.mode === "create" ? "新建云盘歌单" : "重命名云盘歌单"} onClick={closeCloudPlaylistEditor}>
+          <section className="playlist-picker-card cloud-playlist-editor-card" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <p className="eyebrow">本地分类</p>
+                <h2>{cloudPlaylistEditor.mode === "create" ? "新建云盘歌单" : "重命名云盘歌单"}</h2>
+                <span>只保存 TrackVault 本地分类，不会修改网易云官方云盘。</span>
+              </div>
+              <button type="button" className="modal-close" onClick={closeCloudPlaylistEditor} aria-label="关闭">
+                ×
+              </button>
+            </header>
+            <form className="cloud-playlist-editor-form" onSubmit={handleCloudPlaylistEditorSubmit}>
+              <label>
+                <span>歌单名称</span>
+                <input
+                  autoFocus
+                  value={cloudPlaylistNameInput}
+                  maxLength={80}
+                  onChange={(event) => setCloudPlaylistNameInput(event.target.value)}
+                  placeholder="例如：通勤 / 夜间 / 待整理"
+                />
+              </label>
+              {cloudPlaylistEditorError ? <p className="playlist-picker-error">{cloudPlaylistEditorError}</p> : null}
+              <div className="playlist-picker-actions">
+                <button type="button" className="secondary-button" onClick={closeCloudPlaylistEditor} disabled={cloudPlaylistMutation}>
+                  取消
+                </button>
+                <button type="submit" className="primary-button" disabled={cloudPlaylistMutation || !cloudPlaylistNameInput.trim()}>
+                  {cloudPlaylistMutation ? "保存中" : "保存"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
+
+      {cloudImportTargetPlaylistId ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="从云盘全部歌曲导入" onClick={closeCloudImportDialog}>
+          <section className="playlist-picker-card cloud-import-card" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <p className="eyebrow">云盘导入</p>
+                <h2>从全部歌曲导入</h2>
+                <span>
+                  选择歌曲加入「{cloudVirtualPlaylists.find((playlist) => playlist.id === cloudImportTargetPlaylistId)?.name ?? "当前歌单"}」。已存在的歌曲会标记并跳过，其他歌单中的歌曲会移动到这里。
+                </span>
+              </div>
+              <button type="button" className="modal-close" onClick={closeCloudImportDialog} aria-label="关闭导入窗口">
+                ×
+              </button>
+            </header>
+
+            <div className="cloud-import-toolbar">
+              <span>官方云盘全部歌曲 · {cloudImportSongs.length} 首</span>
+              <button
+                type="button"
+                className="secondary-button compact"
+                onClick={handleToggleAllCloudImportSongs}
+                disabled={cloudImportLoading || cloudImportSelectableSongs.length === 0}
+              >
+                {allCloudImportSelectableSelected ? "取消全选" : "全选可导入"}
+              </button>
+            </div>
+
+            {cloudImportError ? <p className="playlist-picker-error">{cloudImportError}</p> : null}
+
+            {cloudImportSongs.length > 0 ? (
+              <div className="cloud-import-list">
+                {cloudImportSongs.map((song) => {
+                  const assignedPlaylistId = cloudAssignments[getCloudSongKey(song)];
+                  const assignedPlaylist = cloudVirtualPlaylists.find((playlist) => playlist.id === assignedPlaylistId);
+                  const alreadyExists = assignedPlaylistId === cloudImportTargetPlaylistId;
+                  const selected = cloudImportSelectedSongIds.includes(song.id);
+
+                  return (
+                    <label
+                      key={song.id}
+                      className={[
+                        "cloud-import-option",
+                        selected ? "selected" : "",
+                        alreadyExists ? "already-exists" : ""
+                      ].filter(Boolean).join(" ")}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        disabled={alreadyExists || cloudImportLoading}
+                        onChange={() => handleToggleCloudImportSong(song)}
+                        aria-label={alreadyExists ? `${song.title} 已存在` : `选择 ${song.title}`}
+                      />
+                      <CoverArt song={song} className="cloud-import-cover" />
+                      <span className="cloud-import-copy">
+                        <strong>{song.title}</strong>
+                        <small>{song.artist} · {song.album}</small>
+                      </span>
+                      <span className="cloud-import-status">
+                        {alreadyExists ? "已存在" : assignedPlaylist ? `当前在「${assignedPlaylist.name}」` : "未分类"}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="empty-box">官方云盘暂时没有可导入的歌曲。</div>
+            )}
+
+            <div className="playlist-picker-actions">
+              <button type="button" className="secondary-button" onClick={closeCloudImportDialog} disabled={cloudImportLoading}>
+                取消
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void handleConfirmCloudImport()}
+                disabled={cloudImportLoading || cloudImportSelectedSongIds.length === 0}
+              >
+                {cloudImportLoading ? "导入中" : cloudImportSelectedSongIds.length > 0 ? `导入 ${cloudImportSelectedSongIds.length} 首` : "选择歌曲"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {cloudMoveSongs.length > 0 ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="移动云盘歌曲" onClick={closeCloudMoveDialog}>
+          <section className="playlist-picker-card cloud-move-card" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <p className="eyebrow">云盘分类</p>
+                <h2>移动到自定义歌单</h2>
+                <span>移动只改变 TrackVault 本地归属，不会删除或修改网易云歌曲。</span>
+              </div>
+              <button type="button" className="modal-close" onClick={closeCloudMoveDialog} aria-label="关闭">
+                ×
+              </button>
+            </header>
+            <div className="playlist-picker-song">
+              <CoverArt song={cloudMoveSongs[0]} className="result-cover" />
+              <div>
+                <strong>{cloudMoveSongs.length > 1 ? `已选 ${cloudMoveSongs.length} 首歌曲` : cloudMoveSongs[0].title}</strong>
+                <span>{cloudMoveSongs.length > 1 ? `${cloudMoveSongs[0].title} 等歌曲` : `${cloudMoveSongs[0].artist} · ${cloudMoveSongs[0].album}`}</span>
+              </div>
+            </div>
+            <label className="cloud-move-target">
+              <span>目标分类</span>
+              <div className="cloud-move-target-select" onClick={(event) => event.stopPropagation()}>
+                <button
+                  ref={cloudMoveTargetTriggerRef}
+                  type="button"
+                  className="playlist-sort-trigger cloud-move-target-trigger"
+                  aria-haspopup="listbox"
+                  aria-expanded={openCloudMoveTargetMenu}
+                  disabled={cloudMoveLoading}
+                  onClick={(event) => toggleCloudMoveTargetMenu(event.currentTarget)}
+                >
+                  <span>
+                    {cloudMoveTargetPlaylistId
+                      ? cloudVirtualPlaylists.find((playlist) => playlist.id === cloudMoveTargetPlaylistId)?.name ?? "未分类"
+                      : "未分类"}
+                  </span>
+                  <span className={openCloudMoveTargetMenu ? "quality-caret open" : "quality-caret"}>
+                    <ChevronIcon />
+                  </span>
+                </button>
+                {openCloudMoveTargetMenu && cloudMoveTargetMenuStyle ? createPortal(
+                  <div
+                    className="playlist-sort-menu cloud-move-target-menu"
+                    role="listbox"
+                    aria-label="选择云盘目标分类"
+                    style={cloudMoveTargetMenuStyle}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={cloudMoveTargetPlaylistId === null}
+                      className={cloudMoveTargetPlaylistId === null ? "playlist-sort-option active" : "playlist-sort-option"}
+                      onClick={() => handleCloudMoveTargetChange(CLOUD_UNCLASSIFIED_PLAYLIST_ID)}
+                    >
+                      未分类
+                    </button>
+                    {cloudVirtualPlaylists.map((playlist) => (
+                      <button
+                        key={playlist.id}
+                        type="button"
+                        role="option"
+                        aria-selected={cloudMoveTargetPlaylistId === playlist.id}
+                        className={cloudMoveTargetPlaylistId === playlist.id ? "playlist-sort-option active" : "playlist-sort-option"}
+                        onClick={() => handleCloudMoveTargetChange(playlist.id)}
+                      >
+                        {playlist.name}
+                      </button>
+                    ))}
+                  </div>,
+                  document.body
+                ) : null}
+              </div>
+            </label>
+            {cloudMoveError ? <p className="playlist-picker-error">{cloudMoveError}</p> : null}
+            <div className="playlist-picker-actions">
+              <button type="button" className="secondary-button" onClick={closeCloudMoveDialog} disabled={cloudMoveLoading}>
+                取消
+              </button>
+              <button type="button" className="primary-button" onClick={() => void handleConfirmCloudMove()} disabled={cloudMoveLoading}>
+                {cloudMoveLoading ? "移动中" : `移动 ${cloudMoveSongs.length} 首`}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {playlistPickerSong ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="收藏到歌单" onClick={closePlaylistPicker}>
           <section className="playlist-picker-card" onClick={(event) => event.stopPropagation()}>
@@ -12090,9 +12918,9 @@ export default function App() {
             歌曲详情
           </button>
           <div className="song-context-divider" />
-          <button type="button" role="menuitem" disabled={Boolean(addingToPlaylistId)} onClick={() => runSongContextAction(() => handleOpenPlaylistPicker(songContextMenu.song))}>
+          <button type="button" role="menuitem" disabled={isCloudSongsView ? cloudMoveLoading || cloudPlaylistMutation : Boolean(addingToPlaylistId)} onClick={() => runSongContextAction(() => handleOpenPlaylistPicker(songContextMenu.song))}>
             <span className="song-context-icon"><PlaylistAddIcon /></span>
-            收藏到歌单
+            {isCloudSongsView ? "移动到云盘歌单" : "收藏到歌单"}
           </button>
           <button type="button" role="menuitem" disabled={Boolean(directDownloadingSongId || batchDownloading || isSongDownloadLocked(songContextMenu.song))} title={!songHasDownloadCredential(songContextMenu.song) ? getDownloadCredentialTitle(songContextMenu.song) : isSongDownloadLocked(songContextMenu.song) ? getSongDownloadBlockedText(songContextMenu.song) : undefined} onClick={() => runSongContextAction(() => handleDownload(songContextMenu.song))}>
             <span className="song-context-icon">{songHasDownloadCredential(songContextMenu.song) ? <DownloadIcon /> : <LockIcon />}</span>

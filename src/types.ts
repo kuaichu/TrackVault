@@ -264,6 +264,17 @@ export type UserPlaylist = {
   owned: boolean;
 };
 
+export type CloudVirtualPlaylist = {
+  id: string;
+  name: string;
+};
+
+export type CloudVirtualPlaylistState = {
+  version: 1;
+  playlists: CloudVirtualPlaylist[];
+  assignments: Record<string, string>;
+};
+
 export type PlaylistSongsPage = {
   songs: Song[];
   page: number;

@@ -13884,3 +13884,374 @@ body {
     transform: translateX(12px) scale(0.96);
   }
 }
+
+.cloud-playlist-switcher {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 var(--results-body-x) 18px;
+}
+
+.cloud-playlist-tabs {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 1px 6px;
+  scrollbar-width: thin;
+}
+
+.cloud-playlist-tab-group {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.cloud-playlist-tab {
+  min-width: max-content;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-secondary);
+  font-size: 0.83rem;
+  white-space: nowrap;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.cloud-playlist-tab-group .cloud-playlist-tab {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.cloud-playlist-tab:not(:disabled):hover,
+.cloud-playlist-tab.active {
+  border-color: rgba(255, 170, 92, 0.34);
+  background: rgba(255, 155, 87, 0.11);
+  color: var(--text-primary);
+}
+
+.cloud-playlist-tab small {
+  min-width: 18px;
+  color: var(--text-faint);
+  font-size: 11px;
+  text-align: center;
+}
+
+.cloud-playlist-tab.active small {
+  color: #ffd19f;
+}
+
+.cloud-playlist-action {
+  width: 30px;
+  flex: 0 0 30px;
+  border: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 14px;
+}
+
+.cloud-playlist-action:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.cloud-playlist-action.danger:hover {
+  background: rgba(255, 105, 105, 0.1);
+  color: #ffaaa6;
+}
+
+.cloud-playlist-create {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.cloud-playlist-import {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.cloud-playlist-editor-card {
+  grid-template-rows: auto auto;
+}
+
+.cloud-playlist-editor-form {
+  display: grid;
+  gap: 16px;
+}
+
+.cloud-playlist-editor-form .playlist-picker-actions,
+.cloud-move-card .playlist-picker-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cloud-playlist-editor-form label,
+.cloud-move-target {
+  display: grid;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.cloud-playlist-editor-form input,
+.cloud-move-target-trigger {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-primary);
+}
+
+.cloud-playlist-editor-form input:focus,
+.cloud-move-target-trigger:focus,
+.cloud-move-target-trigger:focus-visible {
+  border-color: rgba(255, 170, 92, 0.52);
+  box-shadow: 0 0 0 3px rgba(255, 170, 92, 0.1);
+}
+
+.cloud-move-card {
+  grid-template-rows: auto auto auto auto;
+}
+
+.cloud-move-target-select {
+  position: relative;
+  min-width: 0;
+}
+
+.cloud-move-target-trigger {
+  cursor: pointer;
+}
+
+.cloud-move-target-trigger:disabled {
+  cursor: wait;
+  opacity: 0.66;
+}
+
+.cloud-move-target-menu {
+  min-width: 220px;
+}
+
+.cloud-playlist-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 96px;
+  padding: 20px;
+  background:
+    linear-gradient(90deg, rgba(255, 180, 93, 0.07), transparent 58%),
+    var(--panel-bg-solid);
+  border: 1px solid rgba(255, 180, 93, 0.13);
+}
+
+.cloud-playlist-empty-copy {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.cloud-playlist-empty-copy strong {
+  color: var(--text-primary);
+  font-size: 0.96rem;
+}
+
+.cloud-playlist-empty-copy span {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.cloud-playlist-empty button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.cloud-import-card {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.cloud-import-card:has(.playlist-picker-error) {
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+}
+
+.cloud-import-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.cloud-import-toolbar span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cloud-import-list {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  overflow-y: auto;
+  padding-right: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(142, 154, 174, 0.42) rgba(255, 255, 255, 0.035);
+}
+
+.cloud-import-option {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 20px 46px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  min-height: 68px;
+  padding: 9px 12px;
+  border: 1px solid rgba(143, 158, 181, 0.13);
+  border-radius: 14px;
+  background: rgba(19, 28, 42, 0.78);
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, opacity 160ms ease;
+}
+
+.cloud-import-option:hover {
+  border-color: rgba(255, 180, 93, 0.28);
+  background: rgba(25, 34, 49, 0.94);
+}
+
+.cloud-import-option.selected {
+  border-color: rgba(255, 183, 96, 0.44);
+  background: linear-gradient(90deg, rgba(255, 180, 93, 0.105), rgba(255, 180, 93, 0.018) 62%), rgba(19, 28, 42, 0.9);
+  box-shadow: inset 3px 0 0 rgba(255, 185, 103, 0.74);
+}
+
+.cloud-import-option.already-exists {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.cloud-import-option input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: #ffb45c;
+}
+
+.cloud-import-cover {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+}
+
+.cloud-import-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.cloud-import-copy strong,
+.cloud-import-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cloud-import-copy strong {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.cloud-import-copy small {
+  color: var(--text-muted);
+  font-size: 0.77rem;
+}
+
+.cloud-import-status {
+  max-width: 138px;
+  color: var(--text-faint);
+  font-size: 0.76rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cloud-import-option.already-exists .cloud-import-status {
+  color: #ffd19f;
+  font-weight: 800;
+}
+
+@media (max-width: 760px) {
+  .cloud-playlist-switcher {
+    align-items: stretch;
+    flex-direction: column;
+    margin-bottom: 14px;
+  }
+
+  .cloud-playlist-tabs {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+
+  .cloud-playlist-create {
+    align-self: flex-start;
+  }
+
+  .cloud-playlist-empty {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .cloud-playlist-empty button {
+    align-self: flex-start;
+  }
+}
+
+@media (max-width: 520px) {
+  .cloud-playlist-switcher {
+    margin-left: 12px;
+    margin-right: 12px;
+  }
+
+  .cloud-playlist-tab {
+    min-height: 40px;
+    padding-inline: 11px;
+  }
+
+  .cloud-playlist-editor-card,
+  .cloud-move-card,
+  .cloud-import-card {
+    padding: 16px;
+  }
+
+  .cloud-import-option {
+    grid-template-columns: 20px 42px minmax(0, 1fr);
+    gap: 9px;
+  }
+
+  .cloud-import-status {
+    grid-column: 3;
+    max-width: none;
+    text-align: left;
+  }
+}

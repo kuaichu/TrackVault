@@ -30,6 +30,7 @@ import { getPersonalRadioSongs } from "./personal-radio-provider.js";
 import { createAccountRouter } from "./routes/account-router.js";
 import { createAdminRouter } from "./routes/admin-router.js";
 import { createCommentRouter } from "./routes/comment-router.js";
+import { createCloudVirtualPlaylistRouter } from "./routes/cloud-virtual-playlist-router.js";
 import { createDownloadTaskRouter } from "./routes/download-task-router.js";
 import { createLibraryRouter } from "./routes/library-router.js";
 import { createMediaRouter } from "./routes/media-router.js";
@@ -123,6 +124,10 @@ app.use(createUserStateRouter({
     (await import("./player-state-store.js")).getPlayerState(dataScopeId),
   savePlayerState: async (state, dataScopeId) =>
     (await import("./player-state-store.js")).savePlayerState(state, dataScopeId)
+}));
+
+app.use(createCloudVirtualPlaylistRouter({
+  getDataScopeId
 }));
 
 app.use(createLibraryRouter({

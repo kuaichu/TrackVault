@@ -10,6 +10,8 @@ import type {
   NeteaseCellphoneLoginResult,
   DownloadQualityLevel,
   DownloadTask,
+  CloudVirtualPlaylist,
+  CloudVirtualPlaylistState,
   NeteaseImportAudit,
   NeteaseImportAuditJob,
   NeteaseImportAuditRequest,
@@ -942,6 +944,88 @@ export async function getCloudSongs(): Promise<{ songs: Song[]; count: number; s
   }
 
   return (await response.json()) as { songs: Song[]; count: number; size: number; maxSize: number };
+}
+
+export async function getCloudVirtualPlaylistState(dataScopeId: string): Promise<CloudVirtualPlaylistState> {
+  const response = await apiFetch("/api/cloud/virtual-playlists", {
+    headers: getDataScopeHeaders(dataScopeId)
+  });
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "获取云盘虚拟歌单失败");
+  }
+
+  return (await response.json()) as CloudVirtualPlaylistState;
+}
+
+export async function createCloudVirtualPlaylist(name: string, dataScopeId: string): Promise<CloudVirtualPlaylist> {
+  const response = await apiFetch("/api/cloud/virtual-playlists", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getDataScopeHeaders(dataScopeId)
+    },
+    body: JSON.stringify({ name })
+  });
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "创建云盘虚拟歌单失败");
+  }
+
+  const data = (await response.json()) as { playlist: CloudVirtualPlaylist };
+  return data.playlist;
+}
+
+export async function renameCloudVirtualPlaylist(playlistId: string, name: string, dataScopeId: string): Promise<CloudVirtualPlaylist> {
+  const response = await apiFetch(`/api/cloud/virtual-playlists/${encodeURIComponent(playlistId)}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getDataScopeHeaders(dataScopeId)
+    },
+    body: JSON.stringify({ name })
+  });
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "重命名云盘虚拟歌单失败");
+  }
+
+  const data = (await response.json()) as { playlist: CloudVirtualPlaylist };
+  return data.playlist;
+}
+
+export async function deleteCloudVirtualPlaylist(playlistId: string, dataScopeId: string): Promise<{ deletedPlaylistId: string }> {
+  const response = await apiFetch(`/api/cloud/virtual-playlists/${encodeURIComponent(playlistId)}`, {
+    method: "DELETE",
+    headers: getDataScopeHeaders(dataScopeId)
+  });
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "删除云盘虚拟歌单失败");
+  }
+
+  return (await response.json()) as { deletedPlaylistId: string };
+}
+
+export async function moveCloudVirtualPlaylistSongs(
+  songIds: string[],
+  playlistId: string | null,
+  dataScopeId: string
+): Promise<CloudVirtualPlaylistState> {
+  const response = await apiFetch("/api/cloud/virtual-playlists/assignments", {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      ...getDataScopeHeaders(dataScopeId)
+    },
+    body: JSON.stringify({ songIds, playlistId })
+  });
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(data?.message ?? "移动云盘歌曲失败");
+  }
+
+  return (await response.json()) as CloudVirtualPlaylistState;
 }
 
 export async function getDailyRecommendSongs(): Promise<Song[]> {

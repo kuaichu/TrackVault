@@ -16,11 +16,26 @@ type SqliteDatabase = {
   };
 };
 
-type JsonStore = {
+export type JsonCloudVirtualPlaylistScope = {
+  version: 1;
+  playlists: Array<{
+    id: string;
+    name: string;
+  }>;
+  assignments: Record<string, string>;
+};
+
+export type JsonCloudVirtualPlaylistStore = {
+  version: 1;
+  scopes: Record<string, JsonCloudVirtualPlaylistScope>;
+};
+
+export type JsonStore = {
   search_history?: Record<string, string[]>;
   play_history?: Record<string, unknown[]>;
   app_settings?: Record<string, unknown>;
   player_state?: Record<string, unknown>;
+  cloud_virtual_playlists?: JsonCloudVirtualPlaylistStore;
   download_tasks?: Array<{
     id: string;
     user_key: string;
@@ -82,6 +97,32 @@ try {
 
     CREATE INDEX IF NOT EXISTS idx_download_tasks_user_updated_at
       ON download_tasks (user_key, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS cloud_virtual_playlists (
+      data_scope_id TEXT NOT NULL,
+      playlist_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (data_scope_id, playlist_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS cloud_virtual_assignments (
+      data_scope_id TEXT NOT NULL,
+      song_key TEXT NOT NULL,
+      playlist_id TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (data_scope_id, song_key),
+      FOREIGN KEY (data_scope_id, playlist_id)
+        REFERENCES cloud_virtual_playlists (data_scope_id, playlist_id)
+        ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cloud_virtual_playlists_scope_updated_at
+      ON cloud_virtual_playlists (data_scope_id, updated_at ASC);
+
+    CREATE INDEX IF NOT EXISTS idx_cloud_virtual_assignments_scope_playlist
+      ON cloud_virtual_assignments (data_scope_id, playlist_id);
   `);
   sqliteAvailable = true;
 } catch {
@@ -95,6 +136,10 @@ function getDefaultJsonStore(): JsonStore {
     play_history: {},
     app_settings: {},
     player_state: {},
+    cloud_virtual_playlists: {
+      version: 1,
+      scopes: {}
+    },
     download_tasks: []
   };
 }
