@@ -9091,27 +9091,27 @@ export default function App() {
           </div>
 
           <div className="sidebar-nav-layout">
-            <div className="sidebar-group">
-              <span className="group-label">音乐</span>
-              <nav className="nav-list" aria-label="音乐导航">
-                <button type="button" className={mainTab === "search" && navKey === "discover" ? "nav-button active" : "nav-button"} onClick={() => void loadDiscoverSongs()}>
-                  发现音乐
-                </button>
-                <button type="button" className={mainTab === "search" && navKey === "search" ? "nav-button active" : "nav-button"} onClick={openSearchPage}>
-                  搜索
-                </button>
-                <button type="button" className={mainTab === "search" && navKey === "playlists" ? "nav-button active" : "nav-button"} onClick={openPlaylistsPage}>
-                  我的歌单
-                </button>
-                {!isQqDataMode ? (
-                  <button type="button" className={mainTab === "search" && navKey === "cloud" ? "nav-button active" : "nav-button"} onClick={() => void loadCloudSongs()}>
-                    云盘音乐
-                  </button>
-                ) : null}
-              </nav>
-            </div>
-
             <div className="sidebar-nav-stack">
+              <div className="sidebar-group">
+                <span className="group-label">音乐</span>
+                <nav className="nav-list" aria-label="音乐导航">
+                  <button type="button" className={mainTab === "search" && navKey === "discover" ? "nav-button active" : "nav-button"} onClick={() => void loadDiscoverSongs()}>
+                    发现音乐
+                  </button>
+                  <button type="button" className={mainTab === "search" && navKey === "search" ? "nav-button active" : "nav-button"} onClick={openSearchPage}>
+                    搜索
+                  </button>
+                  <button type="button" className={mainTab === "search" && navKey === "playlists" ? "nav-button active" : "nav-button"} onClick={openPlaylistsPage}>
+                    我的歌单
+                  </button>
+                  {!isQqDataMode ? (
+                    <button type="button" className={mainTab === "search" && navKey === "cloud" ? "nav-button active" : "nav-button"} onClick={() => void loadCloudSongs()}>
+                      云盘音乐
+                    </button>
+                  ) : null}
+                </nav>
+              </div>
+
               <div className="sidebar-group">
                 <span className="group-label">工具</span>
                 <nav className="nav-list" aria-label="工具导航">

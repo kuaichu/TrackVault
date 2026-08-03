@@ -10230,20 +10230,19 @@ body {
 .sidebar-nav-stack {
   display: grid;
   flex: 1 1 auto;
+  align-content: start;
   gap: 18px;
   min-height: 0;
   min-width: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding-right: 0;
-  margin-right: 0;
-  scrollbar-width: none;
-  scrollbar-color: transparent transparent;
+  padding-right: 5px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
 }
 
 .sidebar-nav-stack::-webkit-scrollbar {
-  width: 0;
-  height: 0;
+  width: 5px;
 }
 
 .sidebar-nav-stack::-webkit-scrollbar-track {
@@ -10251,9 +10250,8 @@ body {
 }
 
 .sidebar-nav-stack::-webkit-scrollbar-thumb {
-  border: 0;
   border-radius: 999px;
-  background: transparent;
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .sidebar .sidebar-group {
