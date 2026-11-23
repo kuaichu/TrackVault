@@ -151,29 +151,45 @@ export function ToastContainer() {
       style={{ zIndex: "var(--tv-z-toast)" }}
       aria-live="polite"
     >
-      {items.map((item) => (
-        <div
-          key={item.id}
-          className="pointer-events-auto flex items-start gap-2.5 rounded-xl border border-[var(--tv-border-strong)] bg-[var(--tv-surface-elevated)]/95 px-3.5 py-2.5 text-[13px] text-[var(--tv-text)] shadow-xl backdrop-blur-xl"
-        >
-          {item.variant === "error" ? (
-            <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--tv-danger)]" />
-          ) : item.variant === "success" ? (
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[var(--tv-success)]" />
-          ) : (
-            <Info className="mt-0.5 h-4 w-4 shrink-0 text-[var(--tv-text-muted)]" />
-          )}
-          <span className="flex-1 leading-snug">{item.message}</span>
-          <button
-            type="button"
-            onClick={() => dismiss(item.id)}
-            className="text-[var(--tv-text-subtle)] hover:text-[var(--tv-text)]"
-            aria-label="关闭提示"
+      {items.map((item) => {
+        const safeActionHref = item.action ? sanitizeExternalUrl(item.action.href) : null;
+        return (
+          <div
+            key={item.id}
+            className="pointer-events-auto flex items-start gap-2.5 rounded-xl border border-[var(--tv-border-strong)] bg-[var(--tv-surface-elevated)]/95 px-3.5 py-2.5 text-[13px] text-[var(--tv-text)] shadow-xl backdrop-blur-xl"
           >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      ))}
+            {item.variant === "error" ? (
+              <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--tv-danger)]" />
+            ) : item.variant === "success" ? (
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[var(--tv-success)]" />
+            ) : (
+              <Info className="mt-0.5 h-4 w-4 shrink-0 text-[var(--tv-text-muted)]" />
+            )}
+            <div className="min-w-0 flex-1 space-y-1.5 leading-snug">
+              <span className="block break-words">{item.message}</span>
+              {item.action && safeActionHref && (
+                <a
+                  href={safeActionHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => dismiss(item.id)}
+                  className="inline-flex items-center rounded-md bg-[var(--tv-accent)] px-2.5 py-1 text-xs font-medium text-[var(--tv-accent-fg)] transition-colors hover:bg-[var(--tv-accent-hover)]"
+                >
+                  {item.action.label}
+                </a>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => dismiss(item.id)}
+              className="text-[var(--tv-text-subtle)] hover:text-[var(--tv-text)]"
+              aria-label="关闭提示"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        );
+      })}
     </output>
   );
 }

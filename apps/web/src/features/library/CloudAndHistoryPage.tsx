@@ -56,6 +56,15 @@ export function CloudPage() {
         <EmptyState
           title="未能加载网易云盘"
           description={cloudQuery.error instanceof Error ? cloudQuery.error.message : "请先绑定网易云账号"}
+          action={
+            <button
+              type="button"
+              onClick={() => void cloudQuery.refetch()}
+              className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+            >
+              重试
+            </button>
+          }
         />
       ) : (
         <>
@@ -92,6 +101,9 @@ export function HistoryPage() {
       queryClient.setQueryData(["play-history"], res);
       toast.info("已清空播放记录");
     },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "清空播放记录失败");
+    },
   });
 
   const songs = historyQuery.data?.items ?? [];
@@ -116,8 +128,9 @@ export function HistoryPage() {
               </button>
               <button
                 type="button"
+                disabled={clearMutation.isPending}
                 onClick={() => clearMutation.mutate()}
-                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-danger)]"
+                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-danger)] disabled:opacity-40"
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 清空
@@ -133,6 +146,20 @@ export function HistoryPage() {
             <div key={id} className="h-12 animate-pulse rounded-lg bg-[var(--tv-surface)]" />
           ))}
         </div>
+      ) : historyQuery.isError ? (
+        <EmptyState
+          title="未能加载最近播放"
+          description={historyQuery.error instanceof Error ? historyQuery.error.message : "请稍后重试"}
+          action={
+            <button
+              type="button"
+              onClick={() => void historyQuery.refetch()}
+              className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+            >
+              重试
+            </button>
+          }
+        />
       ) : (
         <SongTable
           songs={songs}

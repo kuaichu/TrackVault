@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Play, Search, X } from "lucide-react";
+import { AlertTriangle, Play, Search, Trash2, X } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { EntitySearchType, ProviderMode } from "#shared";
 import { SongTable } from "../../entities/song/SongTable.js";
 import { api } from "../../shared/api/endpoints.js";
+import { toast } from "../../shared/store/toast-store.js";
 import { CoverArt, EmptyState, PlatformBadge, SegmentedTabs } from "../../shared/ui/primitives.js";
 
 type SearchTab = "song" | EntitySearchType;
@@ -13,36 +14,42 @@ export function SearchPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialQ = searchParams.get("q") ?? "";
-  const initialMode = (searchParams.get("mode") as ProviderMode | null) ?? "aggregate";
-  const initialTab = (searchParams.get("type") as SearchTab | null) ?? "song";
 
-  const [inputValue, setInputValue] = useState(initialQ);
-  const [mode, setMode] = useState<ProviderMode>(
-    initialMode === "netease" || initialMode === "qq" || initialMode === "aggregate"
-      ? initialMode
-      : "aggregate",
-  );
-  const [tab, setTab] = useState<SearchTab>(
-    initialTab === "artist" || initialTab === "album" || initialTab === "playlist" ? initialTab : "song",
-  );
+  const settingsQuery = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => api.getSettings(),
+  });
 
+  const urlQ = searchParams.get("q") ?? "";
+  const rawMode = searchParams.get("mode");
+  const hasExplicitMode = rawMode === "netease" || rawMode === "qq" || rawMode === "aggregate";
+  const defaultMode: ProviderMode = settingsQuery.data?.settings.providerMode ?? "aggregate";
+  const mode: ProviderMode = hasExplicitMode ? rawMode : defaultMode;
+
+  const rawType = searchParams.get("type");
+  const tab: SearchTab =
+    rawType === "artist" || rawType === "album" || rawType === "playlist" ? rawType : "song";
+
+  const [inputValue, setInputValue] = useState(urlQ);
+
+  // Only sync draft input when the URL keyword itself changes (preserving uncommitted drafts on mode/type switches)
   useEffect(() => {
-    setInputValue(searchParams.get("q") ?? "");
-  }, [searchParams]);
+    setInputValue(urlQ);
+  }, [urlQ]);
 
-  const activeQuery = (searchParams.get("q") ?? "").trim();
+  const activeQuery = urlQ.trim();
+  const modeReady = hasExplicitMode || !settingsQuery.isLoading;
 
   const songSearchQuery = useQuery({
     queryKey: ["search", activeQuery, mode],
     queryFn: ({ signal }) => api.searchSongs(activeQuery, mode, signal),
-    enabled: Boolean(activeQuery && tab === "song"),
+    enabled: Boolean(activeQuery && tab === "song" && modeReady),
   });
 
   const entitySearchQuery = useQuery({
     queryKey: ["search-entities", activeQuery, mode, tab],
     queryFn: ({ signal }) => api.searchEntities(activeQuery, mode, tab as EntitySearchType, signal),
-    enabled: Boolean(activeQuery && tab !== "song"),
+    enabled: Boolean(activeQuery && tab !== "song" && modeReady),
   });
 
   const historyQuery = useQuery({
@@ -53,12 +60,26 @@ export function SearchPage() {
   const addHistoryMutation = useMutation({
     mutationFn: (keyword: string) => api.addSearchHistory(keyword),
     onSuccess: (res) => queryClient.setQueryData(["search-history"], res),
+    onError: (err) => toast.error(err instanceof Error ? err.message : "保存搜索历史失败"),
   });
 
   const removeHistoryMutation = useMutation({
     mutationFn: (keyword?: string) => api.removeSearchHistory(keyword),
-    onSuccess: (res) => queryClient.setQueryData(["search-history"], res),
+    onSuccess: (res, keyword) => {
+      queryClient.setQueryData(["search-history"], res);
+      if (keyword === undefined) {
+        toast.info("已清空搜索历史");
+      }
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "删除搜索历史失败"),
   });
+
+  const updateParams = (patch: { mode?: ProviderMode; type?: SearchTab }) => {
+    const next = new URLSearchParams(searchParams);
+    if (patch.mode !== undefined) next.set("mode", patch.mode);
+    if (patch.type !== undefined) next.set("type", patch.type);
+    setSearchParams(next);
+  };
 
   const triggerSearch = (keyword: string, nextMode = mode, nextTab = tab) => {
     const clean = keyword.trim();
@@ -75,8 +96,9 @@ export function SearchPage() {
   const historyItems = historyQuery.data?.items ?? [];
   const warnings =
     tab === "song" ? (songSearchQuery.data?.warnings ?? []) : (entitySearchQuery.data?.warnings ?? []);
-  const activeLoading = tab === "song" ? songSearchQuery.isLoading : entitySearchQuery.isLoading;
-  const activeError = tab === "song" ? songSearchQuery.error : entitySearchQuery.error;
+  const activeQueryResult = tab === "song" ? songSearchQuery : entitySearchQuery;
+  const activeLoading = activeQueryResult.isLoading || (Boolean(activeQuery) && !modeReady);
+  const activeError = activeQueryResult.isError ? activeQueryResult.error : null;
 
   return (
     <div className="space-y-6">
@@ -84,10 +106,7 @@ export function SearchPage() {
         <h1 className="text-[28px] font-bold tracking-tight text-[var(--tv-text)]">搜索</h1>
         <SegmentedTabs
           value={mode}
-          onChange={(next) => {
-            setMode(next);
-            if (activeQuery) setSearchParams({ q: activeQuery, mode: next, type: tab });
-          }}
+          onChange={(next) => updateParams({ mode: next })}
           items={[
             { id: "aggregate", label: "聚合" },
             { id: "netease", label: "网易云" },
@@ -131,10 +150,7 @@ export function SearchPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SegmentedTabs<SearchTab>
           value={tab}
-          onChange={(next) => {
-            setTab(next);
-            if (activeQuery) setSearchParams({ q: activeQuery, mode, type: next });
-          }}
+          onChange={(next) => updateParams({ type: next })}
           items={[
             { id: "song", label: "单曲" },
             { id: "artist", label: "歌手" },
@@ -167,6 +183,15 @@ export function SearchPage() {
                 </button>
               </span>
             ))}
+            <button
+              type="button"
+              disabled={removeHistoryMutation.isPending}
+              onClick={() => removeHistoryMutation.mutate(undefined)}
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs text-[var(--tv-text-subtle)] transition-colors hover:bg-[var(--tv-surface)] hover:text-[var(--tv-danger)] disabled:opacity-40"
+            >
+              <Trash2 className="h-3 w-3" />
+              清空全部历史
+            </button>
           </div>
         )}
       </div>
@@ -194,6 +219,15 @@ export function SearchPage() {
         <EmptyState
           title="搜索未能完成"
           description={activeError instanceof Error ? activeError.message : "请稍后重试"}
+          action={
+            <button
+              type="button"
+              onClick={() => void activeQueryResult.refetch()}
+              className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+            >
+              重试
+            </button>
+          }
         />
       ) : tab === "song" ? (
         <SongTable songs={songSearchQuery.data?.results ?? []} emptyText="未找到匹配曲目" />

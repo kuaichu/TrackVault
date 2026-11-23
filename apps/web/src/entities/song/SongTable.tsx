@@ -6,6 +6,7 @@ import {
   Heart,
   ListEnd,
   ListPlus,
+  Loader2,
   Lock,
   MoreHorizontal,
   Play,
@@ -14,10 +15,19 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { type DownloadMode, type QualityLevel, type Song, getQualityLabel, getSongKey } from "#shared";
+import {
+  type DownloadMode,
+  type QualityLevel,
+  type Song,
+  getQualityLabel,
+  getSongKey,
+  sanitizeExternalUrl,
+} from "#shared";
 import { audioEngine } from "../../features/player/engine/audio-engine.js";
 import { usePlayerStore } from "../../features/player/store/player-store.js";
 import { api } from "../../shared/api/endpoints.js";
+import { useCapabilities } from "../../shared/hooks/use-capabilities.js";
+import { trackPendingDirectLinkJob } from "../../shared/hooks/use-job-events.js";
 import { useLikedIdsQuery, useToggleLikeMutation } from "../../shared/hooks/use-toggle-like.js";
 import { toast } from "../../shared/store/toast-store.js";
 import { CoverArt, EmptyState, EqualizerBars, PlatformBadge } from "../../shared/ui/primitives.js";
@@ -45,23 +55,36 @@ export function SongTable({
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
 
-  const hasNeteaseSongs = songs.some((s) => s.platform === "netease");
+  const capabilities = useCapabilities();
+  const canLikeNetease = capabilities.netease.canLikeSong && songs.some((s) => s.platform === "netease");
+  const canLikeQq = capabilities.qq.canLikeSong && songs.some((s) => s.platform === "qq");
 
   const { data: settingsData } = useQuery({
     queryKey: ["settings"],
     queryFn: () => api.getSettings(),
   });
 
-  const { data: likedIdsData } = useLikedIdsQuery("netease", hasNeteaseSongs);
+  const { data: neteaseLikedIdsData } = useLikedIdsQuery("netease", canLikeNetease);
+  const { data: qqLikedIdsData } = useLikedIdsQuery("qq", canLikeQq);
 
   const [downloadMode, setDownloadMode] = useState<DownloadMode>("tagged_server");
+  const [pendingDownloadKeys, setPendingDownloadKeys] = useState<Set<string>>(() => new Set());
   const [openMenuKey, setOpenMenuKey] = useState<string | null>(null);
   const [menuPanel, setMenuPanel] = useState<"main" | "playlists" | "quality">("main");
 
+  const activeMenuSong = openMenuKey ? songs.find((s) => getSongKey(s) === openMenuKey) : undefined;
+  const playlistMenuPlatform = activeMenuSong?.platform;
+
   const { data: userPlaylistsData } = useQuery({
-    queryKey: ["playlists", "netease"],
-    queryFn: () => api.getUserPlaylists("netease"),
-    enabled: Boolean(openMenuKey && menuPanel === "playlists"),
+    queryKey: ["playlists", playlistMenuPlatform],
+    queryFn: () =>
+      playlistMenuPlatform ? api.getUserPlaylists(playlistMenuPlatform) : Promise.resolve({ playlists: [] }),
+    enabled: Boolean(
+      openMenuKey &&
+        menuPanel === "playlists" &&
+        playlistMenuPlatform &&
+        capabilities[playlistMenuPlatform].canManagePlaylistTracks,
+    ),
     staleTime: 60_000,
   });
 
@@ -75,21 +98,50 @@ export function SongTable({
     return () => window.removeEventListener("pointerdown", onPointerDown);
   }, [openMenuKey]);
 
-  const likedSet = new Set(likedIdsData?.ids ?? []);
+  const likedSets = {
+    netease: new Set(neteaseLikedIdsData?.ids ?? []),
+    qq: new Set(qqLikedIdsData?.ids ?? []),
+  };
   const defaultDownloadQuality = settingsData?.settings.defaultDownloadQuality ?? "lossless";
 
   const downloadMutation = useMutation({
     mutationFn: (payload: { song: Song; level: QualityLevel; mode: DownloadMode }) =>
       api.createDownloadJob(payload),
+    onMutate: (vars) => {
+      const songKey = getSongKey(vars.song);
+      setPendingDownloadKeys((prev) => {
+        const next = new Set(prev);
+        next.add(songKey);
+        return next;
+      });
+    },
     onSuccess: (res, vars) => {
-      toast.success(`已加入下载：${vars.song.title}（${getQualityLabel(vars.level)}）`);
-      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
-      if (res.job.directUrl) {
-        window.open(res.job.directUrl, "_blank", "noopener,noreferrer");
+      if (vars.mode === "direct_link") {
+        const safeDirectUrl = sanitizeExternalUrl(res.job.directUrl);
+        if (safeDirectUrl) {
+          toast.success(`直链已就绪：${vars.song.title}（${getQualityLabel(vars.level)}）`, {
+            action: { label: "打开直链", href: safeDirectUrl },
+          });
+        } else {
+          trackPendingDirectLinkJob(res.job.id);
+          toast.success(`正在解析直链：${vars.song.title}（${getQualityLabel(vars.level)}）`);
+        }
+      } else {
+        toast.success(`已加入下载：${vars.song.title}（${getQualityLabel(vars.level)}）`);
       }
+      void queryClient.invalidateQueries({ queryKey: ["jobs", "download"] });
     },
     onError: (err) => {
       toast.error(err instanceof Error ? err.message : "加入下载队列失败");
+    },
+    onSettled: (_data, _error, vars) => {
+      const songKey = getSongKey(vars.song);
+      setPendingDownloadKeys((prev) => {
+        if (!prev.has(songKey)) return prev;
+        const next = new Set(prev);
+        next.delete(songKey);
+        return next;
+      });
     },
   });
 
@@ -97,15 +149,19 @@ export function SongTable({
 
   const addToPlaylistMutation = useMutation({
     mutationFn: (vars: { playlistId: string; playlistName: string; song: Song }) =>
-      api.addTracksToPlaylist("netease", vars.playlistId, [vars.song.id]),
+      api.addTracksToPlaylist(vars.song.platform, vars.playlistId, [vars.song.id]),
     onSuccess: (_res, vars) => {
       toast.success(`已收藏到「${vars.playlistName}」`);
-      void queryClient.invalidateQueries({ queryKey: ["playlist-tracks", "netease", vars.playlistId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["playlist-tracks", vars.song.platform, vars.playlistId],
+      });
+      void queryClient.invalidateQueries({ queryKey: ["playlists", vars.song.platform] });
+      void queryClient.invalidateQueries({ queryKey: ["playlists"] });
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "收藏到歌单失败"),
   });
 
-  const ownedNeteasePlaylists = (userPlaylistsData?.playlists ?? []).filter((pl) => pl.owned);
+  const ownedTargetPlaylists = (userPlaylistsData?.playlists ?? []).filter((pl) => pl.owned);
 
   if (songs.length === 0) {
     return <EmptyState title={emptyText} description={emptyDescription} />;
@@ -157,7 +213,10 @@ export function SongTable({
           const key = getSongKey(song);
           const active = currentTrack ? getSongKey(currentTrack) === key : false;
           const locked = Boolean(song.availability?.playback.locked);
-          const isLiked = song.platform === "netease" && likedSet.has(song.id);
+          const canLikeSong = capabilities[song.platform].canLikeSong;
+          const canManagePlaylists = capabilities[song.platform].canManagePlaylistTracks;
+          const isLiked = canLikeSong && likedSets[song.platform].has(song.id);
+          const isDownloading = pendingDownloadKeys.has(key);
           const preferredLevel: QualityLevel = song.availableQualities.some(
             (q) => q.level === defaultDownloadQuality,
           )
@@ -276,7 +335,7 @@ export function SongTable({
 
               {/* Clean Row Actions: Like + Quick Download (sm+) + Context Menu (touch-friendly) */}
               <div className="relative flex items-center justify-end gap-0.5">
-                {song.platform === "netease" && (
+                {canLikeSong && (
                   <button
                     type="button"
                     onClick={() =>
@@ -301,7 +360,7 @@ export function SongTable({
 
                 <button
                   type="button"
-                  disabled={downloadMutation.isPending}
+                  disabled={isDownloading}
                   onClick={() =>
                     downloadMutation.mutate({
                       song,
@@ -309,11 +368,15 @@ export function SongTable({
                       mode: downloadMode,
                     })
                   }
-                  title={`下载 ${getQualityLabel(preferredLevel)}`}
+                  title={isDownloading ? "正在加入下载..." : `下载 ${getQualityLabel(preferredLevel)}`}
                   aria-label={`下载 ${song.title}`}
                   className="hidden rounded-md p-1.5 text-[var(--tv-text-muted)] opacity-65 transition-all hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-text)] group-hover:opacity-100 disabled:opacity-40 sm:inline-flex"
                 >
-                  <Download className="h-3.5 w-3.5" />
+                  {isDownloading ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Download className="h-3.5 w-3.5" />
+                  )}
                 </button>
 
                 <div className="relative" onPointerDown={(e) => e.stopPropagation()}>
@@ -372,7 +435,7 @@ export function SongTable({
                             添加到队列末尾
                           </button>
 
-                          {song.platform === "netease" && (
+                          {canManagePlaylists && (
                             <button
                               type="button"
                               onClick={() => setMenuPanel("playlists")}
@@ -386,7 +449,7 @@ export function SongTable({
                             </button>
                           )}
 
-                          {song.platform === "netease" && (
+                          {canLikeSong && (
                             <button
                               type="button"
                               onClick={() => {
@@ -414,8 +477,9 @@ export function SongTable({
                           {song.availableQualities.length > 1 ? (
                             <button
                               type="button"
+                              disabled={isDownloading}
                               onClick={() => setMenuPanel("quality")}
-                              className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] hover:bg-[var(--tv-surface-hover)]"
+                              className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] hover:bg-[var(--tv-surface-hover)] disabled:opacity-40"
                             >
                               <span className="flex items-center gap-2">
                                 <Download className="h-3.5 w-3.5 text-[var(--tv-text-muted)]" />
@@ -426,6 +490,7 @@ export function SongTable({
                           ) : (
                             <button
                               type="button"
+                              disabled={isDownloading}
                               onClick={() => {
                                 setOpenMenuKey(null);
                                 downloadMutation.mutate({
@@ -434,7 +499,7 @@ export function SongTable({
                                   mode: downloadMode,
                                 });
                               }}
-                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] hover:bg-[var(--tv-surface-hover)] sm:hidden"
+                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] hover:bg-[var(--tv-surface-hover)] disabled:opacity-40 sm:hidden"
                             >
                               <Download className="h-3.5 w-3.5 text-[var(--tv-text-muted)]" />
                               下载 ({getQualityLabel(preferredLevel)})
@@ -504,12 +569,12 @@ export function SongTable({
                             ‹ 选择目标歌单
                           </button>
                           <div className="max-h-52 overflow-y-auto space-y-0.5">
-                            {ownedNeteasePlaylists.length === 0 ? (
+                            {ownedTargetPlaylists.length === 0 ? (
                               <div className="px-2.5 py-3 text-center text-[11px] text-[var(--tv-text-muted)]">
                                 暂无自建歌单
                               </div>
                             ) : (
-                              ownedNeteasePlaylists.map((pl) => (
+                              ownedTargetPlaylists.map((pl) => (
                                 <button
                                   key={pl.id}
                                   type="button"

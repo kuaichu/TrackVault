@@ -19,6 +19,7 @@ import { useEffect, useState } from "react";
 import { type QualityLevel, getQualityLabel } from "#shared";
 import { ArtistLinks } from "../../../entities/music/EntityLinks.js";
 import { api } from "../../../shared/api/endpoints.js";
+import { useCapabilities } from "../../../shared/hooks/use-capabilities.js";
 import { useToggleLikeMutation } from "../../../shared/hooks/use-toggle-like.js";
 import { CoverArt, PlatformBadge } from "../../../shared/ui/primitives.js";
 import { audioEngine, resolveEffectivePlaybackQuality } from "../engine/audio-engine.js";
@@ -50,7 +51,8 @@ export function PlayerBar() {
     return () => window.removeEventListener("pointerdown", onPointerDown);
   }, [qualityMenuOpen]);
 
-  const canLike = currentTrack?.platform === "netease";
+  const capabilities = useCapabilities();
+  const canLike = Boolean(currentTrack && capabilities[currentTrack.platform].canLikeSong);
   const { data: likeData } = useQuery({
     queryKey: ["song-like", currentTrack?.platform, currentTrack?.id],
     queryFn: () =>

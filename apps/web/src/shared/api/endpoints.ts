@@ -83,8 +83,10 @@ export const api = {
     apiRequest<{ binding: PlatformBindingView }>(`/api/bindings/${platform}`, { method: "DELETE" }),
   startQrLogin: (platform: MusicPlatform) =>
     apiRequest<QrStartResult>(`/api/bindings/${platform}/qr/start`, { method: "POST" }),
-  checkQrLogin: (platform: MusicPlatform, key: string) =>
-    apiRequest<QrCheckResult>(`/api/bindings/${platform}/qr/check?key=${encodeURIComponent(key)}`),
+  checkQrLogin: (platform: MusicPlatform, key: string, signal?: AbortSignal) =>
+    apiRequest<QrCheckResult>(`/api/bindings/${platform}/qr/check?key=${encodeURIComponent(key)}`, {
+      signal,
+    }),
 
   // Capabilities & Catalog
   getCapabilities: () =>

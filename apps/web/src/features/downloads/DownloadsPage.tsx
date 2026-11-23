@@ -14,9 +14,20 @@ export function DownloadsPage() {
 
   const cancelMutation = useMutation({
     mutationFn: (id: string) => api.cancelJob(id),
-    onSuccess: () => {
-      toast.info("已取消下载任务");
-      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    onSuccess: (res) => {
+      if (res.job.status === "cancelled") {
+        toast.info("已取消下载任务");
+      } else if (res.job.status === "completed") {
+        toast.info("该任务已完成，无法取消");
+      } else if (res.job.status === "failed") {
+        toast.info("该任务已失败结束");
+      } else {
+        toast.info("已更新任务状态");
+      }
+      void queryClient.invalidateQueries({ queryKey: ["jobs", "download"] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "取消下载任务失败");
     },
   });
 
@@ -24,7 +35,10 @@ export function DownloadsPage() {
     mutationFn: () => api.clearFinishedJobs("download"),
     onSuccess: (res) => {
       toast.success(`已清除 ${res.removedCount} 条记录`);
-      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      void queryClient.invalidateQueries({ queryKey: ["jobs", "download"] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "清除下载记录失败");
     },
   });
 
@@ -55,6 +69,20 @@ export function DownloadsPage() {
             <div key={id} className="h-16 animate-pulse rounded-lg bg-[var(--tv-surface)]" />
           ))}
         </div>
+      ) : jobsQuery.isError ? (
+        <EmptyState
+          title="未能加载下载任务"
+          description={jobsQuery.error instanceof Error ? jobsQuery.error.message : "请检查网络后重试"}
+          action={
+            <button
+              type="button"
+              onClick={() => void jobsQuery.refetch()}
+              className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+            >
+              重试
+            </button>
+          }
+        />
       ) : jobs.length === 0 ? (
         <EmptyState title="暂无下载任务" description="在任意曲目列表中点击下载图标即可添加到队列。" />
       ) : (

@@ -860,7 +860,16 @@ export function TransferPage() {
 
   const cancelMutation = useMutation({
     mutationFn: (id: string) => api.cancelJob(id),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+    onSuccess: (res) => {
+      if (res.job.status === "cancelled") {
+        toast.info("已取消任务");
+      } else if (res.job.status === "completed") {
+        toast.info("该任务已完成，无法取消");
+      } else if (res.job.status === "failed") {
+        toast.info("该任务已失败结束");
+      }
+      void queryClient.invalidateQueries({ queryKey: ["jobs", activeKind] });
+    },
     onError: (err) => toast.error(err instanceof Error ? err.message : "取消任务失败"),
   });
 

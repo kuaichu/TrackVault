@@ -191,11 +191,23 @@ export function AppShell({
     },
   });
 
+  const addSearchHistoryMutation = useMutation({
+    mutationFn: (keyword: string) => api.addSearchHistory(keyword),
+    onSuccess: (res) => {
+      queryClient.setQueryData(["search-history"], res);
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "保存搜索历史失败");
+    },
+  });
+
   const handleQuickSearch = (e: FormEvent) => {
     e.preventDefault();
     const clean = quickQuery.trim();
     if (!clean) return;
-    navigate(`/search?q=${encodeURIComponent(clean)}&mode=aggregate`);
+    const preferredMode = settingsQuery.data?.settings.providerMode ?? "aggregate";
+    addSearchHistoryMutation.mutate(clean);
+    navigate(`/search?q=${encodeURIComponent(clean)}&mode=${preferredMode}`);
   };
 
   const renderSidebarContent = (showCloseButton = false) => (

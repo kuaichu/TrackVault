@@ -1,9 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp, QrCode, Unlink } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { MusicPlatform, PlatformBindingView } from "#shared";
 import { api } from "../../shared/api/endpoints.js";
+import { useCapabilities } from "../../shared/hooks/use-capabilities.js";
 import { toast } from "../../shared/store/toast-store.js";
+
+const QR_POLL_INTERVAL_MS = 2500;
+const QR_MAX_CONSECUTIVE_ERRORS = 3;
+
+interface QrState {
+  key: string;
+  qrImage: string;
+  message: string;
+  error?: string | null;
+}
 
 function PlatformCard({
   platform,
@@ -13,24 +24,33 @@ function PlatformCard({
   binding: PlatformBindingView;
 }) {
   const queryClient = useQueryClient();
+  const capabilities = useCapabilities();
+  const canQrLogin = capabilities[platform].canQrLogin;
   const [cookieDraft, setCookieDraft] = useState("");
   const [showManualCookie, setShowManualCookie] = useState(false);
-  const [qrState, setQrState] = useState<{ key: string; qrImage: string; message: string } | null>(null);
+  const [qrState, setQrState] = useState<QrState | null>(null);
 
   const label = platform === "netease" ? "网易云音乐" : "QQ 音乐";
   const dotClass = platform === "netease" ? "bg-[var(--tv-netease)]" : "bg-[var(--tv-qq)]";
 
-  const invalidateAccountCaches = () => {
+  const invalidateAccountCaches = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["bindings"] });
     void queryClient.invalidateQueries({ queryKey: ["playlists"] });
     void queryClient.invalidateQueries({ queryKey: ["playlist-tracks"] });
     void queryClient.invalidateQueries({ queryKey: ["liked-ids"] });
     void queryClient.invalidateQueries({ queryKey: ["song-like"] });
     void queryClient.invalidateQueries({ queryKey: ["discover"] });
+    void queryClient.invalidateQueries({ queryKey: ["discover-playlists"] });
     void queryClient.invalidateQueries({ queryKey: ["daily-recommend"] });
     void queryClient.invalidateQueries({ queryKey: ["personal-fm"] });
     void queryClient.invalidateQueries({ queryKey: ["cloud-songs"] });
-  };
+    void queryClient.invalidateQueries({ queryKey: ["charts"] });
+    void queryClient.invalidateQueries({ queryKey: ["chart-detail"] });
+    void queryClient.invalidateQueries({ queryKey: ["artist-detail"] });
+    void queryClient.invalidateQueries({ queryKey: ["album-detail"] });
+    void queryClient.invalidateQueries({ queryKey: ["artist"] });
+    void queryClient.invalidateQueries({ queryKey: ["album"] });
+  }, [queryClient]);
 
   const bindMutation = useMutation({
     mutationFn: () => api.bindPlatformCookie(platform, cookieDraft),
@@ -55,7 +75,7 @@ function PlatformCard({
   const startQrMutation = useMutation({
     mutationFn: () => api.startQrLogin(platform),
     onSuccess: (res) => {
-      setQrState({ key: res.key, qrImage: res.qrImage, message: "请打开手机客户端扫描" });
+      setQrState({ key: res.key, qrImage: res.qrImage, message: "请打开手机客户端扫描", error: null });
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "生成二维码失败"),
   });
@@ -63,34 +83,72 @@ function PlatformCard({
   const qrKey = qrState?.key ?? null;
   useEffect(() => {
     if (!qrKey) return;
-    const timer = window.setInterval(() => {
-      void api
-        .checkQrLogin(platform, qrKey)
-        .then((res) => {
-          if (res.status === "confirmed") {
-            setQrState(null);
-            toast.success(res.message);
-            void queryClient.invalidateQueries({ queryKey: ["bindings"] });
-            void queryClient.invalidateQueries({ queryKey: ["playlists"] });
-            void queryClient.invalidateQueries({ queryKey: ["playlist-tracks"] });
-            void queryClient.invalidateQueries({ queryKey: ["liked-ids"] });
-            void queryClient.invalidateQueries({ queryKey: ["song-like"] });
-            void queryClient.invalidateQueries({ queryKey: ["discover"] });
-            void queryClient.invalidateQueries({ queryKey: ["daily-recommend"] });
-            void queryClient.invalidateQueries({ queryKey: ["personal-fm"] });
-            void queryClient.invalidateQueries({ queryKey: ["cloud-songs"] });
-          } else if (res.status === "expired" || res.status === "error") {
-            setQrState(null);
-            toast.error(res.message);
-          } else {
-            setQrState((prev) => (prev ? { ...prev, message: res.message } : null));
-          }
-        })
-        .catch(() => undefined);
-    }, 2500);
+    let active = true;
+    let timerId: number | null = null;
+    let controller: AbortController | null = null;
+    let consecutiveErrors = 0;
 
-    return () => window.clearInterval(timer);
-  }, [platform, qrKey, queryClient]);
+    const scheduleNext = () => {
+      if (!active) return;
+      timerId = window.setTimeout(() => {
+        void pollOnce();
+      }, QR_POLL_INTERVAL_MS);
+    };
+
+    const pollOnce = async () => {
+      if (!active) return;
+      controller = new AbortController();
+      try {
+        const res = await api.checkQrLogin(platform, qrKey, controller.signal);
+        if (!active) return;
+        consecutiveErrors = 0;
+
+        if (res.status === "confirmed") {
+          setQrState((prev) => (prev?.key === qrKey ? null : prev));
+          toast.success(res.message);
+          invalidateAccountCaches();
+          return;
+        }
+        if (res.status === "expired" || res.status === "error") {
+          setQrState((prev) => (prev?.key === qrKey ? null : prev));
+          toast.error(res.message);
+          return;
+        }
+        setQrState((prev) =>
+          prev && prev.key === qrKey ? { ...prev, message: res.message, error: null } : prev,
+        );
+        scheduleNext();
+      } catch (err) {
+        if (!active) return;
+        if (err instanceof Error && err.name === "AbortError") {
+          return;
+        }
+        consecutiveErrors += 1;
+        const errMsg = err instanceof Error ? err.message : "检查扫码状态失败";
+        if (consecutiveErrors >= QR_MAX_CONSECUTIVE_ERRORS) {
+          setQrState((prev) =>
+            prev && prev.key === qrKey
+              ? { ...prev, error: `轮询异常：${errMsg}，请重新生成二维码重试` }
+              : prev,
+          );
+          toast.error(`扫码状态检查失败：${errMsg}`);
+          return;
+        }
+        setQrState((prev) =>
+          prev && prev.key === qrKey ? { ...prev, error: `网络波动（${errMsg}），正在自动重试...` } : prev,
+        );
+        scheduleNext();
+      }
+    };
+
+    scheduleNext();
+
+    return () => {
+      active = false;
+      if (timerId !== null) window.clearTimeout(timerId);
+      controller?.abort();
+    };
+  }, [platform, qrKey, invalidateAccountCaches]);
 
   return (
     <div className="rounded-2xl bg-[var(--tv-surface)] p-5 space-y-4">
@@ -117,8 +175,9 @@ function PlatformCard({
         {binding.connected && (
           <button
             type="button"
+            disabled={unbindMutation.isPending}
             onClick={() => unbindMutation.mutate()}
-            className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-danger)]"
+            className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-danger)] disabled:opacity-40"
           >
             <Unlink className="h-3.5 w-3.5" />
             解绑
@@ -128,15 +187,17 @@ function PlatformCard({
 
       {/* Primary Action: QR Login + Secondary Collapsible Cookie Import */}
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => startQrMutation.mutate()}
-          disabled={startQrMutation.isPending}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--tv-contrast-bg)] px-3.5 py-1.5 text-xs font-medium text-[var(--tv-contrast-fg)] transition-opacity hover:opacity-90 disabled:opacity-40"
-        >
-          <QrCode className="h-3.5 w-3.5" />
-          {startQrMutation.isPending ? "生成中..." : binding.connected ? "重新扫码" : "扫码登录"}
-        </button>
+        {canQrLogin && (
+          <button
+            type="button"
+            onClick={() => startQrMutation.mutate()}
+            disabled={startQrMutation.isPending}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--tv-contrast-bg)] px-3.5 py-1.5 text-xs font-medium text-[var(--tv-contrast-fg)] transition-opacity hover:opacity-90 disabled:opacity-40"
+          >
+            <QrCode className="h-3.5 w-3.5" />
+            {startQrMutation.isPending ? "生成中..." : binding.connected ? "重新扫码" : "扫码登录"}
+          </button>
+        )}
 
         <button
           type="button"
@@ -167,7 +228,11 @@ function PlatformCard({
           />
           <div className="space-y-1 text-xs">
             <div className="font-medium text-[var(--tv-text)]">{qrState.message}</div>
-            <div className="text-[var(--tv-text-muted)]">扫码确认后自动保存，无需手动复制。</div>
+            {qrState.error ? (
+              <div className="text-[var(--tv-danger)]">{qrState.error}</div>
+            ) : (
+              <div className="text-[var(--tv-text-muted)]">扫码确认后自动保存，无需手动复制。</div>
+            )}
           </div>
         </div>
       )}
@@ -205,12 +270,12 @@ function PlatformCard({
 }
 
 export function BindingsPanel() {
-  const { data, isLoading } = useQuery({
+  const bindingsQuery = useQuery({
     queryKey: ["bindings"],
     queryFn: () => api.listBindings(),
   });
 
-  if (isLoading || !data) {
+  if (bindingsQuery.isLoading) {
     return (
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="h-32 animate-pulse rounded-2xl bg-[var(--tv-surface)]" />
@@ -219,10 +284,30 @@ export function BindingsPanel() {
     );
   }
 
+  if (bindingsQuery.isError || !bindingsQuery.data) {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[var(--tv-surface)] p-5 text-xs">
+        <div className="space-y-1">
+          <div className="font-medium text-[var(--tv-text)]">未能加载平台绑定状态</div>
+          <div className="text-[var(--tv-text-muted)]">
+            {bindingsQuery.error instanceof Error ? bindingsQuery.error.message : "请检查网络后重试"}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => void bindingsQuery.refetch()}
+          className="rounded-lg bg-[var(--tv-accent)] px-3.5 py-1.5 font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+        >
+          重试
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      <PlatformCard platform="netease" binding={data.bindings.netease} />
-      <PlatformCard platform="qq" binding={data.bindings.qq} />
+      <PlatformCard platform="netease" binding={bindingsQuery.data.bindings.netease} />
+      <PlatformCard platform="qq" binding={bindingsQuery.data.bindings.qq} />
     </div>
   );
 }

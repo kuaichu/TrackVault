@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 import { getSongKey, sanitizeCssUrl } from "#shared";
 import { AlbumLink, ArtistLinks } from "../../entities/music/EntityLinks.js";
 import { api } from "../../shared/api/endpoints.js";
+import { useCapabilities } from "../../shared/hooks/use-capabilities.js";
 import { useLikedIdsQuery, useToggleLikeMutation } from "../../shared/hooks/use-toggle-like.js";
 import { toast } from "../../shared/store/toast-store.js";
 import { CoverArt, EmptyState } from "../../shared/ui/primitives.js";
@@ -47,7 +48,8 @@ export function PersonalFmPage() {
     enabled: Boolean(activeSong),
   });
 
-  const canLike = activeSong?.platform === "netease";
+  const capabilities = useCapabilities();
+  const canLike = Boolean(activeSong && capabilities[activeSong.platform].canLikeSong);
   const { data: likedIdsData } = useLikedIdsQuery(activeSong?.platform, canLike);
   const likeMutation = useToggleLikeMutation();
 

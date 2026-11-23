@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Loader2, Play, Plus, Search } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { type FormEvent, useEffect, useRef, useState } from "react";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   type MusicPlatform,
   type PlaylistSort,
@@ -11,6 +11,7 @@ import {
 } from "#shared";
 import { SongTable } from "../../entities/song/SongTable.js";
 import { api } from "../../shared/api/endpoints.js";
+import { useCapabilities } from "../../shared/hooks/use-capabilities.js";
 import { toast } from "../../shared/store/toast-store.js";
 import { CoverArt, EmptyState, PlatformBadge, SegmentedTabs } from "../../shared/ui/primitives.js";
 import { audioEngine } from "../player/engine/audio-engine.js";
@@ -20,23 +21,39 @@ const PAGE_SIZE = 50;
 export function PlaylistsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [platform, setPlatform] = useState<MusicPlatform>("netease");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const capabilities = useCapabilities();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+
+  const settingsQuery = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => api.getSettings(),
+  });
+
+  const urlPlatform = searchParams.get("platform");
+  const hasExplicitPlatform = urlPlatform === "netease" || urlPlatform === "qq";
+  const defaultPlatform: MusicPlatform =
+    settingsQuery.data?.settings.providerMode === "qq" ? "qq" : "netease";
+  const platform: MusicPlatform = hasExplicitPlatform ? urlPlatform : defaultPlatform;
+  const platformReady = hasExplicitPlatform || !settingsQuery.isLoading;
+  const canCreatePlaylist = capabilities[platform].canCreatePlaylist;
 
   const playlistsQuery = useQuery({
     queryKey: ["playlists", platform],
     queryFn: () => api.getUserPlaylists(platform),
+    enabled: platformReady,
   });
 
   const createMutation = useMutation({
-    mutationFn: () => api.createPlaylist("netease", newName.trim(), []),
+    mutationFn: () => api.createPlaylist(platform, newName.trim(), []),
     onSuccess: (res) => {
       setNewName("");
       setCreating(false);
       toast.success(`已新建歌单「${res.playlistName}」`);
-      void queryClient.invalidateQueries({ queryKey: ["playlists", "netease"] });
-      navigate(`/playlists/netease/${encodeURIComponent(res.playlistId)}`);
+      void queryClient.invalidateQueries({ queryKey: ["playlists", platform] });
+      void queryClient.invalidateQueries({ queryKey: ["playlists"] });
+      navigate(`/playlists/${platform}/${encodeURIComponent(res.playlistId)}`);
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "新建歌单失败"),
   });
@@ -54,7 +71,7 @@ export function PlaylistsPage() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <h1 className="text-[28px] font-bold tracking-tight text-[var(--tv-text)]">歌单</h1>
-          {platform === "netease" && (
+          {canCreatePlaylist && (
             <button
               type="button"
               onClick={() => setCreating((v) => !v)}
@@ -67,7 +84,10 @@ export function PlaylistsPage() {
         </div>
         <SegmentedTabs
           value={platform}
-          onChange={setPlatform}
+          onChange={(next) => {
+            setCreating(false);
+            setSearchParams({ platform: next });
+          }}
           items={[
             { id: "netease", label: "网易云音乐" },
             { id: "qq", label: "QQ 音乐" },
@@ -75,7 +95,7 @@ export function PlaylistsPage() {
         />
       </div>
 
-      {creating && platform === "netease" && (
+      {creating && canCreatePlaylist && (
         <form
           onSubmit={handleCreate}
           className="flex flex-wrap items-center gap-2.5 rounded-xl bg-[var(--tv-surface)] p-3.5"
@@ -106,7 +126,7 @@ export function PlaylistsPage() {
         </form>
       )}
 
-      {playlistsQuery.isLoading ? (
+      {playlistsQuery.isLoading || !platformReady ? (
         <div className="grid grid-cols-2 gap-x-3.5 gap-y-5 sm:grid-cols-3 sm:gap-x-5 sm:gap-y-7 md:grid-cols-4 lg:grid-cols-5">
           {["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"].map((id) => (
             <div key={id} className="space-y-2.5">
@@ -125,12 +145,21 @@ export function PlaylistsPage() {
               : "请先在设置中绑定对应音乐平台账号"
           }
           action={
-            <Link
-              to="/settings"
-              className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
-            >
-              前往绑定账号
-            </Link>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => void playlistsQuery.refetch()}
+                className="inline-flex items-center rounded-lg bg-[var(--tv-surface-active)] px-4 py-2 text-xs font-medium text-[var(--tv-text)] hover:bg-[var(--tv-surface-hover)]"
+              >
+                重试
+              </button>
+              <Link
+                to="/settings"
+                className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+              >
+                前往绑定账号
+              </Link>
+            </div>
           }
         />
       ) : playlists.length === 0 ? (
@@ -180,6 +209,7 @@ export function PlaylistDetailPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
+  const capabilities = useCapabilities();
   const { platform: rawPlatform, id = "" } = useParams();
   const platform: MusicPlatform = rawPlatform === "qq" ? "qq" : "netease";
 
@@ -190,12 +220,29 @@ export function PlaylistDetailPage() {
   const [debouncedKeyword, setDebouncedKeyword] = useState("");
   const [sort, setSort] = useState<PlaylistSort>("default");
 
+  // Reset pagination, filter, and sort cleanly when navigating between different playlists
+  const prevRouteKeyRef = useRef(`${platform}:${id}`);
   useEffect(() => {
+    const nextRouteKey = `${platform}:${id}`;
+    if (prevRouteKeyRef.current !== nextRouteKey) {
+      prevRouteKeyRef.current = nextRouteKey;
+      setPage(1);
+      setKeywordInput("");
+      setDebouncedKeyword("");
+      setSort("default");
+    }
+  }, [platform, id]);
+
+  // Reset page inside debounce callback to avoid firing an intermediate unfiltered page-1 request
+  useEffect(() => {
+    const trimmed = keywordInput.trim();
+    if (trimmed === debouncedKeyword) return;
     const timer = window.setTimeout(() => {
-      setDebouncedKeyword(keywordInput.trim());
+      setDebouncedKeyword(trimmed);
+      setPage(1);
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [keywordInput]);
+  }, [keywordInput, debouncedKeyword]);
 
   const detailQuery = useQuery({
     queryKey: ["playlist-tracks", platform, id, page, debouncedKeyword, sort],
@@ -210,11 +257,23 @@ export function PlaylistDetailPage() {
     placeholderData: keepPreviousData,
   });
 
+  // Clamp page when total pages shrinks (e.g. after deleting the last track on the final page)
+  useEffect(() => {
+    if (detailQuery.isSuccess && !detailQuery.isPlaceholderData && detailQuery.data) {
+      const actualTotalPages = Math.max(1, Math.ceil(detailQuery.data.total / PAGE_SIZE));
+      if (page > actualTotalPages) {
+        setPage(actualTotalPages);
+      }
+    }
+  }, [detailQuery.isSuccess, detailQuery.isPlaceholderData, detailQuery.data, page]);
+
   const removeMutation = useMutation({
     mutationFn: (song: Song) => api.removeTracksFromPlaylist(platform, id, [song.id]),
     onSuccess: () => {
       toast.success("已从歌单移除");
       void queryClient.invalidateQueries({ queryKey: ["playlist-tracks", platform, id] });
+      void queryClient.invalidateQueries({ queryKey: ["playlists", platform] });
+      void queryClient.invalidateQueries({ queryKey: ["playlists"] });
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "移除失败"),
   });
@@ -224,12 +283,13 @@ export function PlaylistDetailPage() {
   const total = detailQuery.data?.total ?? playlist?.trackCount ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const headerGlow = sanitizeCssUrl(playlist?.coverUrl);
+  const canManageTracks = capabilities[platform].canManagePlaylistTracks;
 
   return (
     <div className="space-y-6">
       <button
         type="button"
-        onClick={() => navigate("/playlists")}
+        onClick={() => navigate(`/playlists?platform=${platform}`)}
         className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--tv-text-muted)] transition-colors hover:text-[var(--tv-text)]"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
@@ -280,10 +340,7 @@ export function PlaylistDetailPage() {
                 <input
                   type="text"
                   value={keywordInput}
-                  onChange={(e) => {
-                    setKeywordInput(e.target.value);
-                    setPage(1);
-                  }}
+                  onChange={(e) => setKeywordInput(e.target.value)}
                   placeholder="在歌单中筛选"
                   className="h-8 rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] pl-8 pr-3 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:border-[var(--tv-border-strong)] focus:outline-none"
                 />
@@ -299,7 +356,8 @@ export function PlaylistDetailPage() {
                 className="rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-2.5 py-1.5 text-xs leading-normal text-[var(--tv-text)] focus:border-[var(--tv-border-strong)] focus:outline-none"
               >
                 <option value="default">默认排序</option>
-                <option value="title-asc">按歌名</option>
+                <option value="title-asc">按歌名 A–Z</option>
+                <option value="title-desc">按歌名 Z–A</option>
                 <option value="artist-asc">按歌手</option>
                 <option value="duration-desc">时长由长到短</option>
                 <option value="duration-asc">时长由短到长</option>
@@ -326,6 +384,15 @@ export function PlaylistDetailPage() {
         <EmptyState
           title="歌单加载失败"
           description={detailQuery.error instanceof Error ? detailQuery.error.message : "请稍后重试"}
+          action={
+            <button
+              type="button"
+              onClick={() => void detailQuery.refetch()}
+              className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+            >
+              重试
+            </button>
+          }
         />
       ) : (
         <>
@@ -333,7 +400,7 @@ export function PlaylistDetailPage() {
             songs={songs}
             indexOffset={(page - 1) * PAGE_SIZE}
             onRemoveTrack={
-              playlist?.owned && platform === "netease" ? (song) => removeMutation.mutate(song) : undefined
+              playlist?.owned && canManageTracks ? (song) => removeMutation.mutate(song) : undefined
             }
           />
           {(page > 1 || detailQuery.data?.hasMore) && (

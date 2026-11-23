@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Play } from "lucide-react";
-import { useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { type MusicPlatform, sanitizeCssUrl } from "#shared";
 import { SongTable } from "../../entities/song/SongTable.js";
 import { api } from "../../shared/api/endpoints.js";
@@ -10,11 +9,24 @@ import { audioEngine } from "../player/engine/audio-engine.js";
 
 export function ChartsPage() {
   const navigate = useNavigate();
-  const [platform, setPlatform] = useState<MusicPlatform>("netease");
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const settingsQuery = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => api.getSettings(),
+  });
+
+  const urlPlatform = searchParams.get("platform");
+  const hasExplicitPlatform = urlPlatform === "netease" || urlPlatform === "qq";
+  const defaultPlatform: MusicPlatform =
+    settingsQuery.data?.settings.providerMode === "qq" ? "qq" : "netease";
+  const platform: MusicPlatform = hasExplicitPlatform ? urlPlatform : defaultPlatform;
+  const platformReady = hasExplicitPlatform || !settingsQuery.isLoading;
 
   const chartsQuery = useQuery({
     queryKey: ["charts", platform],
     queryFn: () => api.getCharts(platform),
+    enabled: platformReady,
   });
 
   const charts = chartsQuery.data?.charts ?? [];
@@ -25,7 +37,7 @@ export function ChartsPage() {
         <h1 className="text-[28px] font-bold tracking-tight text-[var(--tv-text)]">排行榜</h1>
         <SegmentedTabs
           value={platform}
-          onChange={setPlatform}
+          onChange={(next) => setSearchParams({ platform: next })}
           items={[
             { id: "netease", label: "网易云音乐" },
             { id: "qq", label: "QQ 音乐" },
@@ -33,7 +45,7 @@ export function ChartsPage() {
         />
       </div>
 
-      {chartsQuery.isLoading ? (
+      {chartsQuery.isLoading || !platformReady ? (
         <div className="grid grid-cols-2 gap-x-3.5 gap-y-5 sm:grid-cols-3 sm:gap-x-5 sm:gap-y-7 md:grid-cols-4 lg:grid-cols-5">
           {["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10"].map((id) => (
             <div key={id} className="space-y-2.5">
@@ -46,6 +58,15 @@ export function ChartsPage() {
         <EmptyState
           title="未能加载排行榜"
           description={chartsQuery.error instanceof Error ? chartsQuery.error.message : "请稍后重试"}
+          action={
+            <button
+              type="button"
+              onClick={() => void chartsQuery.refetch()}
+              className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+            >
+              重试
+            </button>
+          }
         />
       ) : charts.length === 0 ? (
         <EmptyState title="暂无榜单数据" />
@@ -117,7 +138,7 @@ export function ChartDetailPage() {
     <div className="space-y-6">
       <button
         type="button"
-        onClick={() => navigate("/charts")}
+        onClick={() => navigate(`/charts?platform=${platform}`)}
         className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--tv-text-muted)] transition-colors hover:text-[var(--tv-text)]"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
@@ -134,6 +155,15 @@ export function ChartDetailPage() {
         <EmptyState
           title="未能加载榜单曲目"
           description={detailQuery.error instanceof Error ? detailQuery.error.message : "请稍后重试"}
+          action={
+            <button
+              type="button"
+              onClick={() => void detailQuery.refetch()}
+              className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+            >
+              重试
+            </button>
+          }
         />
       ) : (
         <>

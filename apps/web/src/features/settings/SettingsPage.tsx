@@ -16,6 +16,9 @@ import { SegmentedTabs } from "../../shared/ui/primitives.js";
 import { BindingsPanel } from "../auth/BindingsPanel.js";
 import { audioEngine } from "../player/engine/audio-engine.js";
 
+const USERNAME_PATTERN = "^[a-zA-Z0-9_.-]+$";
+const USERNAME_REGEX = /^[a-zA-Z0-9_.-]{2,32}$/;
+
 function SettingRow({
   label,
   hint,
@@ -60,13 +63,21 @@ function AdminConsole() {
   });
 
   const createMemberMutation = useMutation({
-    mutationFn: () =>
-      api.createMember({
-        username: newUsername,
+    mutationFn: async () => {
+      const cleanUsername = newUsername.trim();
+      if (!USERNAME_REGEX.test(cleanUsername)) {
+        throw new Error("用户名需为 2–32 位，仅支持字母、数字及 _ . -");
+      }
+      if (!newPassword.trim() || newPassword.length < 8) {
+        throw new Error("初始密码至少需要 8 位非空字符");
+      }
+      return api.createMember({
+        username: cleanUsername,
         password: newPassword,
         role: "member",
         trustedFallback: newTrusted,
-      }),
+      });
+    },
     onSuccess: () => {
       setNewUsername("");
       setNewPassword("");
@@ -84,6 +95,7 @@ function AdminConsole() {
       toast.success("已更新成员权限");
       void queryClient.invalidateQueries({ queryKey: ["admin-members"] });
     },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "更新成员权限失败"),
   });
 
   const deleteMemberMutation = useMutation({
@@ -125,127 +137,176 @@ function AdminConsole() {
       <h2 className="text-base font-semibold tracking-tight text-[var(--tv-text)]">成员与保底凭证</h2>
 
       <div className="rounded-2xl bg-[var(--tv-surface)] p-5 space-y-5">
-        <form onSubmit={handleAddMember} className="flex flex-wrap items-center gap-2.5">
-          <input
-            type="text"
-            required
-            value={newUsername}
-            onChange={(e) => setNewUsername(e.target.value)}
-            placeholder="新成员用户名"
-            className="h-9 rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-3 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:outline-none"
-          />
-          <input
-            type="password"
-            required
-            minLength={8}
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            placeholder="初始密码（至少 8 位）"
-            className="h-9 rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-3 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:outline-none"
-          />
-          <label className="inline-flex items-center gap-1.5 text-xs text-[var(--tv-text-muted)]">
+        <div className="space-y-1.5">
+          <form onSubmit={handleAddMember} className="flex flex-wrap items-center gap-2.5">
             <input
-              type="checkbox"
-              checked={newTrusted}
-              onChange={(e) => setNewTrusted(e.target.checked)}
-              className="accent-[var(--tv-accent)]"
+              type="text"
+              required
+              minLength={2}
+              maxLength={32}
+              pattern={USERNAME_PATTERN}
+              title="用户名仅支持 2–32 位字母、数字及 _ . -"
+              value={newUsername}
+              onChange={(e) => setNewUsername(e.target.value)}
+              placeholder="新成员用户名"
+              className="h-9 rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-3 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:outline-none"
             />
-            允许使用保底凭证
-          </label>
-          <button
-            type="submit"
-            disabled={createMemberMutation.isPending}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--tv-accent)] px-3.5 text-xs font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
-          >
-            <UserPlus className="h-3.5 w-3.5" />
-            添加成员
-          </button>
-        </form>
-
-        <div className="divide-y divide-[var(--tv-border)] border-t border-[var(--tv-border)] text-xs">
-          {membersQuery.data?.members.map((member) => (
-            <div key={member.id} className="flex items-center justify-between gap-3 py-3">
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-[var(--tv-text)]">{member.username}</span>
-                <span className="text-[11px] text-[var(--tv-text-subtle)]">
-                  {member.role === "admin" ? "管理员" : "成员"}
-                </span>
-              </div>
-              <div className="flex items-center gap-4">
-                <label className="inline-flex items-center gap-1.5 text-[var(--tv-text-muted)]">
-                  <input
-                    type="checkbox"
-                    checked={member.trustedFallback}
-                    onChange={() => toggleTrustedMutation.mutate(member)}
-                    className="accent-[var(--tv-accent)]"
-                  />
-                  保底权限
-                </label>
-                {member.role !== "admin" && (
-                  <button
-                    type="button"
-                    onClick={() => deleteMemberMutation.mutate(member.id)}
-                    className="text-[var(--tv-text-subtle)] hover:text-[var(--tv-danger)]"
-                    aria-label={`删除 ${member.username}`}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
+            <input
+              type="password"
+              required
+              minLength={8}
+              maxLength={128}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="初始密码（至少 8 位）"
+              className="h-9 rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-3 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:outline-none"
+            />
+            <label className="inline-flex items-center gap-1.5 text-xs text-[var(--tv-text-muted)]">
+              <input
+                type="checkbox"
+                checked={newTrusted}
+                onChange={(e) => setNewTrusted(e.target.checked)}
+                className="accent-[var(--tv-accent)]"
+              />
+              允许使用保底凭证
+            </label>
+            <button
+              type="submit"
+              disabled={createMemberMutation.isPending}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[var(--tv-accent)] px-3.5 text-xs font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)] disabled:opacity-40"
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              添加成员
+            </button>
+          </form>
+          <p className="text-[11px] text-[var(--tv-text-subtle)]">
+            用户名需为 2–32 位，仅支持字母、数字及 _ . -
+          </p>
         </div>
 
-        <div className="grid gap-3 border-t border-[var(--tv-border)] pt-4 md:grid-cols-2">
-          {(["netease", "qq"] as const).map((platform) => {
-            const fb = fallbacksQuery.data?.fallbacks[platform];
-            return (
-              <div key={platform} className="space-y-2.5 rounded-xl bg-[var(--tv-bg)] p-3.5">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-medium text-[var(--tv-text)]">
-                    {platform === "netease" ? "网易云保底凭证" : "QQ 音乐保底凭证"}
-                  </span>
-                  <span className="text-[var(--tv-text-subtle)]">
-                    {fb?.configured ? (fb.enabled ? "已启用" : "已保存") : "未配置"}
+        <div className="divide-y divide-[var(--tv-border)] border-t border-[var(--tv-border)] text-xs">
+          {membersQuery.isError ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 py-3 text-xs">
+              <span className="text-[var(--tv-danger)]">
+                加载成员列表失败：
+                {membersQuery.error instanceof Error ? membersQuery.error.message : "请稍后重试"}
+              </span>
+              <button
+                type="button"
+                onClick={() => void membersQuery.refetch()}
+                className="rounded-lg bg-[var(--tv-bg)] px-3 py-1 font-medium text-[var(--tv-text)] hover:bg-[var(--tv-surface-active)]"
+              >
+                重试
+              </button>
+            </div>
+          ) : (
+            membersQuery.data?.members.map((member) => (
+              <div key={member.id} className="flex items-center justify-between gap-3 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-[var(--tv-text)]">{member.username}</span>
+                  <span className="text-[11px] text-[var(--tv-text-subtle)]">
+                    {member.role === "admin" ? "管理员" : "成员"}
                   </span>
                 </div>
-                <input
-                  type="password"
-                  value={fallbackDrafts[platform]}
-                  onChange={(e) => setFallbackDrafts((prev) => ({ ...prev, [platform]: e.target.value }))}
-                  placeholder="输入新的保底 Cookie"
-                  className="w-full rounded-lg border border-[var(--tv-border)] bg-[var(--tv-surface)] px-2.5 py-1.5 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:outline-none"
-                />
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      saveFallbackMutation.mutate({
-                        platform,
-                        cookie: fallbackDrafts[platform] || undefined,
-                        enabled: true,
-                      })
-                    }
-                    className="rounded-lg bg-[var(--tv-contrast-bg)] px-3 py-1 text-xs font-medium text-[var(--tv-contrast-fg)]"
-                  >
-                    保存并启用
-                  </button>
-                  {fb?.configured && (
+                <div className="flex items-center gap-4">
+                  <label className="inline-flex items-center gap-1.5 text-[var(--tv-text-muted)]">
+                    <input
+                      type="checkbox"
+                      checked={member.trustedFallback}
+                      disabled={toggleTrustedMutation.isPending}
+                      onChange={() => toggleTrustedMutation.mutate(member)}
+                      className="accent-[var(--tv-accent)]"
+                    />
+                    保底权限
+                  </label>
+                  {member.role !== "admin" && (
                     <button
                       type="button"
-                      onClick={() =>
-                        saveFallbackMutation.mutate({ platform, enabled: false, clearCookie: true })
-                      }
-                      className="rounded-lg px-2.5 py-1 text-xs text-[var(--tv-text-muted)] hover:text-[var(--tv-danger)]"
+                      disabled={deleteMemberMutation.isPending}
+                      onClick={() => deleteMemberMutation.mutate(member.id)}
+                      className="text-[var(--tv-text-subtle)] hover:text-[var(--tv-danger)] disabled:opacity-40"
+                      aria-label={`删除 ${member.username}`}
                     >
-                      清除
+                      <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   )}
                 </div>
               </div>
-            );
-          })}
+            ))
+          )}
         </div>
+
+        {fallbacksQuery.isError ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--tv-border)] pt-4 text-xs">
+            <span className="text-[var(--tv-danger)]">
+              加载保底凭证失败：
+              {fallbacksQuery.error instanceof Error ? fallbacksQuery.error.message : "请稍后重试"}
+            </span>
+            <button
+              type="button"
+              onClick={() => void fallbacksQuery.refetch()}
+              className="rounded-lg bg-[var(--tv-bg)] px-3 py-1 font-medium text-[var(--tv-text)] hover:bg-[var(--tv-surface-active)]"
+            >
+              重试
+            </button>
+          </div>
+        ) : (
+          <div className="grid gap-3 border-t border-[var(--tv-border)] pt-4 md:grid-cols-2">
+            {(["netease", "qq"] as const).map((platform) => {
+              const fb = fallbacksQuery.data?.fallbacks[platform];
+              const trimmedDraft = fallbackDrafts[platform].trim();
+              const canSubmitFallback = Boolean(trimmedDraft || fb?.configured);
+
+              return (
+                <div key={platform} className="space-y-2.5 rounded-xl bg-[var(--tv-bg)] p-3.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-medium text-[var(--tv-text)]">
+                      {platform === "netease" ? "网易云保底凭证" : "QQ 音乐保底凭证"}
+                    </span>
+                    <span className="text-[var(--tv-text-subtle)]">
+                      {fb?.configured ? (fb.enabled ? "已启用" : "已保存") : "未配置"}
+                    </span>
+                  </div>
+                  <input
+                    type="password"
+                    value={fallbackDrafts[platform]}
+                    onChange={(e) => setFallbackDrafts((prev) => ({ ...prev, [platform]: e.target.value }))}
+                    placeholder="输入新的保底 Cookie"
+                    className="w-full rounded-lg border border-[var(--tv-border)] bg-[var(--tv-surface)] px-2.5 py-1.5 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:outline-none"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={!canSubmitFallback || saveFallbackMutation.isPending}
+                      onClick={() =>
+                        saveFallbackMutation.mutate({
+                          platform,
+                          cookie: trimmedDraft || undefined,
+                          enabled: true,
+                        })
+                      }
+                      className="rounded-lg bg-[var(--tv-contrast-bg)] px-3 py-1 text-xs font-medium text-[var(--tv-contrast-fg)] disabled:opacity-40"
+                    >
+                      保存并启用
+                    </button>
+                    {fb?.configured && (
+                      <button
+                        type="button"
+                        disabled={saveFallbackMutation.isPending}
+                        onClick={() =>
+                          saveFallbackMutation.mutate({ platform, enabled: false, clearCookie: true })
+                        }
+                        className="rounded-lg px-2.5 py-1 text-xs text-[var(--tv-text-muted)] hover:text-[var(--tv-danger)] disabled:opacity-40"
+                      >
+                        清除
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </section>
   );
@@ -297,7 +358,28 @@ export function SettingsPage({ user }: { user: UserSummary }) {
             }
           />
 
-          {settings && (
+          {settingsQuery.isLoading && !settings ? (
+            <div className="space-y-2.5 px-4 py-4 sm:px-5">
+              <div className="h-6 animate-pulse rounded bg-[var(--tv-bg)]/60" />
+              <div className="h-6 animate-pulse rounded bg-[var(--tv-bg)]/60" />
+            </div>
+          ) : settingsQuery.isError && !settings ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3.5 text-xs sm:px-5">
+              <div className="space-y-0.5">
+                <div className="font-medium text-[var(--tv-text)]">未能加载个人偏好设置</div>
+                <div className="text-[var(--tv-text-muted)]">
+                  {settingsQuery.error instanceof Error ? settingsQuery.error.message : "请稍后重试"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void settingsQuery.refetch()}
+                className="rounded-lg bg-[var(--tv-accent)] px-3.5 py-1.5 font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+              >
+                重试
+              </button>
+            </div>
+          ) : settings ? (
             <>
               <SettingRow
                 label="默认音乐源"
@@ -398,7 +480,7 @@ export function SettingsPage({ user }: { user: UserSummary }) {
                 }
               />
             </>
-          )}
+          ) : null}
         </div>
       </section>
 

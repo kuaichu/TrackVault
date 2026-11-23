@@ -54,6 +54,15 @@ export function AlbumDetailPage() {
         <EmptyState
           title="未能加载专辑信息"
           description={albumQuery.error instanceof Error ? albumQuery.error.message : "请稍后重试"}
+          action={
+            <button
+              type="button"
+              onClick={() => void albumQuery.refetch()}
+              className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+            >
+              重试
+            </button>
+          }
         />
       ) : (
         <>

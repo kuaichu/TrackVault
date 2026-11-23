@@ -6,6 +6,9 @@ import { api } from "../../shared/api/endpoints.js";
 import { useThemeStore } from "../../shared/store/theme-store.js";
 import { toast } from "../../shared/store/toast-store.js";
 
+const USERNAME_PATTERN = "^[a-zA-Z0-9_.-]+$";
+const USERNAME_REGEX = /^[a-zA-Z0-9_.-]{2,32}$/;
+
 export function AuthGatePage({ initialized }: { initialized: boolean }) {
   const queryClient = useQueryClient();
   const resolvedTheme = useThemeStore((s) => s.resolved);
@@ -17,13 +20,26 @@ export function AuthGatePage({ initialized }: { initialized: boolean }) {
 
   const submitMutation = useMutation({
     mutationFn: async () => {
+      const cleanUsername = username.trim();
+      if (!cleanUsername) {
+        throw new Error("请输入用户名");
+      }
+      if (!password.trim()) {
+        throw new Error("请输入密码");
+      }
       if (!initialized) {
+        if (!USERNAME_REGEX.test(cleanUsername)) {
+          throw new Error("用户名需为 2–32 位，仅支持字母、数字及 _ . -");
+        }
+        if (password.length < 8) {
+          throw new Error("密码长度至少为 8 位");
+        }
         if (password !== confirmPassword) {
           throw new Error("两次输入的密码不一致");
         }
-        return api.setupAdmin({ username, password });
+        return api.setupAdmin({ username: cleanUsername, password });
       }
-      return api.login({ username, password });
+      return api.login({ username: cleanUsername, password });
     },
     onSuccess: (res) => {
       toast.success(initialized ? "欢迎回来" : "管理员账号已就绪");
@@ -131,12 +147,19 @@ export function AuthGatePage({ initialized }: { initialized: boolean }) {
                 id="tv-auth-username"
                 type="text"
                 required
+                minLength={initialized ? 1 : 2}
+                maxLength={initialized ? 64 : 32}
+                pattern={initialized ? undefined : USERNAME_PATTERN}
+                title={initialized ? undefined : "用户名仅支持 2–32 位字母、数字及 _ . -"}
                 autoComplete="username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="admin"
                 className="w-full rounded-lg border border-[var(--tv-border-strong)] bg-[var(--tv-surface)] px-3.5 py-2.5 text-sm text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] transition-colors focus:border-[var(--tv-accent)] focus:bg-[var(--tv-bg)] focus:outline-none"
               />
+              {!initialized && (
+                <p className="text-[11px] text-[var(--tv-text-subtle)]">2–32 位，仅支持字母、数字及 _ . -</p>
+              )}
             </div>
 
             <div className="space-y-1.5">

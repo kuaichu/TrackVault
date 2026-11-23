@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import type { AuthStatus, UserSummary } from "#shared";
+import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
+import type { AuthStatus, StartupView, UserSummary } from "#shared";
 import { AlbumDetailPage } from "../features/album/AlbumDetailPage.js";
 import { ArtistDetailPage } from "../features/artist/ArtistDetailPage.js";
 import { AuthGatePage } from "../features/auth/AuthGatePage.js";
@@ -17,8 +17,52 @@ import { SettingsPage } from "../features/settings/SettingsPage.js";
 import { TransferPage } from "../features/transfer/TransferPage.js";
 import { api } from "../shared/api/endpoints.js";
 import { ApiClientError, setUnauthorizedHandler } from "../shared/api/http-client.js";
-import { ToastContainer } from "../shared/ui/primitives.js";
+import { clearPendingDirectLinkJobs } from "../shared/hooks/use-job-events.js";
+import { EmptyState, ToastContainer } from "../shared/ui/primitives.js";
 import { AppShell } from "./AppShell.js";
+
+const STARTUP_VIEW_ROUTES: Record<StartupView, string> = {
+  discover: "/discover",
+  search: "/search",
+  playlists: "/playlists",
+  downloads: "/downloads",
+};
+
+function StartupRedirect() {
+  const settingsQuery = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => api.getSettings(),
+  });
+
+  if (settingsQuery.isLoading && !settingsQuery.data) {
+    return (
+      <div className="flex min-h-[240px] items-center justify-center text-xs text-[var(--tv-text-muted)]">
+        正在载入启动页...
+      </div>
+    );
+  }
+
+  const startupView = settingsQuery.data?.settings.startupView ?? "discover";
+  const target = STARTUP_VIEW_ROUTES[startupView] ?? "/discover";
+  return <Navigate to={target} replace />;
+}
+
+function NotFoundPage() {
+  return (
+    <EmptyState
+      title="404 · 页面未找到"
+      description="你访问的地址不存在或已被移除，请返回首页继续浏览。"
+      action={
+        <Link
+          to="/"
+          className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)] transition-colors hover:bg-[var(--tv-accent-hover)]"
+        >
+          返回首页
+        </Link>
+      }
+    />
+  );
+}
 
 export function createAppQueryClient(): QueryClient {
   return new QueryClient({
@@ -57,6 +101,7 @@ function UserSessionBoundary({
     <QueryClientProvider client={userQueryClient}>
       <AppShell user={user} onSessionCleared={onSessionCleared}>
         <Routes>
+          <Route path="/" element={<StartupRedirect />} />
           <Route path="/discover" element={<DiscoverPage />} />
           <Route path="/charts" element={<ChartsPage />} />
           <Route path="/charts/:platform/:id" element={<ChartDetailPage />} />
@@ -71,7 +116,7 @@ function UserSessionBoundary({
           <Route path="/downloads" element={<DownloadsPage />} />
           <Route path="/transfer" element={<TransferPage />} />
           <Route path="/settings" element={<SettingsPage user={user} />} />
-          <Route path="*" element={<Navigate to="/discover" replace />} />
+          <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </AppShell>
     </QueryClientProvider>
@@ -84,6 +129,7 @@ function AuthenticatedApp() {
 
   const clearAuthSession = useCallback(() => {
     audioEngine.stop();
+    clearPendingDirectLinkJobs();
     authQueryClient.setQueryData<AuthStatus>(["auth-status"], (prev) => ({
       initialized: prev?.initialized ?? true,
       authenticated: false,

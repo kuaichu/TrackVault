@@ -55,6 +55,15 @@ export function ArtistDetailPage() {
         <EmptyState
           title="未能加载歌手信息"
           description={artistQuery.error instanceof Error ? artistQuery.error.message : "请稍后重试"}
+          action={
+            <button
+              type="button"
+              onClick={() => void artistQuery.refetch()}
+              className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+            >
+              重试
+            </button>
+          }
         />
       ) : (
         <>
