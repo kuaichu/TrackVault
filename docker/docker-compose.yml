@@ -1,0 +1,25 @@
+services:
+  trackvault:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: trackvault-v2
+    restart: unless-stopped
+    ports:
+      - "3010:3010"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3010
+      DATA_DIR: /data
+      # Set your actual origin(s) when deploying behind reverse proxy / LAN IP
+      ALLOWED_ORIGINS: "http://localhost:3010,http://127.0.0.1:3010"
+      # Recommended: provide a fixed 64-char hex master key (otherwise auto-generated in /data/.master.key)
+      # TRACKVAULT_MASTER_KEY: ""
+      # Set to "true" behind HTTPS reverse proxy
+      COOKIE_SECURE: "auto"
+    volumes:
+      - trackvault_data:/data
+
+volumes:
+  trackvault_data:

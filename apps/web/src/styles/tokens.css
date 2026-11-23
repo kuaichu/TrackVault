@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+:root {
+  /* Core Palette - Obsidian Studio & Warm Amber Accent */
+  --tv-bg: #0b0e14;
+  --tv-surface: #121722;
+  --tv-surface-elevated: #181f2e;
+  --tv-surface-hover: #1f283b;
+  --tv-border: rgba(255, 255, 255, 0.08);
+  --tv-border-strong: rgba(255, 255, 255, 0.16);
+
+  --tv-text: #f3f5f9;
+  --tv-text-muted: #98a2b3;
+  --tv-text-subtle: #667085;
+
+  --tv-accent: #f59e0b;
+  --tv-accent-soft: rgba(245, 158, 11, 0.15);
+  --tv-netease: #ef4444;
+  --tv-qq: #10b981;
+  --tv-danger: #f43f5e;
+  --tv-success: #22c55e;
+
+  /* Explicit 5-level z-index scale (replaces 22 arbitrary z-index values in v1) */
+  --tv-z-base: 0;
+  --tv-z-sticky: 20;
+  --tv-z-dropdown: 40;
+  --tv-z-modal: 60;
+  --tv-z-toast: 80;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  font-family: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+}
+
+/* Custom thin scrollbars */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
