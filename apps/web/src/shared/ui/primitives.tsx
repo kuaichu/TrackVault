@@ -1,5 +1,5 @@
-import { CheckCircle2, Info, Music2, X, XCircle } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { CheckCircle2, ChevronDown, ChevronUp, Info, Music2, X, XCircle } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { sanitizeExternalUrl } from "#shared";
 import { useToastStore } from "../store/toast-store.js";
 
@@ -8,19 +8,27 @@ export function CoverArt({
   alt,
   className = "h-10 w-10",
   rounded = "rounded-md",
+  darkBackdrop = false,
 }: {
   src?: string;
   alt: string;
   className?: string;
   rounded?: string;
+  darkBackdrop?: boolean;
 }) {
-  const [failed, setFailed] = useState(false);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const safeSrc = sanitizeExternalUrl(src);
+  const failed = Boolean(safeSrc && failedSrc === safeSrc);
+
+  const fallbackClass = darkBackdrop
+    ? "bg-white/10 text-white/45"
+    : "bg-[var(--tv-surface)] text-[var(--tv-text-subtle)]";
+  const imgSurfaceClass = darkBackdrop ? "bg-white/10" : "bg-[var(--tv-surface)]";
 
   if (!safeSrc || failed) {
     return (
       <div
-        className={`flex shrink-0 items-center justify-center bg-[var(--tv-surface)] text-[var(--tv-text-subtle)] ${rounded} ${className}`}
+        className={`flex shrink-0 items-center justify-center ${fallbackClass} ${rounded} ${className}`}
         aria-label={alt}
       >
         <Music2 className="h-[42%] w-[42%] stroke-[1.6]" />
@@ -34,9 +42,80 @@ export function CoverArt({
       alt={alt}
       loading="lazy"
       referrerPolicy="no-referrer"
-      onError={() => setFailed(true)}
-      className={`shrink-0 object-cover bg-[var(--tv-surface)] ${rounded} ${className}`}
+      onError={() => setFailedSrc(safeSrc)}
+      className={`shrink-0 object-cover ${imgSurfaceClass} ${rounded} ${className}`}
     />
+  );
+}
+
+export function ExpandableText({
+  text,
+  clampClass = "line-clamp-2",
+  expandLabel = "展开",
+  collapseLabel = "收起",
+  className = "",
+  textClassName = "",
+}: {
+  text: string;
+  clampClass?: string;
+  expandLabel?: string;
+  collapseLabel?: string;
+  className?: string;
+  textClassName?: string;
+}) {
+  const [expandedForText, setExpandedForText] = useState<string | null>(null);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const textRef = useRef<HTMLParagraphElement | null>(null);
+  const expanded = expandedForText === text;
+
+  useEffect(() => {
+    const el = textRef.current;
+    if (!el || expanded || !text || !clampClass) {
+      if (!text) setIsOverflowing(false);
+      return;
+    }
+
+    const measure = () => {
+      if (!textRef.current) return;
+      setIsOverflowing(textRef.current.scrollHeight - textRef.current.clientHeight > 1);
+    };
+
+    measure();
+
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(measure);
+      observer.observe(el);
+      return () => observer.disconnect();
+    }
+
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [text, expanded, clampClass]);
+
+  return (
+    <div className={className}>
+      <p ref={textRef} className={`${textClassName} ${expanded ? "" : clampClass}`.trim()}>
+        {text}
+      </p>
+      {(expanded || isOverflowing) && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpandedForText((prev) => (prev === text ? null : text))}
+          className="mt-1 inline-flex items-center gap-0.5 rounded text-[11px] font-medium text-[var(--tv-text-subtle)] hover:text-[var(--tv-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tv-accent)]"
+        >
+          {expanded ? (
+            <>
+              {collapseLabel} <ChevronUp className="h-3 w-3" />
+            </>
+          ) : (
+            <>
+              {expandLabel} <ChevronDown className="h-3 w-3" />
+            </>
+          )}
+        </button>
+      )}
+    </div>
   );
 }
 

@@ -13,7 +13,7 @@ import {
   Trash2,
   User,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   type DownloadMode,
@@ -32,6 +32,8 @@ import { useLikedIdsQuery, useToggleLikeMutation } from "../../shared/hooks/use-
 import { toast } from "../../shared/store/toast-store.js";
 import { CoverArt, EmptyState, EqualizerBars, PlatformBadge } from "../../shared/ui/primitives.js";
 import { AlbumLink, ArtistLinks } from "../music/EntityLinks.js";
+
+const PLAY_TRIGGER_DEDUP_MS = 350;
 
 interface SongTableProps {
   songs: Song[];
@@ -71,11 +73,27 @@ export function SongTable({
   const [pendingDownloadKeys, setPendingDownloadKeys] = useState<Set<string>>(() => new Set());
   const [openMenuKey, setOpenMenuKey] = useState<string | null>(null);
   const [menuPanel, setMenuPanel] = useState<"main" | "playlists" | "quality">("main");
+  const [menuUpward, setMenuUpward] = useState(false);
 
-  const activeMenuSong = openMenuKey ? songs.find((s) => getSongKey(s) === openMenuKey) : undefined;
+  const lastPlayTriggerRef = useRef<{ key: string; at: number } | null>(null);
+
+  const triggerPlayTrack = (song: Song) => {
+    const songKey = getSongKey(song);
+    const now = Date.now();
+    const last = lastPlayTriggerRef.current;
+    if (last && last.key === songKey && now - last.at < PLAY_TRIGGER_DEDUP_MS) {
+      return;
+    }
+    lastPlayTriggerRef.current = { key: songKey, at: now };
+    void audioEngine.playTrack(song, { queue: songs });
+  };
+
+  const activeMenuSong = openMenuKey
+    ? songs.find((s, i) => `${getSongKey(s)}-${i}` === openMenuKey)
+    : undefined;
   const playlistMenuPlatform = activeMenuSong?.platform;
 
-  const { data: userPlaylistsData } = useQuery({
+  const userPlaylistsQuery = useQuery({
     queryKey: ["playlists", playlistMenuPlatform],
     queryFn: () =>
       playlistMenuPlatform ? api.getUserPlaylists(playlistMenuPlatform) : Promise.resolve({ playlists: [] }),
@@ -161,14 +179,14 @@ export function SongTable({
     onError: (err) => toast.error(err instanceof Error ? err.message : "收藏到歌单失败"),
   });
 
-  const ownedTargetPlaylists = (userPlaylistsData?.playlists ?? []).filter((pl) => pl.owned);
+  const ownedTargetPlaylists = (userPlaylistsQuery.data?.playlists ?? []).filter((pl) => pl.owned);
 
   if (songs.length === 0) {
     return <EmptyState title={emptyText} description={emptyDescription} />;
   }
 
   return (
-    <div>
+    <div className="@container">
       {showHeaderMeta && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--tv-text-muted)]">
           <span className="tabular-nums">{songs.length} 首曲目</span>
@@ -199,44 +217,52 @@ export function SongTable({
         </div>
       )}
 
-      {/* Feishin / Spotify style frameless column header (adapts cleanly to mobile 2-col) */}
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 border-b border-[var(--tv-border)] px-2 pb-2 text-[11px] font-medium text-[var(--tv-text-subtle)] select-none sm:grid-cols-[32px_minmax(0,1fr)_48px_96px] sm:gap-3 sm:px-3 md:grid-cols-[36px_minmax(0,1.65fr)_minmax(0,1fr)_52px_104px]">
-        <span className="hidden text-center sm:block">#</span>
+      {/* Container-query responsive column header (prevents 0px title collapse at any container width) */}
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 border-b border-[var(--tv-border)] px-2 pb-2 text-[11px] font-medium text-[var(--tv-text-subtle)] select-none @lg:grid-cols-[32px_minmax(0,1fr)_48px_96px] @lg:gap-3 @lg:px-3 @3xl:grid-cols-[36px_minmax(0,1.65fr)_minmax(0,1fr)_52px_104px]">
+        <span className="hidden text-center @lg:block">#</span>
         <span>标题</span>
-        <span className="hidden md:block">专辑</span>
-        <span className="hidden text-right sm:block">时长</span>
+        <span className="hidden @3xl:block">专辑</span>
+        <span className="hidden text-right @lg:block">时长</span>
         <span className="text-right">操作</span>
       </div>
 
       <div className="mt-1 space-y-0.5">
         {songs.map((song, idx) => {
           const key = getSongKey(song);
+          const rowKey = `${key}-${idx}`;
           const active = currentTrack ? getSongKey(currentTrack) === key : false;
           const locked = Boolean(song.availability?.playback.locked);
+          const downloadLocked = Boolean(song.availability?.download.locked);
           const canLikeSong = capabilities[song.platform].canLikeSong;
           const canManagePlaylists = capabilities[song.platform].canManagePlaylistTracks;
           const isLiked = canLikeSong && likedSets[song.platform].has(song.id);
           const isDownloading = pendingDownloadKeys.has(key);
+          const downloadDisabled = isDownloading || downloadLocked;
           const preferredLevel: QualityLevel = song.availableQualities.some(
             (q) => q.level === defaultDownloadQuality,
           )
             ? defaultDownloadQuality
             : (song.availableQualities[song.availableQualities.length - 1]?.level ?? "standard");
-          const menuOpen = openMenuKey === key;
+          const downloadTitle = downloadLocked
+            ? (song.availability?.download.reason ?? "当前曲目暂不可下载")
+            : isDownloading
+              ? "正在加入下载..."
+              : `下载 ${getQualityLabel(preferredLevel)}`;
+          const menuOpen = openMenuKey === rowKey;
 
           return (
             <div
-              key={key}
-              onDoubleClick={() => void audioEngine.playTrack(song, { queue: songs })}
-              className={`group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 rounded-lg px-2 py-2 transition-colors sm:grid-cols-[32px_minmax(0,1fr)_48px_96px] sm:gap-3 sm:px-3 md:grid-cols-[36px_minmax(0,1.65fr)_minmax(0,1fr)_52px_104px] ${
+              key={rowKey}
+              onDoubleClick={() => triggerPlayTrack(song)}
+              className={`group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 rounded-lg px-2 py-2 transition-colors @lg:grid-cols-[32px_minmax(0,1fr)_48px_96px] @lg:gap-3 @lg:px-3 @3xl:grid-cols-[36px_minmax(0,1.65fr)_minmax(0,1fr)_52px_104px] ${
                 active ? "bg-[var(--tv-accent-soft)]" : "hover:bg-[var(--tv-surface-hover)]"
               }`}
             >
-              {/* Index / Playing Equalizer / Hover Play Button (sm+) */}
-              <div className="hidden items-center justify-center sm:flex">
+              {/* Index / Playing Equalizer / Hover Play Button (@lg+) */}
+              <div className="hidden items-center justify-center @lg:flex">
                 <button
                   type="button"
-                  onClick={() => void audioEngine.playTrack(song, { queue: songs })}
+                  onClick={() => triggerPlayTrack(song)}
                   className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--tv-text-subtle)] transition-colors hover:text-[var(--tv-text)]"
                   title={locked ? song.availability?.playback.reason : "播放"}
                   aria-label={`播放 ${song.title}`}
@@ -265,25 +291,25 @@ export function SongTable({
               </div>
 
               {/* Cover + Title + Clickable Artist Links */}
-              <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
+              <div className="flex min-w-0 items-center gap-2.5 @lg:gap-3">
                 <button
                   type="button"
-                  onClick={() => void audioEngine.playTrack(song, { queue: songs })}
+                  onClick={() => triggerPlayTrack(song)}
                   className="relative shrink-0"
                   aria-label={`播放 ${song.title}`}
                 >
                   <CoverArt src={song.coverUrl} alt={song.title} className="h-10 w-10" rounded="rounded-md" />
                 </button>
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 sm:gap-2">
+                  <div className="flex items-center gap-1.5 @lg:gap-2">
                     {active && isPlaying && (
-                      <span className="inline-flex shrink-0 sm:hidden">
+                      <span className="inline-flex shrink-0 @lg:hidden">
                         <EqualizerBars />
                       </span>
                     )}
                     <button
                       type="button"
-                      onClick={() => void audioEngine.playTrack(song, { queue: songs })}
+                      onClick={() => triggerPlayTrack(song)}
                       className={`truncate text-left text-[13.5px] font-semibold transition-colors ${
                         active
                           ? "text-[var(--tv-accent)]"
@@ -323,17 +349,17 @@ export function SongTable({
                 </div>
               </div>
 
-              {/* Clickable Album Column */}
-              <div className="hidden min-w-0 truncate text-xs text-[var(--tv-text-muted)] md:block">
+              {/* Clickable Album Column (@3xl+) */}
+              <div className="hidden min-w-0 truncate text-xs text-[var(--tv-text-muted)] @3xl:block">
                 <AlbumLink song={song} />
               </div>
 
-              {/* Duration */}
-              <div className="hidden text-right text-xs tabular-nums text-[var(--tv-text-subtle)] sm:block">
+              {/* Duration (@lg+) */}
+              <div className="hidden text-right text-xs tabular-nums text-[var(--tv-text-subtle)] @lg:block">
                 {song.duration}
               </div>
 
-              {/* Clean Row Actions: Like + Quick Download (sm+) + Context Menu (touch-friendly) */}
+              {/* Clean Row Actions: Like + Quick Download (@lg+) + Context Menu (touch-friendly) */}
               <div className="relative flex items-center justify-end gap-0.5">
                 {canLikeSong && (
                   <button
@@ -351,7 +377,7 @@ export function SongTable({
                     className={`rounded-md p-1.5 transition-all ${
                       isLiked
                         ? "text-[var(--tv-accent)] opacity-100"
-                        : "hidden text-[var(--tv-text-subtle)] hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-text)] sm:inline-flex md:opacity-0 md:group-hover:opacity-100"
+                        : "hidden text-[var(--tv-text-subtle)] hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-text)] @lg:inline-flex @3xl:opacity-0 @3xl:group-hover:opacity-100"
                     }`}
                   >
                     <Heart className={`h-3.5 w-3.5 ${isLiked ? "fill-current" : ""}`} />
@@ -360,7 +386,7 @@ export function SongTable({
 
                 <button
                   type="button"
-                  disabled={isDownloading}
+                  disabled={downloadDisabled}
                   onClick={() =>
                     downloadMutation.mutate({
                       song,
@@ -368,9 +394,9 @@ export function SongTable({
                       mode: downloadMode,
                     })
                   }
-                  title={isDownloading ? "正在加入下载..." : `下载 ${getQualityLabel(preferredLevel)}`}
+                  title={downloadTitle}
                   aria-label={`下载 ${song.title}`}
-                  className="hidden rounded-md p-1.5 text-[var(--tv-text-muted)] opacity-65 transition-all hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-text)] group-hover:opacity-100 disabled:opacity-40 sm:inline-flex"
+                  className="hidden rounded-md p-1.5 text-[var(--tv-text-muted)] opacity-65 transition-all hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-text)] group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-35 @lg:inline-flex"
                 >
                   {isDownloading ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -382,12 +408,18 @@ export function SongTable({
                 <div className="relative" onPointerDown={(e) => e.stopPropagation()}>
                   <button
                     type="button"
-                    onClick={() => {
+                    onClick={(e) => {
                       if (menuOpen) {
                         setOpenMenuKey(null);
                         setMenuPanel("main");
                       } else {
-                        setOpenMenuKey(key);
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const hasLayoutRect = rect.height > 0 && window.innerHeight > 0;
+                        const shouldFlipUp = hasLayoutRect
+                          ? window.innerHeight - rect.bottom < 280 && rect.top > 240
+                          : songs.length >= 4 && idx >= songs.length - 3;
+                        setMenuUpward(shouldFlipUp);
+                        setOpenMenuKey(rowKey);
                         setMenuPanel("main");
                       }
                     }}
@@ -396,15 +428,17 @@ export function SongTable({
                     className={`rounded-md p-1.5 text-[var(--tv-text-muted)] transition-all hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-text)] ${
                       menuOpen
                         ? "bg-[var(--tv-surface-active)] opacity-100"
-                        : "opacity-100 md:opacity-65 md:group-hover:opacity-100"
+                        : "opacity-100 @3xl:opacity-65 @3xl:group-hover:opacity-100"
                     }`}
                   >
-                    <MoreHorizontal className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                    <MoreHorizontal className="h-4 w-4 @lg:h-3.5 @lg:w-3.5" />
                   </button>
 
                   {menuOpen && (
                     <div
-                      className="absolute right-0 top-full mt-1 w-48 rounded-xl border border-[var(--tv-border-strong)] bg-[var(--tv-surface-elevated)] p-1 shadow-2xl"
+                      className={`absolute right-0 w-48 rounded-xl border border-[var(--tv-border-strong)] bg-[var(--tv-surface-elevated)] p-1 shadow-2xl ${
+                        menuUpward ? "bottom-full mb-1" : "top-full mt-1"
+                      }`}
                       style={{ zIndex: "var(--tv-z-dropdown)" }}
                     >
                       {menuPanel === "main" && (
@@ -461,7 +495,7 @@ export function SongTable({
                                 });
                                 setOpenMenuKey(null);
                               }}
-                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] hover:bg-[var(--tv-surface-hover)] sm:hidden"
+                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] hover:bg-[var(--tv-surface-hover)] @lg:hidden"
                             >
                               <Heart
                                 className={`h-3.5 w-3.5 ${
@@ -477,20 +511,22 @@ export function SongTable({
                           {song.availableQualities.length > 1 ? (
                             <button
                               type="button"
-                              disabled={isDownloading}
+                              disabled={downloadDisabled}
+                              title={downloadTitle}
                               onClick={() => setMenuPanel("quality")}
-                              className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] hover:bg-[var(--tv-surface-hover)] disabled:opacity-40"
+                              className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] hover:bg-[var(--tv-surface-hover)] disabled:cursor-not-allowed disabled:opacity-40"
                             >
                               <span className="flex items-center gap-2">
                                 <Download className="h-3.5 w-3.5 text-[var(--tv-text-muted)]" />
-                                下载歌曲
+                                {downloadLocked ? "暂不可下载" : "下载歌曲"}
                               </span>
                               <span className="text-[10px] text-[var(--tv-text-subtle)]">›</span>
                             </button>
                           ) : (
                             <button
                               type="button"
-                              disabled={isDownloading}
+                              disabled={downloadDisabled}
+                              title={downloadTitle}
                               onClick={() => {
                                 setOpenMenuKey(null);
                                 downloadMutation.mutate({
@@ -499,10 +535,10 @@ export function SongTable({
                                   mode: downloadMode,
                                 });
                               }}
-                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] hover:bg-[var(--tv-surface-hover)] disabled:opacity-40 sm:hidden"
+                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] hover:bg-[var(--tv-surface-hover)] disabled:cursor-not-allowed disabled:opacity-40 @lg:hidden"
                             >
                               <Download className="h-3.5 w-3.5 text-[var(--tv-text-muted)]" />
-                              下载 ({getQualityLabel(preferredLevel)})
+                              {downloadLocked ? "暂不可下载" : `下载 (${getQualityLabel(preferredLevel)})`}
                             </button>
                           )}
 
@@ -569,7 +605,23 @@ export function SongTable({
                             ‹ 选择目标歌单
                           </button>
                           <div className="max-h-52 overflow-y-auto space-y-0.5">
-                            {ownedTargetPlaylists.length === 0 ? (
+                            {userPlaylistsQuery.isLoading ? (
+                              <div className="flex items-center justify-center gap-1.5 px-2.5 py-3 text-[11px] text-[var(--tv-text-muted)]">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                加载歌单中...
+                              </div>
+                            ) : userPlaylistsQuery.isError ? (
+                              <div className="space-y-1.5 px-2.5 py-3 text-center text-[11px] text-[var(--tv-text-muted)]">
+                                <div>加载歌单失败</div>
+                                <button
+                                  type="button"
+                                  onClick={() => void userPlaylistsQuery.refetch()}
+                                  className="rounded bg-[var(--tv-surface)] px-2 py-0.5 text-[var(--tv-text)] hover:bg-[var(--tv-surface-active)]"
+                                >
+                                  重试
+                                </button>
+                              </div>
+                            ) : ownedTargetPlaylists.length === 0 ? (
                               <div className="px-2.5 py-3 text-center text-[11px] text-[var(--tv-text-muted)]">
                                 暂无自建歌单
                               </div>
@@ -610,6 +662,7 @@ export function SongTable({
                             <button
                               key={q.level}
                               type="button"
+                              disabled={downloadDisabled}
                               onClick={() => {
                                 setOpenMenuKey(null);
                                 setMenuPanel("main");
@@ -619,7 +672,7 @@ export function SongTable({
                                   mode: downloadMode,
                                 });
                               }}
-                              className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] hover:bg-[var(--tv-surface-hover)]"
+                              className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] hover:bg-[var(--tv-surface-hover)] disabled:opacity-40"
                             >
                               <span>{q.label}</span>
                               {q.level === preferredLevel && (

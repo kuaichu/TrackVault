@@ -181,6 +181,7 @@ export function DiscoverPage() {
                 <CoverArt
                   src={leadSong.coverUrl}
                   alt={leadSong.title}
+                  darkBackdrop
                   className="hidden h-20 w-20 shadow-2xl sm:block"
                   rounded="rounded-xl"
                 />
@@ -293,7 +294,7 @@ export function DiscoverPage() {
                       state: { playlist: pl },
                     })
                   }
-                  className="group text-left focus:outline-none"
+                  className="group rounded-xl text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tv-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--tv-bg)]"
                 >
                   <div className="relative aspect-square w-full overflow-hidden rounded-xl bg-[var(--tv-surface)] shadow-md transition-shadow duration-300 group-hover:shadow-xl">
                     <CoverArt

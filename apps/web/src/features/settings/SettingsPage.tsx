@@ -121,7 +121,15 @@ function AdminConsole() {
       }),
     onSuccess: (_res, vars) => {
       setFallbackDrafts((prev) => ({ ...prev, [vars.platform]: "" }));
-      toast.success("系统保底凭证已更新");
+      if (vars.clearCookie) {
+        toast.info("已清除系统保底凭证");
+      } else if (!vars.cookie && !vars.enabled) {
+        toast.info("已停用系统保底凭证");
+      } else if (!vars.cookie && vars.enabled) {
+        toast.success("已启用系统保底凭证");
+      } else {
+        toast.success("系统保底凭证已更新");
+      }
       void queryClient.invalidateQueries({ queryKey: ["admin-fallbacks"] });
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "保存失败"),
@@ -136,7 +144,7 @@ function AdminConsole() {
     <section className="space-y-4">
       <h2 className="text-base font-semibold tracking-tight text-[var(--tv-text)]">成员与保底凭证</h2>
 
-      <div className="rounded-2xl bg-[var(--tv-surface)] p-5 space-y-5">
+      <div className="rounded-2xl bg-[var(--tv-surface)] p-4 sm:p-5 space-y-5">
         <div className="space-y-1.5">
           <form onSubmit={handleAddMember} className="flex flex-wrap items-center gap-2.5">
             <input
@@ -149,7 +157,7 @@ function AdminConsole() {
               value={newUsername}
               onChange={(e) => setNewUsername(e.target.value)}
               placeholder="新成员用户名"
-              className="h-9 rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-3 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:outline-none"
+              className="h-9 min-w-0 w-full rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-3 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:outline-none sm:w-auto"
             />
             <input
               type="password"
@@ -159,7 +167,7 @@ function AdminConsole() {
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               placeholder="初始密码（至少 8 位）"
-              className="h-9 rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-3 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:outline-none"
+              className="h-9 min-w-0 w-full rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-3 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:outline-none sm:w-auto"
             />
             <label className="inline-flex items-center gap-1.5 text-xs text-[var(--tv-text-muted)]">
               <input
@@ -201,15 +209,23 @@ function AdminConsole() {
             </div>
           ) : (
             membersQuery.data?.members.map((member) => (
-              <div key={member.id} className="flex items-center justify-between gap-3 py-3">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-[var(--tv-text)]">{member.username}</span>
-                  <span className="text-[11px] text-[var(--tv-text-subtle)]">
+              <div
+                key={member.id}
+                className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 py-3"
+              >
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <span
+                    className="min-w-0 truncate font-medium text-[var(--tv-text)]"
+                    title={member.username}
+                  >
+                    {member.username}
+                  </span>
+                  <span className="shrink-0 text-[11px] text-[var(--tv-text-subtle)]">
                     {member.role === "admin" ? "管理员" : "成员"}
                   </span>
                 </div>
-                <div className="flex items-center gap-4">
-                  <label className="inline-flex items-center gap-1.5 text-[var(--tv-text-muted)]">
+                <div className="flex shrink-0 items-center gap-3 sm:gap-4">
+                  <label className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[var(--tv-text-muted)]">
                     <input
                       type="checkbox"
                       checked={member.trustedFallback}
@@ -224,7 +240,7 @@ function AdminConsole() {
                       type="button"
                       disabled={deleteMemberMutation.isPending}
                       onClick={() => deleteMemberMutation.mutate(member.id)}
-                      className="text-[var(--tv-text-subtle)] hover:text-[var(--tv-danger)] disabled:opacity-40"
+                      className="shrink-0 text-[var(--tv-text-subtle)] hover:text-[var(--tv-danger)] disabled:opacity-40"
                       aria-label={`删除 ${member.username}`}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -264,7 +280,7 @@ function AdminConsole() {
                       {platform === "netease" ? "网易云保底凭证" : "QQ 音乐保底凭证"}
                     </span>
                     <span className="text-[var(--tv-text-subtle)]">
-                      {fb?.configured ? (fb.enabled ? "已启用" : "已保存") : "未配置"}
+                      {fb?.configured ? (fb.enabled ? "已启用" : "已停用") : "未配置"}
                     </span>
                   </div>
                   <input
@@ -274,7 +290,7 @@ function AdminConsole() {
                     placeholder="输入新的保底 Cookie"
                     className="w-full rounded-lg border border-[var(--tv-border)] bg-[var(--tv-surface)] px-2.5 py-1.5 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:outline-none"
                   />
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
                       disabled={!canSubmitFallback || saveFallbackMutation.isPending}
@@ -289,6 +305,21 @@ function AdminConsole() {
                     >
                       保存并启用
                     </button>
+                    {fb?.configured && (
+                      <button
+                        type="button"
+                        disabled={saveFallbackMutation.isPending}
+                        onClick={() =>
+                          saveFallbackMutation.mutate({
+                            platform,
+                            enabled: !fb.enabled,
+                          })
+                        }
+                        className="rounded-lg border border-[var(--tv-border-strong)] bg-[var(--tv-surface)] px-2.5 py-1 text-xs font-medium text-[var(--tv-text)] hover:bg-[var(--tv-surface-active)] disabled:opacity-40"
+                      >
+                        {fb.enabled ? "停用" : "启用"}
+                      </button>
+                    )}
                     {fb?.configured && (
                       <button
                         type="button"

@@ -6,9 +6,14 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { ThumbsUp, Trash2, X } from "lucide-react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { type MusicPlatform, type SongComment, type SongCommentsPage, getSongKey } from "#shared";
 import { api } from "../../../shared/api/endpoints.js";
+import {
+  setElementInert,
+  useIsOverlayViewport,
+  useModalFocusTrap,
+} from "../../../shared/hooks/use-modal-focus-trap.js";
 import { toast } from "../../../shared/store/toast-store.js";
 import { CoverArt, EqualizerBars, PlatformBadge } from "../../../shared/ui/primitives.js";
 import { audioEngine } from "../engine/audio-engine.js";
@@ -34,7 +39,7 @@ function updateCommentList(comments: SongComment[], commentId: string, liked: bo
   });
 }
 
-export function RightDrawer() {
+export function RightDrawer({ backgroundInert = false }: { backgroundInert?: boolean } = {}) {
   const queryClient = useQueryClient();
   const open = usePlayerStore((s) => s.drawerOpen);
   const tab = usePlayerStore((s) => s.drawerTab);
@@ -43,6 +48,18 @@ export function RightDrawer() {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const queue = usePlayerStore((s) => s.queue);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const drawerPanelRef = useRef<HTMLElement | null>(null);
+  const isOverlay = useIsOverlayViewport(1280);
+
+  useEffect(() => {
+    if (!open) return;
+    setElementInert(rootRef.current, backgroundInert);
+  }, [backgroundInert, open]);
+
+  useModalFocusTrap(drawerPanelRef, open && isOverlay && !backgroundInert, {
+    onClose: () => setOpen(false),
+  });
 
   const lyricsQuery = useQuery({
     queryKey: ["lyrics", currentTrack?.platform, currentTrack?.id],
@@ -157,24 +174,30 @@ export function RightDrawer() {
 
   return (
     <div
-      className="fixed inset-0 flex flex-col justify-end md:static md:z-auto md:flex md:shrink-0"
-      style={{ zIndex: "var(--tv-z-modal)" }}
+      ref={rootRef}
+      className="fixed inset-0 z-[var(--tv-z-modal)] flex flex-col justify-end xl:static xl:z-auto xl:flex xl:shrink-0"
     >
-      {/* Mobile dimmed backdrop */}
+      {/* Overlay dimmed backdrop (< xl) */}
       <button
         type="button"
         onClick={() => setOpen(false)}
-        className="fixed inset-0 bg-black/55 backdrop-blur-xs md:hidden"
+        className="fixed inset-0 bg-black/55 backdrop-blur-xs xl:hidden"
         aria-label="关闭侧栏遮罩"
       />
 
-      <aside className="tv-pb-safe relative flex h-[78dvh] w-full flex-col rounded-t-2xl border-t border-[var(--tv-border-strong)] bg-[var(--tv-sidebar)] shadow-2xl md:h-full md:w-[336px] md:rounded-none md:border-l md:border-t-0 md:border-[var(--tv-border)] md:shadow-none">
-        {/* Mobile grab indicator */}
-        <div className="flex justify-center pt-2 md:hidden">
+      <aside
+        ref={drawerPanelRef}
+        role={isOverlay ? "dialog" : undefined}
+        aria-modal={isOverlay ? true : undefined}
+        aria-label="播放详情侧栏"
+        className="tv-pb-safe relative flex h-[78dvh] w-full flex-col rounded-t-2xl border-t border-[var(--tv-border-strong)] bg-[var(--tv-sidebar)] shadow-2xl xl:h-full xl:w-[336px] xl:rounded-none xl:border-l xl:border-t-0 xl:border-[var(--tv-border)] xl:shadow-none"
+      >
+        {/* Mobile/Tablet grab indicator (< xl) */}
+        <div className="flex justify-center pt-2 xl:hidden">
           <span className="h-1 w-9 rounded-full bg-[var(--tv-border-strong)]" />
         </div>
 
-        <div className="flex h-13 items-center justify-between border-b border-[var(--tv-border)] px-3.5 md:h-14">
+        <div className="flex h-13 items-center justify-between border-b border-[var(--tv-border)] px-3.5 xl:h-14">
           <div className="inline-flex items-center rounded-lg bg-[var(--tv-surface)] p-0.5 text-xs">
             {tabs.map((item) => (
               <button

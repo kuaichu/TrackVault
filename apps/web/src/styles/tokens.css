@@ -18,8 +18,8 @@
   --tv-border-strong: rgba(255, 255, 255, 0.15);
 
   --tv-text: #f5f5f7;
-  --tv-text-muted: #9b9ba3;
-  --tv-text-subtle: #66666e;
+  --tv-text-muted: #a6a6af;
+  --tv-text-subtle: #8f8f99;
 
   /* Editorial Music Crimson Accent (YesPlayMusic / Apple Music inspired) */
   --tv-accent: #fa2d48;
@@ -62,8 +62,8 @@
   --tv-border-strong: rgba(0, 0, 0, 0.15);
 
   --tv-text: #1d1d1f;
-  --tv-text-muted: #63636a;
-  --tv-text-subtle: #8e8e96;
+  --tv-text-muted: #505058;
+  --tv-text-subtle: #666670;
 
   --tv-accent: #df223b;
   --tv-accent-hover: #c91c33;
@@ -165,11 +165,11 @@ select:not(:disabled) {
   );
 }
 
-/* Mobile safe-area inset support for bottom nav / fullscreen player */
-.tv-pb-safe {
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+/* Mobile safe-area inset support for bottom nav / fullscreen player (additive over base padding via CSS vars) */
+@utility tv-pb-safe {
+  padding-bottom: calc(var(--tv-safe-pb-base, 0px) + env(safe-area-inset-bottom, 0px));
 }
 
-.tv-pt-safe {
-  padding-top: env(safe-area-inset-top, 0px);
+@utility tv-pt-safe {
+  padding-top: calc(var(--tv-safe-pt-base, 0px) + env(safe-area-inset-top, 0px));
 }

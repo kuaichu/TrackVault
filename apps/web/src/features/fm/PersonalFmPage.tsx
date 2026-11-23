@@ -168,6 +168,7 @@ export function PersonalFmPage() {
             <CoverArt
               src={activeSong.coverUrl}
               alt={activeSong.title}
+              darkBackdrop
               className="aspect-square w-52 shadow-[0_24px_70px_rgba(0,0,0,0.65)] sm:w-64 md:w-72"
               rounded="rounded-2xl"
             />

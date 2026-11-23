@@ -1,19 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ChevronDown, ChevronUp, Play } from "lucide-react";
-import { useState } from "react";
+import { ArrowLeft, Play } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { type MusicPlatform, sanitizeCssUrl } from "#shared";
 import { ArtistLinks } from "../../entities/music/EntityLinks.js";
 import { SongTable } from "../../entities/song/SongTable.js";
 import { api } from "../../shared/api/endpoints.js";
-import { CoverArt, EmptyState, PlatformBadge } from "../../shared/ui/primitives.js";
+import { CoverArt, EmptyState, ExpandableText, PlatformBadge } from "../../shared/ui/primitives.js";
 import { audioEngine } from "../player/engine/audio-engine.js";
 
 export function AlbumDetailPage() {
   const navigate = useNavigate();
   const { platform: rawPlatform, id = "" } = useParams();
   const platform: MusicPlatform = rawPlatform === "qq" ? "qq" : "netease";
-  const [descExpanded, setDescExpanded] = useState(false);
 
   const albumQuery = useQuery({
     queryKey: ["album-detail", platform, id],
@@ -111,32 +109,13 @@ export function AlbumDetailPage() {
               </div>
 
               {album.description && (
-                <div className="max-w-2xl">
-                  <p
-                    className={`whitespace-pre-line text-xs leading-relaxed text-[var(--tv-text-muted)] ${
-                      descExpanded ? "" : "line-clamp-2"
-                    }`}
-                  >
-                    {album.description}
-                  </p>
-                  {album.description.length > 90 && (
-                    <button
-                      type="button"
-                      onClick={() => setDescExpanded((v) => !v)}
-                      className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-[var(--tv-text-subtle)] hover:text-[var(--tv-text)]"
-                    >
-                      {descExpanded ? (
-                        <>
-                          收起介绍 <ChevronUp className="h-3 w-3" />
-                        </>
-                      ) : (
-                        <>
-                          展开介绍 <ChevronDown className="h-3 w-3" />
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
+                <ExpandableText
+                  text={album.description}
+                  expandLabel="展开介绍"
+                  collapseLabel="收起介绍"
+                  className="max-w-2xl"
+                  textClassName="whitespace-pre-line text-xs leading-relaxed text-[var(--tv-text-muted)]"
+                />
               )}
 
               <div className="pt-2">

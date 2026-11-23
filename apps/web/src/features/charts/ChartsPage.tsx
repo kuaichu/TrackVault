@@ -77,7 +77,7 @@ export function ChartsPage() {
               key={`${chart.platform}:${chart.id}`}
               type="button"
               onClick={() => navigate(`/charts/${chart.platform}/${encodeURIComponent(chart.id)}`)}
-              className="group text-left focus:outline-none"
+              className="group rounded-xl text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tv-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--tv-bg)]"
             >
               <div className="relative aspect-square w-full overflow-hidden rounded-xl bg-[var(--tv-surface)] shadow-md transition-shadow duration-300 group-hover:shadow-xl">
                 <CoverArt

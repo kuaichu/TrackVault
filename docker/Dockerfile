@@ -1,11 +1,11 @@
 FROM node:24-slim AS builder
 WORKDIR /app
 
-COPY package.json package-lock.json* tsconfig.base.json ./
+COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages ./packages
 COPY apps ./apps
 
-RUN npm install --no-audit --no-fund && npm run build
+RUN npm ci --no-audit --no-fund && npm run build && npm prune --omit=dev
 
 FROM node:24-slim AS runner
 WORKDIR /app
@@ -28,6 +28,6 @@ USER trackvault
 EXPOSE 3010
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:3010/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "const port = process.env.PORT || 3010; fetch('http://127.0.0.1:' + port + '/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "apps/server/dist/index.js"]

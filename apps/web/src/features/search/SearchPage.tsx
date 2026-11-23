@@ -241,7 +241,7 @@ export function SearchPage() {
                 key={`${artist.platform}:${artist.id}`}
                 type="button"
                 onClick={() => navigate(`/artist/${artist.platform}/${encodeURIComponent(artist.id)}`)}
-                className="group flex flex-col items-center text-center focus:outline-none"
+                className="group flex flex-col items-center rounded-xl text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tv-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--tv-bg)]"
               >
                 <div className="aspect-square w-28 overflow-hidden rounded-full bg-[var(--tv-surface)] shadow-md transition-shadow duration-300 group-hover:shadow-xl sm:w-36">
                   <CoverArt
@@ -274,7 +274,7 @@ export function SearchPage() {
                 key={`${alb.platform}:${alb.id}`}
                 type="button"
                 onClick={() => navigate(`/album/${alb.platform}/${encodeURIComponent(alb.id)}`)}
-                className="group text-left focus:outline-none"
+                className="group rounded-xl text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tv-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--tv-bg)]"
               >
                 <div className="aspect-square w-full overflow-hidden rounded-xl bg-[var(--tv-surface)] shadow-md transition-shadow duration-300 group-hover:shadow-xl">
                   <CoverArt

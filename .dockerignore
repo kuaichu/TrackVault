@@ -1,0 +1,28 @@
+# Dependencies & build artifacts
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+coverage
+
+# Runtime data, databases & sensitive keys
+data
+data/**
+*.db
+*.db-*
+.master.key
+**/.master.key
+
+# Local environment & VCS
+.env
+.env.*
+**/.env
+**/.env.*
+.git
+.gitignore
+
+# Documentation, audit plans, logs & temp files
+docs
+bug_remediation_plan.md
+*.log
+tmp
+.tmp

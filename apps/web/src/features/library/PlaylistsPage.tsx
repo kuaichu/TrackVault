@@ -13,7 +13,13 @@ import { SongTable } from "../../entities/song/SongTable.js";
 import { api } from "../../shared/api/endpoints.js";
 import { useCapabilities } from "../../shared/hooks/use-capabilities.js";
 import { toast } from "../../shared/store/toast-store.js";
-import { CoverArt, EmptyState, PlatformBadge, SegmentedTabs } from "../../shared/ui/primitives.js";
+import {
+  CoverArt,
+  EmptyState,
+  ExpandableText,
+  PlatformBadge,
+  SegmentedTabs,
+} from "../../shared/ui/primitives.js";
 import { audioEngine } from "../player/engine/audio-engine.js";
 
 const PAGE_SIZE = 50;
@@ -176,7 +182,7 @@ export function PlaylistsPage() {
                   state: { playlist: pl },
                 })
               }
-              className="group text-left focus:outline-none"
+              className="group rounded-xl text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tv-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--tv-bg)]"
             >
               <div className="relative aspect-square w-full overflow-hidden rounded-xl bg-[var(--tv-surface)] shadow-md transition-shadow duration-300 group-hover:shadow-xl">
                 <CoverArt
@@ -320,6 +326,15 @@ export function PlaylistDetailPage() {
             <p className="text-xs text-[var(--tv-text-muted)]">
               {playlist.creatorName} · 共 {total.toLocaleString("zh-CN")} 首曲目
             </p>
+            {playlist.description && (
+              <ExpandableText
+                text={playlist.description}
+                expandLabel="展开简介"
+                collapseLabel="收起简介"
+                className="max-w-2xl"
+                textClassName="whitespace-pre-line text-xs leading-relaxed text-[var(--tv-text-muted)]"
+              />
+            )}
 
             <div className="flex flex-wrap items-center gap-2.5 pt-2">
               <button

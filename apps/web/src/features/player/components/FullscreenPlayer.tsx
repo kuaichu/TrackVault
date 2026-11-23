@@ -1,8 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import {
+  AlertCircle,
   ChevronDown,
   Heart,
   ListMusic,
+  Loader2,
   MessageSquare,
   Pause,
   Play,
@@ -11,12 +13,15 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useRef, useState } from "react";
 import { type QualityLevel, getQualityLabel, sanitizeCssUrl } from "#shared";
 import { AlbumLink, ArtistLinks } from "../../../entities/music/EntityLinks.js";
 import { api } from "../../../shared/api/endpoints.js";
 import { useCapabilities } from "../../../shared/hooks/use-capabilities.js";
+import { useModalFocusTrap } from "../../../shared/hooks/use-modal-focus-trap.js";
 import { useToggleLikeMutation } from "../../../shared/hooks/use-toggle-like.js";
 import { CoverArt, PlatformBadge } from "../../../shared/ui/primitives.js";
 import { audioEngine, resolveEffectivePlaybackQuality } from "../engine/audio-engine.js";
@@ -30,24 +35,23 @@ export function FullscreenPlayer() {
   const setDrawerTab = usePlayerStore((s) => s.setDrawerTab);
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const isLoading = usePlayerStore((s) => s.isLoading);
+  const playerError = usePlayerStore((s) => s.playerError);
+  const volume = usePlayerStore((s) => s.volume);
+  const muted = usePlayerStore((s) => s.muted);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
   const defaultPlaybackQuality = usePlayerStore((s) => s.defaultPlaybackQuality);
   const activeQualityOverride = usePlayerStore((s) => s.activeQualityOverride);
 
   const [mobileView, setMobileView] = useState<"cover" | "lyrics">("cover");
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const isActive = Boolean(open && currentTrack);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, setOpen]);
+  useModalFocusTrap(dialogRef, isActive, { onClose: () => setOpen(false) });
 
   const {
     data: lyricData,
-    isLoading,
+    isLoading: lyricsLoading,
     isError: lyricIsError,
     error: lyricError,
     refetch: refetchLyrics,
@@ -55,7 +59,7 @@ export function FullscreenPlayer() {
     queryKey: ["lyrics", currentTrack?.platform, currentTrack?.id],
     queryFn: () =>
       currentTrack ? api.getLyrics(currentTrack.platform, currentTrack.id, currentTrack.mediaId) : null,
-    enabled: Boolean(open && currentTrack),
+    enabled: isActive,
   });
 
   const capabilities = useCapabilities();
@@ -64,7 +68,7 @@ export function FullscreenPlayer() {
     queryKey: ["song-like", currentTrack?.platform, currentTrack?.id],
     queryFn: () =>
       currentTrack ? api.isSongLiked(currentTrack.platform, currentTrack.id) : { liked: false },
-    enabled: Boolean(open && currentTrack && canLike),
+    enabled: Boolean(isActive && canLike),
   });
 
   const likeMutation = useToggleLikeMutation();
@@ -72,6 +76,7 @@ export function FullscreenPlayer() {
   if (!open || !currentTrack) return null;
 
   const safeBgUrl = sanitizeCssUrl(currentTrack.coverUrl);
+  const effectiveVolume = muted ? 0 : volume;
   const activeQuality = resolveEffectivePlaybackQuality(
     currentTrack,
     activeQualityOverride,
@@ -90,7 +95,9 @@ export function FullscreenPlayer() {
 
   return (
     <dialog
+      ref={dialogRef}
       open
+      aria-modal="true"
       className="fixed inset-0 m-0 flex h-[100dvh] w-full max-h-none max-w-none flex-col overflow-hidden border-0 bg-[#111113] p-0 text-white"
       style={{ zIndex: "var(--tv-z-modal)" }}
       aria-label="沉浸歌词播放"
@@ -104,12 +111,12 @@ export function FullscreenPlayer() {
       )}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-black/55 via-black/65 to-black/80" />
 
-      {/* Top Header with Mobile Cover/Lyrics Switcher */}
-      <header className="tv-pt-safe relative flex items-center justify-between px-4 py-3.5 md:px-8 md:py-5">
+      {/* Top Header with Mobile Cover/Lyrics Switcher + Desktop/Mobile Drawer Shortcuts */}
+      <header className="tv-pt-safe relative flex shrink-0 items-center justify-between px-4 pb-3 [--tv-safe-pt-base:0.75rem] md:px-8 md:pb-4 md:[--tv-safe-pt-base:1.25rem] [@media(max-height:500px)]:pb-1.5 [@media(max-height:500px)]:[--tv-safe-pt-base:0.375rem]">
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/85 backdrop-blur-md transition-colors hover:bg-white/20"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/85 backdrop-blur-md transition-colors hover:bg-white/20 [@media(max-height:500px)]:h-8 [@media(max-height:500px)]:w-8"
           title="收起 (Esc)"
           aria-label="收起全屏播放器"
         >
@@ -148,7 +155,8 @@ export function FullscreenPlayer() {
               setOpen(false);
               setDrawerTab("comments");
             }}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/80 backdrop-blur-md hover:bg-white/20 md:hidden"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/80 backdrop-blur-md transition-colors hover:bg-white/20 hover:text-white [@media(max-height:500px)]:h-8 [@media(max-height:500px)]:w-8"
+            title="查看评论"
             aria-label="查看评论"
           >
             <MessageSquare className="h-4 w-4" />
@@ -159,7 +167,8 @@ export function FullscreenPlayer() {
               setOpen(false);
               setDrawerTab("queue");
             }}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/80 backdrop-blur-md hover:bg-white/20 md:hidden"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/80 backdrop-blur-md transition-colors hover:bg-white/20 hover:text-white [@media(max-height:500px)]:h-8 [@media(max-height:500px)]:w-8"
+            title="查看队列"
             aria-label="查看队列"
           >
             <ListMusic className="h-4 w-4" />
@@ -167,26 +176,29 @@ export function FullscreenPlayer() {
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <div className="tv-pb-safe relative mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col overflow-hidden px-6 pb-6 md:grid md:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] md:items-center md:gap-12 md:px-8 md:pb-10">
-        {/* Cover & Transport Column (Always visible on desktop; visible when mobileView === "cover" on mobile) */}
+      {/* Main Content Area: single-mounted transport controls + height-safe responsive layout with scroll fallback */}
+      <div className="tv-pb-safe relative mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col overflow-y-auto px-5 [--tv-safe-pb-base:1.25rem] md:grid md:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] md:grid-rows-[auto_auto] md:content-center md:items-center md:gap-x-10 md:gap-y-4 md:px-8 md:[--tv-safe-pb-base:2rem] [@media(max-height:500px)]:[--tv-safe-pb-base:0.5rem] [@media(max-height:500px)]:md:gap-x-6 [@media(max-height:500px)]:md:gap-y-2">
+        {/* Cover & Track Metadata (Col 1, Row 1 on md+; hidden on mobile lyrics tab) */}
         <div
-          className={`mx-auto flex w-full max-w-[340px] flex-1 flex-col justify-center md:max-w-[360px] md:flex-none ${
-            mobileView === "lyrics" ? "hidden md:flex" : "flex"
+          className={`mx-auto w-full max-w-[340px] md:col-start-1 md:row-start-1 md:max-w-[360px] ${
+            mobileView === "lyrics"
+              ? "hidden md:block"
+              : "flex flex-1 flex-col justify-center md:block md:flex-none"
           }`}
         >
           <CoverArt
             src={currentTrack.coverUrl}
             alt={currentTrack.title}
+            darkBackdrop
             rounded="rounded-2xl"
-            className={`mx-auto aspect-square w-[min(72vw,280px)] shadow-[0_28px_80px_rgba(0,0,0,0.65)] transition-transform duration-500 md:w-full ${
+            className={`mx-auto aspect-square w-[min(70vw,36dvh,260px)] shadow-[0_28px_80px_rgba(0,0,0,0.65)] transition-transform duration-500 md:w-[min(100%,40dvh,340px)] [@media(max-height:500px)]:w-[min(30dvh,120px)] [@media(max-height:500px)]:rounded-xl ${
               isPlaying ? "scale-100" : "scale-[0.94] opacity-90"
             }`}
           />
 
-          <div className="mt-6 flex items-start justify-between gap-3 md:mt-7">
-            <div className="min-w-0 flex-1 space-y-1">
-              <h2 className="truncate text-xl font-bold tracking-tight text-white md:text-2xl">
+          <div className="mt-4 flex items-start justify-between gap-3 md:mt-5 [@media(max-height:500px)]:mt-2">
+            <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
+              <h2 className="truncate text-lg font-bold tracking-tight text-white sm:text-xl md:text-2xl [@media(max-height:500px)]:text-base">
                 {currentTrack.title}
               </h2>
               <p className="truncate text-xs text-white/65 md:text-sm">
@@ -221,7 +233,7 @@ export function FullscreenPlayer() {
                     nextLiked: !likeData?.liked,
                   })
                 }
-                className={`mt-1 shrink-0 rounded-full p-2 transition-colors hover:bg-white/10 ${
+                className={`mt-0.5 shrink-0 rounded-full p-2 transition-colors hover:bg-white/10 ${
                   likeData?.liked ? "text-[#fa2d48]" : "text-white/70"
                 }`}
                 aria-label={likeData?.liked ? "取消喜欢" : "喜欢"}
@@ -230,102 +242,65 @@ export function FullscreenPlayer() {
               </button>
             )}
           </div>
-
-          <div className="mt-5 space-y-4 md:mt-6 md:space-y-5">
-            <PlaybackProgressBar compact onDarkBackdrop />
-
-            <div className="flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => audioEngine.cyclePlaybackMode()}
-                title={
-                  playbackMode === "repeat-one"
-                    ? "单曲循环"
-                    : playbackMode === "shuffle"
-                      ? "随机播放"
-                      : "列表循环"
-                }
-                className="rounded-full p-2 text-white/65 transition-colors hover:bg-white/10 hover:text-white"
-                aria-label="切换播放模式"
-              >
-                {playbackMode === "repeat-one" ? (
-                  <Repeat1 className="h-4 w-4 text-white" />
-                ) : playbackMode === "shuffle" ? (
-                  <Shuffle className="h-4 w-4 text-white" />
-                ) : (
-                  <Repeat className="h-4 w-4" />
-                )}
-              </button>
-
-              <div className="flex items-center gap-5">
-                <button
-                  type="button"
-                  onClick={() => void audioEngine.playPrevious()}
-                  className="rounded-full p-2.5 text-white/85 transition-colors hover:bg-white/10"
-                  aria-label="上一首"
-                >
-                  <SkipBack className="h-5 w-5 fill-current" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void audioEngine.togglePlay()}
-                  className="flex h-13 w-13 items-center justify-center rounded-full bg-white text-[#111113] shadow-xl transition-transform hover:scale-105 active:scale-95"
-                  aria-label={isPlaying ? "暂停" : "播放"}
-                >
-                  {isPlaying ? (
-                    <Pause className="h-5 w-5 fill-current" />
-                  ) : (
-                    <Play className="ml-0.5 h-5 w-5 fill-current" />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void audioEngine.playNext()}
-                  className="rounded-full p-2.5 text-white/85 transition-colors hover:bg-white/10"
-                  aria-label="下一首"
-                >
-                  <SkipForward className="h-5 w-5 fill-current" />
-                </button>
-              </div>
-
-              <button
-                type="button"
-                onClick={cycleQuality}
-                className="rounded border border-white/25 px-1.5 py-0.5 text-[10px] font-semibold text-white/80 hover:border-white/50 hover:text-white"
-                title="点击切换音质"
-              >
-                {getQualityLabel(activeQuality)}
-              </button>
-            </div>
-          </div>
         </div>
 
-        {/* Lyrics Column (Always visible on desktop; fills height when mobileView === "lyrics" on mobile) */}
+        {/* Lyrics Column (Col 2, spanning Rows 1-2 on md+; fills mobile height when mobileView === "lyrics") */}
         <div
-          className={`min-h-0 flex-1 flex-col overflow-hidden md:flex md:h-[66vh] md:flex-none ${
-            mobileView === "lyrics" ? "flex" : "hidden md:flex"
+          className={`min-h-0 overflow-hidden md:col-start-2 md:row-start-1 md:row-span-2 md:h-[min(66dvh,calc(100dvh-96px))] ${
+            mobileView === "lyrics" ? "flex flex-1 flex-col" : "hidden md:block"
           }`}
         >
-          <div className="min-h-0 flex-1 overflow-hidden">
-            <LyricScroller
-              lines={lyricData?.lyrics.lines ?? []}
-              loading={isLoading}
-              error={
-                lyricIsError ? (lyricError instanceof Error ? lyricError.message : "歌词加载失败") : null
-              }
-              onRetry={() => void refetchLyrics()}
-              large
-            />
-          </div>
+          <LyricScroller
+            lines={lyricData?.lyrics.lines ?? []}
+            loading={lyricsLoading}
+            error={lyricIsError ? (lyricError instanceof Error ? lyricError.message : "歌词加载失败") : null}
+            onRetry={() => void refetchLyrics()}
+            large
+          />
+        </div>
 
-          {/* Mobile compact bottom transport while viewing lyrics */}
-          <div className="mt-3 space-y-3 border-t border-white/10 pt-3 md:hidden">
-            <PlaybackProgressBar compact onDarkBackdrop />
-            <div className="flex items-center justify-center gap-6">
+        {/* Single Mounted Transport Controls (Col 1, Row 2 on md+; pinned bottom on mobile for both views) */}
+        <div className="mx-auto mt-3 w-full max-w-[340px] shrink-0 space-y-3 md:col-start-1 md:row-start-2 md:mt-0 md:max-w-[360px] md:space-y-4 [@media(max-height:500px)]:mt-1.5 [@media(max-height:500px)]:space-y-1.5">
+          {playerError && (
+            <div
+              role="alert"
+              className="flex items-center gap-2 rounded-lg border border-red-400/30 bg-red-500/15 px-3 py-1.5 text-xs text-red-200"
+            >
+              <AlertCircle className="h-3.5 w-3.5 shrink-0 text-red-300" />
+              <span className="truncate">{playerError}</span>
+            </div>
+          )}
+
+          <PlaybackProgressBar compact onDarkBackdrop />
+
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => audioEngine.cyclePlaybackMode()}
+              title={
+                playbackMode === "repeat-one"
+                  ? "单曲循环"
+                  : playbackMode === "shuffle"
+                    ? "随机播放"
+                    : "列表循环"
+              }
+              className="rounded-full p-2 text-white/65 transition-colors hover:bg-white/10 hover:text-white"
+              aria-label="切换播放模式"
+            >
+              {playbackMode === "repeat-one" ? (
+                <Repeat1 className="h-4 w-4 text-white" />
+              ) : playbackMode === "shuffle" ? (
+                <Shuffle className="h-4 w-4 text-white" />
+              ) : (
+                <Repeat className="h-4 w-4" />
+              )}
+            </button>
+
+            <div className="flex items-center gap-4 sm:gap-5">
               <button
                 type="button"
                 onClick={() => void audioEngine.playPrevious()}
-                className="rounded-full p-2 text-white/85"
+                className="rounded-full p-2 text-white/85 transition-colors hover:bg-white/10 sm:p-2.5"
                 aria-label="上一首"
               >
                 <SkipBack className="h-5 w-5 fill-current" />
@@ -333,23 +308,68 @@ export function FullscreenPlayer() {
               <button
                 type="button"
                 onClick={() => void audioEngine.togglePlay()}
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#111113]"
+                className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-[#111113] shadow-xl transition-transform hover:scale-105 active:scale-95 md:h-13 md:w-13 [@media(max-height:500px)]:h-10 [@media(max-height:500px)]:w-10"
                 aria-label={isPlaying ? "暂停" : "播放"}
               >
-                {isPlaying ? (
-                  <Pause className="h-4 w-4 fill-current" />
+                {isLoading ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : isPlaying ? (
+                  <Pause className="h-5 w-5 fill-current" />
                 ) : (
-                  <Play className="ml-0.5 h-4 w-4 fill-current" />
+                  <Play className="ml-0.5 h-5 w-5 fill-current" />
                 )}
               </button>
               <button
                 type="button"
                 onClick={() => void audioEngine.playNext()}
-                className="rounded-full p-2 text-white/85"
+                className="rounded-full p-2 text-white/85 transition-colors hover:bg-white/10 sm:p-2.5"
                 aria-label="下一首"
               >
                 <SkipForward className="h-5 w-5 fill-current" />
               </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={cycleQuality}
+              className="rounded border border-white/25 px-1.5 py-0.5 text-[10px] font-semibold text-white/80 hover:border-white/50 hover:text-white"
+              title="点击切换音质"
+            >
+              {getQualityLabel(activeQuality)}
+            </button>
+          </div>
+
+          {/* Desktop Volume Control inside Fullscreen Player */}
+          <div className="hidden items-center gap-2.5 pt-1 md:flex [@media(max-height:500px)]:hidden">
+            <button
+              type="button"
+              onClick={() => audioEngine.toggleMute()}
+              className="rounded-full p-1.5 text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+              aria-label={muted || effectiveVolume === 0 ? "取消静音" : "静音切换"}
+            >
+              {muted || effectiveVolume === 0 ? (
+                <VolumeX className="h-4 w-4" />
+              ) : (
+                <Volume2 className="h-4 w-4" />
+              )}
+            </button>
+            <div className="group relative flex h-5 flex-1 items-center">
+              <div className="relative h-[4px] w-full overflow-hidden rounded-full bg-white/20">
+                <div
+                  className="absolute inset-y-0 left-0 rounded-full bg-white/75 transition-colors group-hover:bg-white"
+                  style={{ width: `${Math.round(effectiveVolume * 100)}%` }}
+                />
+              </div>
+              <input
+                type="range"
+                aria-label="全屏音量"
+                min={0}
+                max={1}
+                step={0.02}
+                value={effectiveVolume}
+                onChange={(e) => audioEngine.setVolume(Number(e.target.value))}
+                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              />
             </div>
           </div>
         </div>

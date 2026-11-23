@@ -10,7 +10,6 @@ const EnvSchema = z.object({
     .string()
     .default("http://localhost:5173,http://127.0.0.1:5173,http://localhost:3010,http://127.0.0.1:3010"),
   TRACKVAULT_MASTER_KEY: z.string().trim().optional(),
-  TRACKVAULT_LIBRARY_ROOT: z.string().trim().optional(),
   NETEASE_REAL_IP: z.string().trim().optional(),
   SESSION_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(14),
   COOKIE_SECURE: z.enum(["true", "false", "auto"]).default("auto"),
@@ -41,7 +40,6 @@ export interface ServerConfig {
   tmpDownloadsDir: string;
   allowedOrigins: string[];
   masterKey?: string;
-  libraryRoot?: string;
   neteaseRealIp?: string;
   sessionTtlMs: number;
   cookieSecure: "true" | "false" | "auto";
@@ -80,7 +78,6 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     tmpDownloadsDir: path.join(dataDir, "tmp-downloads"),
     allowedOrigins,
     masterKey: parsed.TRACKVAULT_MASTER_KEY || undefined,
-    libraryRoot: parsed.TRACKVAULT_LIBRARY_ROOT ? path.resolve(parsed.TRACKVAULT_LIBRARY_ROOT) : undefined,
     neteaseRealIp: parsed.NETEASE_REAL_IP || undefined,
     sessionTtlMs: parsed.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000,
     cookieSecure: parsed.COOKIE_SECURE,

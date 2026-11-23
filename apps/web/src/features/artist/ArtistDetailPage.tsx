@@ -1,11 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ChevronDown, ChevronUp, Play } from "lucide-react";
+import { ArrowLeft, Play } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { type MusicPlatform, sanitizeCssUrl } from "#shared";
 import { SongTable } from "../../entities/song/SongTable.js";
 import { api } from "../../shared/api/endpoints.js";
-import { CoverArt, EmptyState, PlatformBadge, SegmentedTabs } from "../../shared/ui/primitives.js";
+import {
+  CoverArt,
+  EmptyState,
+  ExpandableText,
+  PlatformBadge,
+  SegmentedTabs,
+} from "../../shared/ui/primitives.js";
 import { audioEngine } from "../player/engine/audio-engine.js";
 
 export function ArtistDetailPage() {
@@ -14,7 +20,6 @@ export function ArtistDetailPage() {
   const platform: MusicPlatform = rawPlatform === "qq" ? "qq" : "netease";
 
   const [tab, setTab] = useState<"songs" | "albums">("songs");
-  const [bioExpanded, setBioExpanded] = useState(false);
 
   const artistQuery = useQuery({
     queryKey: ["artist-detail", platform, id],
@@ -107,32 +112,13 @@ export function ArtistDetailPage() {
               </div>
 
               {artist.briefDesc && (
-                <div className="max-w-2xl">
-                  <p
-                    className={`text-xs leading-relaxed text-[var(--tv-text-muted)] ${
-                      bioExpanded ? "" : "line-clamp-2"
-                    }`}
-                  >
-                    {artist.briefDesc}
-                  </p>
-                  {artist.briefDesc.length > 90 && (
-                    <button
-                      type="button"
-                      onClick={() => setBioExpanded((v) => !v)}
-                      className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-[var(--tv-text-subtle)] hover:text-[var(--tv-text)]"
-                    >
-                      {bioExpanded ? (
-                        <>
-                          收起简介 <ChevronUp className="h-3 w-3" />
-                        </>
-                      ) : (
-                        <>
-                          展开简介 <ChevronDown className="h-3 w-3" />
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
+                <ExpandableText
+                  text={artist.briefDesc}
+                  expandLabel="展开简介"
+                  collapseLabel="收起简介"
+                  className="max-w-2xl"
+                  textClassName="text-xs leading-relaxed text-[var(--tv-text-muted)]"
+                />
               )}
 
               <div className="flex flex-wrap items-center gap-3 pt-2">
@@ -172,7 +158,7 @@ export function ArtistDetailPage() {
                   key={`${alb.platform}:${alb.id}`}
                   type="button"
                   onClick={() => navigate(`/album/${alb.platform}/${encodeURIComponent(alb.id)}`)}
-                  className="group text-left focus:outline-none"
+                  className="group rounded-xl text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tv-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--tv-bg)]"
                 >
                   <div className="relative aspect-square w-full overflow-hidden rounded-xl bg-[var(--tv-surface)] shadow-md transition-shadow duration-300 group-hover:shadow-xl">
                     <CoverArt
