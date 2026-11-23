@@ -403,7 +403,7 @@ export function PlayerBar() {
             <ListMusic className="h-4 w-4" />
           </button>
 
-          <div className="ml-2 hidden items-center gap-1.5 lg:flex">
+          <div className="ml-2 flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => audioEngine.setVolume(volume > 0 ? 0 : 0.85)}
@@ -412,16 +412,28 @@ export function PlayerBar() {
             >
               {volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
             </button>
-            <input
-              type="range"
-              aria-label="音量"
-              min={0}
-              max={1}
-              step={0.02}
-              value={volume}
-              onChange={(e) => audioEngine.setVolume(Number(e.target.value))}
-              className="tv-range w-20"
-            />
+            <div className="group relative flex h-5 w-20 items-center lg:w-24">
+              <div className="relative h-[4px] w-full overflow-hidden rounded-full bg-[var(--tv-border-strong)]">
+                <div
+                  className="absolute inset-y-0 left-0 rounded-full bg-[var(--tv-text-muted)] transition-colors group-hover:bg-[var(--tv-accent)]"
+                  style={{ width: `${Math.round(volume * 100)}%` }}
+                />
+              </div>
+              <div
+                className="pointer-events-none absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--tv-text)] opacity-0 shadow-sm transition-opacity duration-150 group-hover:opacity-100"
+                style={{ left: `${Math.round(volume * 100)}%` }}
+              />
+              <input
+                type="range"
+                aria-label="音量"
+                min={0}
+                max={1}
+                step={0.02}
+                value={volume}
+                onChange={(e) => audioEngine.setVolume(Number(e.target.value))}
+                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              />
+            </div>
           </div>
         </div>
       </div>

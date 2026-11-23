@@ -132,35 +132,6 @@ select:not(:disabled) {
   background: var(--tv-text-subtle);
 }
 
-/* Sleek minimalist volume range slider */
-.tv-range {
-  -webkit-appearance: none;
-  appearance: none;
-  background: transparent;
-  cursor: pointer;
-}
-
-.tv-range::-webkit-slider-runnable-track {
-  height: 3px;
-  border-radius: 999px;
-  background: var(--tv-border-strong);
-}
-
-.tv-range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 11px;
-  height: 11px;
-  border-radius: 999px;
-  background: var(--tv-text);
-  margin-top: -4px;
-  transition: transform 120ms ease;
-}
-
-.tv-range:hover::-webkit-slider-thumb {
-  transform: scale(1.18);
-}
-
 /* Active track 3-bar equalizer animation (Spotify / Feishin style) */
 @keyframes tv-eq-bounce {
   0%,
