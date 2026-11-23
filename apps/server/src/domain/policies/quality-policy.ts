@@ -38,6 +38,14 @@ export function isQualityDowngraded(
   actual: { bitrate: number | null; format: string; level: QualityLevel },
 ): boolean {
   if (requestedLevel === "standard") return false;
+  const requestedRank = QUALITY_RANK[requestedLevel] ?? 1;
+  const actualRank = QUALITY_RANK[actual.level] ?? 1;
+
+  // Priority 1: compare actual resolved tier rank directly (fixes Hi-Res -> lossless FLAC reporting downgraded:false)
+  if (actualRank < requestedRank) {
+    return true;
+  }
+
   const meta = QUALITY_META[requestedLevel];
   const ext = actual.format.replace(/^\./, "").toLowerCase();
   const isLosslessExt = ext === "flac" || ext === "wav" || ext === "ape";
@@ -48,7 +56,6 @@ export function isQualityDowngraded(
     return true;
   }
 
-  if (QUALITY_RANK[actual.level] >= QUALITY_RANK[requestedLevel]) return false;
   if (actual.bitrate !== null && actual.bitrate > 0 && actual.bitrate < meta.minBitrate) {
     return true;
   }

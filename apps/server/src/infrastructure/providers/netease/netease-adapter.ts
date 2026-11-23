@@ -8,6 +8,7 @@ import {
   type ArtistSummary,
   type ChartDetail,
   type ChartSummary,
+  type CloudTracksPage,
   type EntitySearchType,
   type PlaylistSort,
   type PlaylistSummary,
@@ -20,6 +21,7 @@ import {
   type SongCommentsPage,
   type SongLyrics,
   normalizeCoverUrl,
+  normalizeQualityLevel,
 } from "#shared";
 import { AppError } from "../../../domain/errors.js";
 import {
@@ -87,9 +89,12 @@ const require = createRequire(import.meta.url);
 const neteaseApi = require("NeteaseCloudMusicApi") as NeteaseApiModule;
 
 const MAX_PLAYLIST_TRACKS_FETCH = 2000;
+const MAX_PLAYLIST_SEARCH_TRACKS = 10_000;
 const SONG_DETAIL_BATCH_SIZE = 500;
 const SONG_DETAIL_CONCURRENCY = 4;
 const MAX_CLOUD_PAGES = 20;
+const QR_SESSION_TTL_MS = 5 * 60 * 1000;
+const MAX_QR_SESSIONS = 100;
 
 interface CachedNeteasePlaylistDetail {
   summary: PlaylistSummary;
@@ -109,13 +114,19 @@ const SET_COOKIE_ATTRS = new Set([
 ]);
 
 /**
- * Strips Set-Cookie metadata attributes (Max-Age, Expires, Path, HttpOnly, etc.)
- * returned by login_qr_check and ensures a consistent mobile client identity so
+ * Strips leading "Cookie:" header prefixes, line breaks, and Set-Cookie metadata attributes
+ * (Max-Age, Expires, Path, HttpOnly, etc.) and ensures a consistent mobile client identity so
  * NeteaseCloudMusicApi v4.34+ eapi requests do not mismatch os=pc with iPhone UA (-460).
  */
 export function normalizeNeteaseCookie(rawCookie: string, options?: { ensureClientOs?: boolean }): string {
+  const cleanedRaw = rawCookie
+    .split(/\r?\n+/)
+    .map((line) => line.trim().replace(/^cookie\s*:\s*/i, ""))
+    .filter(Boolean)
+    .join("; ");
+
   const entries = new Map<string, string>();
-  for (const part of rawCookie.split(";")) {
+  for (const part of cleanedRaw.split(";")) {
     const trimmed = part.trim();
     if (!trimmed) continue;
     const eq = trimmed.indexOf("=");
@@ -199,7 +210,12 @@ function formatPublishDate(ms: number | undefined): string | undefined {
   if (!ms || !Number.isFinite(ms) || ms <= 0) return undefined;
   const d = new Date(ms);
   if (Number.isNaN(d.getTime())) return undefined;
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
 }
 
 export class NeteaseAdapter implements MusicProviderAdapter {
@@ -217,6 +233,9 @@ export class NeteaseAdapter implements MusicProviderAdapter {
   };
 
   readonly #realIp?: string;
+  readonly #timeoutMs?: number;
+  readonly #api: NeteaseApiModule;
+  readonly #qrSessions = new Map<string, { scopeKey: string; createdAt: number }>();
   readonly #discoverCache = new ScopedLruCache<Song[]>({ maxEntries: 50, defaultTtlMs: 5 * 60 * 1000 });
   readonly #recommendedPlaylistsCache = new ScopedLruCache<PlaylistSummary[]>({
     maxEntries: 20,
@@ -242,8 +261,68 @@ export class NeteaseAdapter implements MusicProviderAdapter {
   readonly #likeSetCache = new ScopedLruCache<Set<string>>({ maxEntries: 50, defaultTtlMs: 2 * 60 * 1000 });
   readonly #uidCache = new ScopedLruCache<string>({ maxEntries: 50, defaultTtlMs: 10 * 60 * 1000 });
 
-  constructor(options?: { realIp?: string }) {
+  constructor(options?: { realIp?: string; timeoutMs?: number; apiOverride?: Partial<NeteaseApiModule> }) {
     this.#realIp = options?.realIp;
+    this.#timeoutMs = options?.timeoutMs;
+    this.#api = options?.apiOverride ? { ...neteaseApi, ...options.apiOverride } : neteaseApi;
+  }
+
+  #cleanupQrSessions(): void {
+    const now = Date.now();
+    for (const [key, session] of this.#qrSessions.entries()) {
+      if (now - session.createdAt > QR_SESSION_TTL_MS) {
+        this.#qrSessions.delete(key);
+      }
+    }
+    while (this.#qrSessions.size >= MAX_QR_SESSIONS) {
+      const oldest = this.#qrSessions.keys().next().value;
+      if (!oldest) break;
+      this.#qrSessions.delete(oldest);
+    }
+  }
+
+  #call<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!signal) return fn();
+    if (signal.aborted) {
+      return Promise.reject(new AppError("UPSTREAM_TIMEOUT", "上游请求已取消。"));
+    }
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = () => {
+        reject(new AppError("UPSTREAM_TIMEOUT", "上游请求已取消。"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      fn().then(
+        (value) => {
+          signal.removeEventListener("abort", onAbort);
+          resolve(value);
+        },
+        (err) => {
+          signal.removeEventListener("abort", onAbort);
+          reject(err);
+        },
+      );
+    });
+  }
+
+  #assertBusinessSuccess(body: Record<string, unknown>, fallback: string): void {
+    const outerCode = body.code !== undefined && body.code !== null ? Number(body.code) : 200;
+    const nested = body.body as { code?: unknown; message?: unknown; msg?: unknown } | undefined;
+    const innerCode = nested?.code !== undefined && nested.code !== null ? Number(nested.code) : 200;
+
+    const failedCode = outerCode !== 200 ? outerCode : innerCode !== 200 ? innerCode : 200;
+    if (failedCode === 200) return;
+
+    const msg =
+      (typeof nested?.message === "string" && nested.message.trim()) ||
+      (typeof nested?.msg === "string" && nested.msg.trim()) ||
+      (typeof body.message === "string" && body.message.trim()) ||
+      (typeof body.msg === "string" && body.msg.trim()) ||
+      `${fallback} (code ${failedCode})`;
+
+    if (failedCode === 301 || failedCode === 401) {
+      throw new AppError("CREDENTIAL_INVALID", msg);
+    }
+    throw new AppError("UPSTREAM_ERROR", msg);
   }
 
   invalidateScope(scopeKey: string): void {
@@ -268,6 +347,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       ...extra,
       ...(normalizedCookie ? { cookie: normalizedCookie } : {}),
       ...(this.#realIp ? { realIP: this.#realIp } : {}),
+      ...(this.#timeoutMs && this.#timeoutMs > 0 ? { timeout: this.#timeoutMs } : {}),
     };
   }
 
@@ -310,7 +390,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     }
 
     try {
-      const response = await neteaseApi.login_status(this.#baseParams(undefined, { cookie: trimmed }));
+      const response = await this.#api.login_status(this.#baseParams(undefined, { cookie: trimmed }));
       const body = response.body as {
         data?: {
           account?: { id?: number; vipType?: number } | null;
@@ -336,9 +416,9 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       let vipExpireAt: number | null = null;
 
       if (uid) {
-        const vipRes = await neteaseApi
+        const vipRes = await this.#api
           .vip_info_v2(this.#baseParams(undefined, { uid, cookie: trimmed }))
-          .catch(() => neteaseApi.vip_info(this.#baseParams(undefined, { uid, cookie: trimmed })))
+          .catch(() => this.#api.vip_info(this.#baseParams(undefined, { uid, cookie: trimmed })))
           .catch(() => null);
         if (vipRes?.body) {
           vipExpireAt = extractVipExpireAt(vipRes.body);
@@ -376,8 +456,12 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     const safeLimit = Math.min(50, Math.max(1, limit));
 
     try {
-      const response = await neteaseApi.cloudsearch(
-        this.#baseParams(auth, { keywords: keyword, type: 1, limit: safeLimit, offset: 0 }),
+      const response = await this.#call(
+        () =>
+          this.#api.cloudsearch(
+            this.#baseParams(auth, { keywords: keyword, type: 1, limit: safeLimit, offset: 0 }),
+          ),
+        auth.signal,
       );
       const result = response.body.result as { songs?: RawNeteaseSong[] } | undefined;
       const rawSongs = result?.songs ?? [];
@@ -391,9 +475,10 @@ export class NeteaseAdapter implements MusicProviderAdapter {
 
       const privilegeMap = new Map<string, RawNeteasePrivilege>();
       if (ids.length > 0) {
-        const detail = await neteaseApi
-          .song_detail(this.#baseParams(auth, { ids: ids.join(",") }))
-          .catch(() => null);
+        const detail = await this.#call(
+          () => this.#api.song_detail(this.#baseParams(auth, { ids: ids.join(",") })),
+          auth.signal,
+        ).catch(() => null);
         const privileges = (detail?.body.privileges as RawNeteasePrivilege[] | undefined) ?? [];
         for (const priv of privileges) {
           if (priv.id !== undefined) privilegeMap.set(String(priv.id), priv);
@@ -407,6 +492,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
         })
         .filter((song): song is Song => song !== null);
     } catch (error) {
+      if (error instanceof AppError) throw error;
       throw new AppError("UPSTREAM_ERROR", extractApiError(error, "网易云搜索失败"), { cause: error });
     }
   }
@@ -416,12 +502,18 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     if (cached) return cached;
 
     try {
-      const response = await neteaseApi.personalized_newsong(this.#baseParams(auth, { limit: 30 }));
+      const response = await this.#call(
+        () => this.#api.personalized_newsong(this.#baseParams(auth, { limit: 30 })),
+        auth.signal,
+      );
       const items = (response.body.result as Array<{ id?: number; song?: RawNeteaseSong }> | undefined) ?? [];
       const ids = items.map((item) => String(item.song?.id ?? item.id ?? "")).filter(Boolean);
       if (ids.length === 0) return [];
 
-      const detail = await neteaseApi.song_detail(this.#baseParams(auth, { ids: ids.join(",") }));
+      const detail = await this.#call(
+        () => this.#api.song_detail(this.#baseParams(auth, { ids: ids.join(",") })),
+        auth.signal,
+      );
       const rawSongs = (detail.body.songs as RawNeteaseSong[] | undefined) ?? [];
       const privileges = (detail.body.privileges as RawNeteasePrivilege[] | undefined) ?? [];
       const privMap = new Map(privileges.filter((p) => p.id !== undefined).map((p) => [String(p.id), p]));
@@ -437,6 +529,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       this.#discoverCache.set(auth.scopeKey, "discover", songs);
       return songs;
     } catch (error) {
+      if (error instanceof AppError) throw error;
       throw new AppError("UPSTREAM_ERROR", extractApiError(error, "获取网易云发现音乐失败"), {
         cause: error,
       });
@@ -446,14 +539,22 @@ export class NeteaseAdapter implements MusicProviderAdapter {
   async getDailyRecommendTracks(auth: ProviderAuthContext): Promise<Song[]> {
     this.#assertAuthed(auth);
     try {
-      const response = await neteaseApi.recommend_songs(this.#baseParams(auth));
-      const code = Number(response.body.code ?? 200);
-      if (code !== 200) {
-        throw new AppError("CREDENTIAL_INVALID", "网易云登录态已失效，无法获取每日推荐。");
-      }
-      const data = response.body.data as { dailySongs?: RawNeteaseSong[] } | undefined;
+      const response = await this.#call(() => this.#api.recommend_songs(this.#baseParams(auth)), auth.signal);
+      this.#assertBusinessSuccess(response.body, "获取每日推荐失败");
+      const data = response.body.data as
+        | { dailySongs?: RawNeteaseSong[]; privileges?: RawNeteasePrivilege[] }
+        | undefined;
+      const privileges =
+        data?.privileges ?? (response.body.privileges as RawNeteasePrivilege[] | undefined) ?? [];
+      const privMap = new Map(privileges.filter((p) => p.id !== undefined).map((p) => [String(p.id), p]));
+
       return (data?.dailySongs ?? [])
-        .map((song) => mapNeteaseSong(song))
+        .map((song) =>
+          mapNeteaseSong(song, {
+            privilege:
+              song.id !== undefined ? (privMap.get(String(song.id)) ?? song.privilege) : song.privilege,
+          }),
+        )
         .filter((song): song is Song => song !== null);
     } catch (error) {
       if (error instanceof AppError) throw error;
@@ -468,7 +569,10 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     if (cached) return cached;
 
     try {
-      const response = await neteaseApi.personalized(this.#baseParams(auth, { limit: safeLimit }));
+      const response = await this.#call(
+        () => this.#api.personalized(this.#baseParams(auth, { limit: safeLimit })),
+        auth.signal,
+      );
       const raw =
         (response.body.result as
           | Array<{
@@ -504,7 +608,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     if (cached) return cached;
 
     try {
-      const response = await neteaseApi.toplist(this.#baseParams(auth));
+      const response = await this.#call(() => this.#api.toplist(this.#baseParams(auth)), auth.signal);
       const raw =
         (response.body.list as
           | Array<{
@@ -531,6 +635,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       this.#chartsCache.set("public", "charts", charts);
       return charts;
     } catch (error) {
+      if (error instanceof AppError) throw error;
       throw new AppError("UPSTREAM_ERROR", extractApiError(error, "获取网易云排行榜失败"), { cause: error });
     }
   }
@@ -552,10 +657,15 @@ export class NeteaseAdapter implements MusicProviderAdapter {
   async getPersonalFm(auth: ProviderAuthContext): Promise<Song[]> {
     this.#assertAuthed(auth);
     try {
-      const response = await neteaseApi.personal_fm(this.#baseParams(auth, { timestamp: Date.now() }));
+      const response = await this.#call(
+        () => this.#api.personal_fm(this.#baseParams(auth, { timestamp: Date.now() })),
+        auth.signal,
+      );
+      this.#assertBusinessSuccess(response.body, "获取私人 FM 失败");
       const raw = (response.body.data as RawNeteaseSong[] | undefined) ?? [];
       return raw.map((song) => mapNeteaseSong(song)).filter((song): song is Song => song !== null);
     } catch (error) {
+      if (error instanceof AppError) throw error;
       throw new AppError("UPSTREAM_ERROR", extractApiError(error, "获取私人 FM 失败"), { cause: error });
     }
   }
@@ -571,9 +681,12 @@ export class NeteaseAdapter implements MusicProviderAdapter {
 
     try {
       const [artistRes, albumsRes, detailRes] = await Promise.allSettled([
-        neteaseApi.artists(this.#baseParams(auth, { id: cleanId })),
-        neteaseApi.artist_album(this.#baseParams(auth, { id: cleanId, limit: 30, offset: 0 })),
-        neteaseApi.artist_detail(this.#baseParams(auth, { id: cleanId })),
+        this.#call(() => this.#api.artists(this.#baseParams(auth, { id: cleanId })), auth.signal),
+        this.#call(
+          () => this.#api.artist_album(this.#baseParams(auth, { id: cleanId, limit: 30, offset: 0 })),
+          auth.signal,
+        ),
+        this.#call(() => this.#api.artist_detail(this.#baseParams(auth, { id: cleanId })), auth.signal),
       ]);
 
       if (artistRes.status === "rejected") {
@@ -676,7 +789,10 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     if (cached) return cached;
 
     try {
-      const response = await neteaseApi.album(this.#baseParams(auth, { id: cleanId }));
+      const response = await this.#call(
+        () => this.#api.album(this.#baseParams(auth, { id: cleanId })),
+        auth.signal,
+      );
       const body = response.body as {
         album?: {
           id?: number | string;
@@ -691,6 +807,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
           artists?: Array<{ id?: number | string; name?: string }>;
         };
         songs?: RawNeteaseSong[];
+        privileges?: RawNeteasePrivilege[];
       };
 
       const rawAlbum = body.album;
@@ -698,8 +815,35 @@ export class NeteaseAdapter implements MusicProviderAdapter {
         throw new AppError("NOT_FOUND", "未找到该专辑信息。");
       }
 
-      const songs = (body.songs ?? [])
-        .map((song) => mapNeteaseSong(song))
+      const rawSongs = body.songs ?? [];
+      const privMap = new Map<string, RawNeteasePrivilege>();
+      for (const priv of body.privileges ?? []) {
+        if (priv.id !== undefined) privMap.set(String(priv.id), priv);
+      }
+
+      // Enrich missing per-account privileges (C040) when album endpoint omits top-level/embedded privileges
+      const missingPrivIds = rawSongs
+        .filter((s) => s.id !== undefined && !privMap.has(String(s.id)) && !s.privilege)
+        .map((s) => String(s.id));
+      if (missingPrivIds.length > 0) {
+        const detailRes = await this.#call(
+          () =>
+            this.#api.song_detail(this.#baseParams(auth, { ids: missingPrivIds.slice(0, 200).join(",") })),
+          auth.signal,
+        ).catch(() => null);
+        const fetchedPrivs = (detailRes?.body.privileges as RawNeteasePrivilege[] | undefined) ?? [];
+        for (const priv of fetchedPrivs) {
+          if (priv.id !== undefined) privMap.set(String(priv.id), priv);
+        }
+      }
+
+      const songs = rawSongs
+        .map((song) =>
+          mapNeteaseSong(song, {
+            privilege:
+              song.id !== undefined ? (privMap.get(String(song.id)) ?? song.privilege) : song.privilege,
+          }),
+        )
         .filter((song): song is Song => song !== null);
 
       const rawArtists = rawAlbum.artists?.length
@@ -749,8 +893,12 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     const typeCode = type === "artist" ? 100 : type === "album" ? 10 : 1000;
 
     try {
-      const response = await neteaseApi.cloudsearch(
-        this.#baseParams(auth, { keywords: keyword, type: typeCode, limit: safeLimit, offset: 0 }),
+      const response = await this.#call(
+        () =>
+          this.#api.cloudsearch(
+            this.#baseParams(auth, { keywords: keyword, type: typeCode, limit: safeLimit, offset: 0 }),
+          ),
+        auth.signal,
       );
       const result = response.body.result as Record<string, unknown> | undefined;
 
@@ -819,55 +967,100 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     }
   }
 
-  async getCloudTracks(auth: ProviderAuthContext): Promise<Song[]> {
+  async getCloudTracksPage(
+    auth: ProviderAuthContext,
+    options?: { offset?: number; limit?: number },
+  ): Promise<CloudTracksPage> {
     this.#assertAuthed(auth);
-    const allSongs: Song[] = [];
-    const pageSize = 100;
+    const safeOffset = Math.max(0, Math.floor(options?.offset ?? 0) || 0);
+    const safeLimit = Math.min(200, Math.max(1, Math.floor(options?.limit ?? 100) || 100));
 
     try {
-      for (let page = 0; page < MAX_CLOUD_PAGES; page += 1) {
-        const response = await neteaseApi.user_cloud(
-          this.#baseParams(auth, { limit: pageSize, offset: page * pageSize }),
-        );
-        const rows =
-          (response.body.data as
-            | Array<{
-                simpleSong?: RawNeteaseSong;
-                songId?: number;
-                songName?: string;
-                artist?: string;
-                album?: string;
-              }>
-            | undefined) ?? [];
-        for (const row of rows) {
-          const base: RawNeteaseSong = row.simpleSong ?? {
-            id: row.songId,
-            name: row.songName,
-            ar: row.artist ? [{ name: row.artist }] : [],
-            al: { name: row.album },
-          };
-          const mapped = mapNeteaseSong(base, { isCloud: true });
-          if (mapped) allSongs.push(mapped);
-        }
-        if (!response.body.hasMore || rows.length < pageSize) break;
+      const response = await this.#call(
+        () => this.#api.user_cloud(this.#baseParams(auth, { limit: safeLimit, offset: safeOffset })),
+        auth.signal,
+      );
+      this.#assertBusinessSuccess(response.body, "获取网易云云盘歌曲失败");
+
+      const rows =
+        (response.body.data as
+          | Array<{
+              simpleSong?: RawNeteaseSong;
+              songId?: number;
+              songName?: string;
+              artist?: string;
+              album?: string;
+            }>
+          | undefined) ?? [];
+
+      const songs: Song[] = [];
+      for (const row of rows) {
+        const base: RawNeteaseSong = row.simpleSong ?? {
+          id: row.songId,
+          name: row.songName,
+          ar: row.artist ? [{ name: row.artist }] : [],
+          al: { name: row.album },
+        };
+        const mapped = mapNeteaseSong(base, { isCloud: true });
+        if (mapped) songs.push(mapped);
       }
-      return allSongs;
+
+      // A10 + B03: Drive pagination using upstream `count` rather than unreliable/missing `hasMore`.
+      const rawCount =
+        response.body.count !== undefined && response.body.count !== null
+          ? Number(response.body.count)
+          : Number.NaN;
+      const hasValidCount = Number.isFinite(rawCount) && rawCount >= 0;
+      const total = hasValidCount ? Math.max(rawCount, safeOffset + songs.length) : safeOffset + songs.length;
+      const hasMore =
+        rows.length === 0
+          ? false
+          : hasValidCount
+            ? safeOffset + rows.length < rawCount
+            : Boolean(response.body.hasMore) || rows.length >= safeLimit;
+
+      return {
+        songs,
+        total,
+        offset: safeOffset,
+        limit: safeLimit,
+        hasMore,
+      };
     } catch (error) {
+      if (error instanceof AppError) throw error;
       throw new AppError("UPSTREAM_ERROR", extractApiError(error, "获取网易云云盘歌曲失败"), {
         cause: error,
       });
     }
   }
 
+  async getCloudTracks(auth: ProviderAuthContext): Promise<Song[]> {
+    this.#assertAuthed(auth);
+    const allSongs: Song[] = [];
+    const pageSize = 100;
+
+    for (let page = 0; page < MAX_CLOUD_PAGES; page += 1) {
+      const result = await this.getCloudTracksPage(auth, { offset: page * pageSize, limit: pageSize });
+      allSongs.push(...result.songs);
+      if (!result.hasMore || result.songs.length === 0) break;
+    }
+    return allSongs;
+  }
+
   async getUserPlaylists(auth: ProviderAuthContext): Promise<PlaylistSummary[]> {
     const uid = await this.#resolveUid(auth);
     try {
-      const response = await neteaseApi.user_playlist(this.#baseParams(auth, { uid, limit: 200, offset: 0 }));
+      const response = await this.#call(
+        () => this.#api.user_playlist(this.#baseParams(auth, { uid, limit: 200, offset: 0 })),
+        auth.signal,
+      );
+      this.#assertBusinessSuccess(response.body, "获取网易云歌单列表失败");
       const raw = (response.body.playlist as RawNeteasePlaylist[] | undefined) ?? [];
       return raw
         .map((item) => mapNeteasePlaylist(item, uid))
         .filter((item): item is PlaylistSummary => item !== null);
     } catch (error) {
+      if (error instanceof AppError) throw error;
       throw new AppError("UPSTREAM_ERROR", extractApiError(error, "获取网易云歌单列表失败"), {
         cause: error,
       });
@@ -883,7 +1076,11 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     if (cached) return cached;
 
     try {
-      const response = await neteaseApi.playlist_detail(this.#baseParams(auth, { id: playlistId }));
+      const response = await this.#call(
+        () => this.#api.playlist_detail(this.#baseParams(auth, { id: playlistId })),
+        auth.signal,
+      );
+      this.#assertBusinessSuccess(response.body, "获取网易云歌单详情失败");
       const rawPlaylist = response.body.playlist as
         | (RawNeteasePlaylist & {
             tracks?: RawNeteaseSong[];
@@ -895,7 +1092,10 @@ export class NeteaseAdapter implements MusicProviderAdapter {
         throw new AppError("NOT_FOUND", "未找到该网易云歌单或无访问权限。");
       }
 
-      const currentUid = auth.accountUid?.trim() || this.#uidCache.get(auth.scopeKey, "uid") || undefined;
+      const currentUid =
+        auth.accountUid?.trim() ||
+        (auth.cookie ? this.#uidCache.get(auth.scopeKey, this.#cookieCacheKey(auth.cookie)) : undefined) ||
+        undefined;
       const summary = mapNeteasePlaylist(rawPlaylist, currentUid) ?? {
         id: playlistId,
         platform: "netease" as const,
@@ -952,7 +1152,12 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     for (let i = 0; i < batches.length; i += SONG_DETAIL_CONCURRENCY) {
       const slice = batches.slice(i, i + SONG_DETAIL_CONCURRENCY);
       const responses = await Promise.all(
-        slice.map((ids) => neteaseApi.song_detail(this.#baseParams(auth, { ids: ids.join(",") }))),
+        slice.map((ids) =>
+          this.#call(
+            () => this.#api.song_detail(this.#baseParams(auth, { ids: ids.join(",") })),
+            auth.signal,
+          ),
+        ),
       );
       for (const response of responses) {
         const rawSongs = (response.body.songs as RawNeteaseSong[] | undefined) ?? [];
@@ -981,6 +1186,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       await this.#hydrateTrackIds(targetIds, detail.songMap, auth);
       return targetIds.map((id) => detail.songMap.get(id)).filter((s): s is Song => Boolean(s));
     } catch (error) {
+      if (error instanceof AppError) throw error;
       throw new AppError("UPSTREAM_ERROR", extractApiError(error, "获取网易云歌单曲目失败"), {
         cause: error,
       });
@@ -1004,6 +1210,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       try {
         await this.#hydrateTrackIds(pageIds, detail.songMap, auth);
       } catch (error) {
+        if (error instanceof AppError) throw error;
         throw new AppError("UPSTREAM_ERROR", extractApiError(error, "获取网易云歌单曲目失败"), {
           cause: error,
         });
@@ -1021,9 +1228,21 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       };
     }
 
-    const allSongs = await this.getAllPlaylistTracks(playlistId, auth);
+    // A09: For search/sort, concurrently hydrate full playlist (up to 10,000 tracks) into cached detail.songMap
+    const targetIds = detail.trackIds.slice(0, MAX_PLAYLIST_SEARCH_TRACKS);
+    try {
+      await this.#hydrateTrackIds(targetIds, detail.songMap, auth);
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError("UPSTREAM_ERROR", extractApiError(error, "获取网易云歌单曲目失败"), {
+        cause: error,
+      });
+    }
+
+    const allSongs = targetIds.map((id) => detail.songMap.get(id)).filter((s): s is Song => Boolean(s));
     const filtered = sortAndFilterSongs(allSongs, query.keyword, query.sort);
     const pageSongs = filtered.slice(offset, offset + safeLimit);
+    const truncated = detail.trackIds.length > targetIds.length;
 
     return {
       playlist: detail.summary,
@@ -1032,6 +1251,8 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       page: safePage,
       limit: safeLimit,
       hasMore: offset + pageSongs.length < filtered.length,
+      truncated,
+      scannedTotal: allSongs.length,
     };
   }
 
@@ -1044,22 +1265,26 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     const uniqueIds = [...new Set(trackIds.map((id) => id.trim()).filter(Boolean))];
     if (uniqueIds.length === 0) return { addedCount: 0 };
 
-    const chunkSize = 50;
-    for (let i = 0; i < uniqueIds.length; i += chunkSize) {
-      const chunk = uniqueIds.slice(i, i + chunkSize);
-      const response = await neteaseApi.playlist_tracks(
-        this.#baseParams(auth, { op: "add", pid: playlistId, tracks: chunk.join(",") }),
-      );
-      const bodyStatus = Number(
-        (response.body.body as { code?: number } | undefined)?.code ?? response.body.code ?? 200,
-      );
-      if (bodyStatus !== 200) {
-        throw new AppError("UPSTREAM_ERROR", `添加歌曲到歌单失败 (code ${bodyStatus})`);
+    try {
+      const chunkSize = 50;
+      for (let i = 0; i < uniqueIds.length; i += chunkSize) {
+        const chunk = uniqueIds.slice(i, i + chunkSize);
+        const response = await this.#call(
+          () =>
+            this.#api.playlist_tracks(
+              this.#baseParams(auth, { op: "add", pid: playlistId, tracks: chunk.join(",") }),
+            ),
+          auth.signal,
+        );
+        this.#assertBusinessSuccess(response.body, "添加歌曲到歌单失败");
       }
-    }
 
-    this.#playlistDetailCache.invalidateScope(auth.scopeKey, `detail:${playlistId}`);
-    return { addedCount: uniqueIds.length };
+      this.#playlistDetailCache.invalidateScope(auth.scopeKey, `detail:${playlistId}`);
+      return { addedCount: uniqueIds.length };
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError("UPSTREAM_ERROR", extractApiError(error, "添加歌曲到歌单失败"), { cause: error });
+    }
   }
 
   async removeTracksFromPlaylist(
@@ -1071,11 +1296,26 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     const uniqueIds = [...new Set(trackIds.map((id) => id.trim()).filter(Boolean))];
     if (uniqueIds.length === 0) return { removedCount: 0 };
 
-    await neteaseApi.playlist_tracks(
-      this.#baseParams(auth, { op: "del", pid: playlistId, tracks: uniqueIds.join(",") }),
-    );
-    this.#playlistDetailCache.invalidateScope(auth.scopeKey, `detail:${playlistId}`);
-    return { removedCount: uniqueIds.length };
+    try {
+      const chunkSize = 50;
+      for (let i = 0; i < uniqueIds.length; i += chunkSize) {
+        const chunk = uniqueIds.slice(i, i + chunkSize);
+        const response = await this.#call(
+          () =>
+            this.#api.playlist_tracks(
+              this.#baseParams(auth, { op: "del", pid: playlistId, tracks: chunk.join(",") }),
+            ),
+          auth.signal,
+        );
+        this.#assertBusinessSuccess(response.body, "从歌单移除歌曲失败");
+      }
+
+      this.#playlistDetailCache.invalidateScope(auth.scopeKey, `detail:${playlistId}`);
+      return { removedCount: uniqueIds.length };
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError("UPSTREAM_ERROR", extractApiError(error, "从歌单移除歌曲失败"), { cause: error });
+    }
   }
 
   async createPlaylistWithTracks(
@@ -1089,21 +1329,30 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       throw new AppError("VALIDATION_ERROR", "请输入新歌单名称。");
     }
 
-    const createRes = await neteaseApi.playlist_create(this.#baseParams(auth, { name: playlistName }));
-    const createdId = String(
-      createRes.body.id ?? (createRes.body.playlist as { id?: number } | undefined)?.id ?? "",
-    );
-    if (!createdId) {
-      throw new AppError("UPSTREAM_ERROR", "创建网易云歌单失败，未返回歌单 ID。");
-    }
+    try {
+      const createRes = await this.#call(
+        () => this.#api.playlist_create(this.#baseParams(auth, { name: playlistName })),
+        auth.signal,
+      );
+      this.#assertBusinessSuccess(createRes.body, "创建网易云歌单失败");
+      const createdId = String(
+        createRes.body.id ?? (createRes.body.playlist as { id?: number } | undefined)?.id ?? "",
+      );
+      if (!createdId) {
+        throw new AppError("UPSTREAM_ERROR", "创建网易云歌单失败，未返回歌单 ID。");
+      }
 
-    const { addedCount } = await this.addTracksToPlaylist(createdId, trackIds, auth);
-    return {
-      playlistId: createdId,
-      playlistName,
-      playlistUrl: `https://music.163.com/#/playlist?id=${encodeURIComponent(createdId)}`,
-      addedCount,
-    };
+      const { addedCount } = await this.addTracksToPlaylist(createdId, trackIds, auth);
+      return {
+        playlistId: createdId,
+        playlistName,
+        playlistUrl: `https://music.163.com/#/playlist?id=${encodeURIComponent(createdId)}`,
+        addedCount,
+      };
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError("UPSTREAM_ERROR", extractApiError(error, "创建网易云歌单失败"), { cause: error });
+    }
   }
 
   async getLyrics(
@@ -1115,8 +1364,8 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     if (cached) return cached;
 
     const tryEndpoint = async (kind: "netease_new" | "netease_legacy") => {
-      const fn = kind === "netease_new" ? neteaseApi.lyric_new : neteaseApi.lyric;
-      const response = await fn(this.#baseParams(auth, { id: songId }));
+      const fn = kind === "netease_new" ? this.#api.lyric_new : this.#api.lyric;
+      const response = await this.#call(() => fn(this.#baseParams(auth, { id: songId })), auth.signal);
       const body = response.body as {
         lrc?: { lyric?: string };
         tlyric?: { lyric?: string };
@@ -1135,22 +1384,39 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     };
 
     let result: SongLyrics;
+    let succeeded = false;
     try {
       result = await tryEndpoint("netease_new");
+      succeeded = true;
       if (result.lines.length === 0) {
-        result = await tryEndpoint("netease_legacy").catch(() => result);
+        const legacy = await tryEndpoint("netease_legacy").catch(() => null);
+        if (legacy && legacy.lines.length > 0) {
+          result = legacy;
+        }
       }
     } catch {
-      result = await tryEndpoint("netease_legacy").catch(() => ({
-        songId,
-        platform: "netease" as const,
-        lines: [],
-        source: "none" as const,
-      }));
+      try {
+        result = await tryEndpoint("netease_legacy");
+        succeeded = true;
+      } catch {
+        result = {
+          songId,
+          platform: "netease" as const,
+          lines: [],
+          source: "none" as const,
+        };
+      }
     }
 
-    // Cache even empty instrumental results (short TTL) to avoid repeated 4x upstream amplification
-    this.#lyricCache.set("public", songId, result, result.lines.length > 0 ? 30 * 60 * 1000 : 5 * 60 * 1000);
+    // Only cache genuine upstream results (avoid poisoning cache with transient network failures)
+    if (succeeded) {
+      this.#lyricCache.set(
+        "public",
+        songId,
+        result,
+        result.lines.length > 0 ? 30 * 60 * 1000 : 5 * 60 * 1000,
+      );
+    }
     return result;
   }
 
@@ -1164,8 +1430,12 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     const safeLimit = Math.min(50, Math.max(5, Math.floor(limit) || 20));
 
     try {
-      const response = await neteaseApi.comment_music(
-        this.#baseParams(auth, { id: songId, limit: safeLimit, offset: (safePage - 1) * safeLimit }),
+      const response = await this.#call(
+        () =>
+          this.#api.comment_music(
+            this.#baseParams(auth, { id: songId, limit: safeLimit, offset: (safePage - 1) * safeLimit }),
+          ),
+        auth.signal,
       );
       const hotComments =
         safePage === 1
@@ -1189,6 +1459,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
         comments,
       };
     } catch (error) {
+      if (error instanceof AppError) throw error;
       throw new AppError("UPSTREAM_ERROR", extractApiError(error, "获取网易云评论失败"), { cause: error });
     }
   }
@@ -1201,13 +1472,14 @@ export class NeteaseAdapter implements MusicProviderAdapter {
   ): Promise<{ liked: boolean }> {
     this.#assertAuthed(auth);
     try {
-      const response = await neteaseApi.comment_like(
-        this.#baseParams(auth, { id: songId, cid: commentId, t: liked ? 1 : 0, type: 0 }),
+      const response = await this.#call(
+        () =>
+          this.#api.comment_like(
+            this.#baseParams(auth, { id: songId, cid: commentId, t: liked ? 1 : 0, type: 0 }),
+          ),
+        auth.signal,
       );
-      const code = Number(response.body.code ?? 200);
-      if (code !== 200) {
-        throw new AppError("UPSTREAM_ERROR", `评论点赞失败 (code ${code})`);
-      }
+      this.#assertBusinessSuccess(response.body, "评论点赞失败");
       return { liked };
     } catch (error) {
       if (error instanceof AppError) throw error;
@@ -1221,11 +1493,22 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     const cached = this.#likeSetCache.get(auth.scopeKey, cacheKey);
     if (cached) return cached;
 
-    const response = await neteaseApi.likelist(this.#baseParams(auth, { uid }));
-    const ids = ((response.body.ids as Array<number | string> | undefined) ?? []).map(String);
-    const set = new Set(ids);
-    this.#likeSetCache.set(auth.scopeKey, cacheKey, set);
-    return set;
+    try {
+      const response = await this.#call(
+        () => this.#api.likelist(this.#baseParams(auth, { uid })),
+        auth.signal,
+      );
+      this.#assertBusinessSuccess(response.body, "获取网易云红心列表失败");
+      const ids = ((response.body.ids as Array<number | string> | undefined) ?? []).map(String);
+      const set = new Set(ids);
+      this.#likeSetCache.set(auth.scopeKey, cacheKey, set);
+      return set;
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError("UPSTREAM_ERROR", extractApiError(error, "获取网易云红心列表失败"), {
+        cause: error,
+      });
+    }
   }
 
   async getLikedSongIds(auth: ProviderAuthContext): Promise<string[]> {
@@ -1246,22 +1529,30 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     auth: ProviderAuthContext,
   ): Promise<{ liked: boolean }> {
     const cookie = this.#assertAuthed(auth);
-    const response = await neteaseApi.like(this.#baseParams(auth, { id: songId, like: liked }));
-    const code = Number(response.body.code ?? 200);
-    if (code !== 200) {
-      throw new AppError("UPSTREAM_ERROR", `红心操作失败 (code ${code})`);
-    }
-    const uid = auth.accountUid?.trim() || this.#uidCache.get(auth.scopeKey, this.#cookieCacheKey(cookie));
-    if (uid) {
-      const existing = this.#likeSetCache.get(auth.scopeKey, `likes:${uid}`);
-      if (existing) {
-        if (liked) existing.add(songId);
-        else existing.delete(songId);
+    try {
+      // BUG-01: NeteaseCloudMusicApi/module/like.js checks `query.like == 'false' ? false : true`;
+      // passing boolean `false` evaluates `false == 'false'` -> false -> likes the song instead of unliking!
+      const response = await this.#call(
+        () => this.#api.like(this.#baseParams(auth, { id: songId, like: String(liked) })),
+        auth.signal,
+      );
+      this.#assertBusinessSuccess(response.body, "红心操作失败");
+
+      const uid = auth.accountUid?.trim() || this.#uidCache.get(auth.scopeKey, this.#cookieCacheKey(cookie));
+      if (uid) {
+        const existing = this.#likeSetCache.get(auth.scopeKey, `likes:${uid}`);
+        if (existing) {
+          if (liked) existing.add(songId);
+          else existing.delete(songId);
+        }
+      } else {
+        this.#likeSetCache.invalidateScope(auth.scopeKey);
       }
-    } else {
-      this.#likeSetCache.invalidateScope(auth.scopeKey);
+      return { liked };
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError("UPSTREAM_ERROR", extractApiError(error, "红心操作失败"), { cause: error });
     }
-    return { liked };
   }
 
   async resolveAudio(
@@ -1272,8 +1563,9 @@ export class NeteaseAdapter implements MusicProviderAdapter {
   ): Promise<ResolvedAudio> {
     this.#assertAuthed(auth);
     const order = buildDownwardQualityOrder(level);
-    const apiFn = mode === "download" ? neteaseApi.song_download_url_v1 : neteaseApi.song_url_v1;
+    const apiFn = mode === "download" ? this.#api.song_download_url_v1 : this.#api.song_url_v1;
     let lastError: AppError | null = null;
+    let firstTrialFallback: ResolvedAudio | null = null;
 
     for (const candidateLevel of order) {
       const variants: Array<Record<string, unknown>> =
@@ -1286,7 +1578,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
 
       for (const variantParams of variants) {
         try {
-          const response = await apiFn(this.#baseParams(auth, variantParams));
+          const response = await this.#call(() => apiFn(this.#baseParams(auth, variantParams)), auth.signal);
           const rawData = response.body.data;
           const item = (Array.isArray(rawData) ? rawData[0] : rawData) as
             | {
@@ -1310,10 +1602,11 @@ export class NeteaseAdapter implements MusicProviderAdapter {
             item.time && Number(item.time) > 0 ? Math.round(Number(item.time) / 1000) : null;
           const hasTrialFlag = Boolean(item.freeTrialInfo && Number(item.freeTrialInfo.end ?? 0) > 0);
           const trial = isTrialDuration(target.durationSeconds, durationSeconds, hasTrialFlag);
-          const actualLevel = (item.level?.toLowerCase() as QualityLevel | undefined) ?? candidateLevel;
+          // A14: Safely map upstream level (e.g. "higher") via QualityLevelSchema instead of blind cast
+          const actualLevel = normalizeQualityLevel(item.level, candidateLevel);
           const downgraded = isQualityDowngraded(level, { bitrate, format, level: actualLevel });
 
-          return {
+          const candidate: ResolvedAudio = {
             url: item.url.replace(/^http:\/\//i, "https://"),
             format,
             bitrate,
@@ -1322,7 +1615,20 @@ export class NeteaseAdapter implements MusicProviderAdapter {
             trial,
             downgraded,
           };
+
+          // A06: Keep trial as last-resort fallback while continuing downward to find a full playable track
+          if (trial) {
+            if (!firstTrialFallback) {
+              firstTrialFallback = candidate;
+            }
+            continue;
+          }
+
+          return candidate;
         } catch (error) {
+          if (error instanceof AppError && error.code === "UPSTREAM_TIMEOUT") {
+            throw error;
+          }
           lastError = new AppError("UPSTREAM_ERROR", extractApiError(error, "解析网易云音源失败"), {
             cause: error,
           });
@@ -1330,17 +1636,22 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       }
     }
 
+    if (firstTrialFallback) {
+      return firstTrialFallback;
+    }
+
     throw lastError ?? new AppError("UPSTREAM_ERROR", "未能获取到可用的网易云音频流。");
   }
 
-  async startQrLogin(_scopeKey: string): Promise<QrStartResult> {
-    const keyRes = await neteaseApi.login_qr_key(this.#baseParams(undefined, { timestamp: Date.now() }));
+  async startQrLogin(scopeKey: string): Promise<QrStartResult> {
+    this.#cleanupQrSessions();
+    const keyRes = await this.#api.login_qr_key(this.#baseParams(undefined, { timestamp: Date.now() }));
     const key = (keyRes.body.data as { unikey?: string } | undefined)?.unikey;
     if (!key) {
       throw new AppError("UPSTREAM_ERROR", "网易云二维码登录初始化失败。");
     }
 
-    const qrRes = await neteaseApi.login_qr_create(
+    const qrRes = await this.#api.login_qr_create(
       this.#baseParams(undefined, { key, platform: "web", qrimg: true, timestamp: Date.now() }),
     );
     const data = qrRes.body.data as { qrimg?: string; qrurl?: string } | undefined;
@@ -1348,24 +1659,36 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       throw new AppError("UPSTREAM_ERROR", "网易云二维码生成失败。");
     }
 
+    this.#qrSessions.set(key, { scopeKey, createdAt: Date.now() });
     return { key, qrImage: data.qrimg, qrUrl: data.qrurl };
   }
 
   async checkQrLogin(
-    _scopeKey: string,
+    scopeKey: string,
     key: string,
   ): Promise<QrCheckResult & { rawCookie?: string; verification?: CredentialVerificationResult }> {
-    const response = await neteaseApi.login_qr_check(
-      this.#baseParams(undefined, { key: key.trim(), noCookie: true, timestamp: Date.now() }),
+    this.#cleanupQrSessions();
+    const trimmedKey = key.trim();
+    const session = this.#qrSessions.get(trimmedKey);
+    if (!session || session.scopeKey !== scopeKey) {
+      return { status: "expired", code: 800, message: "二维码已过期或不属于当前账号，请重新生成。" };
+    }
+
+    const response = await this.#api.login_qr_check(
+      this.#baseParams(undefined, { key: trimmedKey, noCookie: true, timestamp: Date.now() }),
     );
     const code = Number(response.body.code ?? 0);
     const message = typeof response.body.message === "string" ? response.body.message : "";
     const rawCookie = typeof response.body.cookie === "string" ? response.body.cookie : undefined;
 
-    if (code === 800) return { status: "expired", code, message: message || "二维码已过期，请刷新。" };
+    if (code === 800) {
+      this.#qrSessions.delete(trimmedKey);
+      return { status: "expired", code, message: message || "二维码已过期，请刷新。" };
+    }
     if (code === 801) return { status: "waiting", code, message: message || "等待网易云 App 扫码。" };
     if (code === 802) return { status: "scanned", code, message: message || "已扫码，请在手机确认。" };
     if (code === 803 && rawCookie) {
+      this.#qrSessions.delete(trimmedKey);
       const verification = await this.verifyCredential(rawCookie);
       return {
         status: "confirmed",

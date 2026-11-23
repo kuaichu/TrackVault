@@ -5,6 +5,7 @@ import type {
   ArtistSummary,
   ChartDetail,
   ChartSummary,
+  CloudTracksPage,
   EntitySearchType,
   MusicPlatform,
   PlaylistSort,
@@ -28,6 +29,8 @@ export interface ProviderAuthContext {
   readonly scopeKey: string;
   /** Optional persisted third-party account UID (avoids redundant login_status round-trips). */
   readonly accountUid?: string | null;
+  /** Optional cancellation signal for background jobs / HTTP request aborts. */
+  readonly signal?: AbortSignal;
 }
 
 export interface CredentialVerificationResult {
@@ -82,6 +85,10 @@ export interface MusicProviderAdapter {
   getDiscoverTracks(auth: ProviderAuthContext): Promise<Song[]>;
   getDailyRecommendTracks?(auth: ProviderAuthContext): Promise<Song[]>;
   getCloudTracks?(auth: ProviderAuthContext): Promise<Song[]>;
+  getCloudTracksPage?(
+    auth: ProviderAuthContext,
+    options?: { offset?: number; limit?: number },
+  ): Promise<CloudTracksPage>;
   getPersonalFm?(auth: ProviderAuthContext): Promise<Song[]>;
   getRecommendedPlaylists?(auth: ProviderAuthContext, limit?: number): Promise<PlaylistSummary[]>;
   getCharts?(auth: ProviderAuthContext): Promise<ChartSummary[]>;

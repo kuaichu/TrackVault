@@ -68,8 +68,12 @@ export function registerUserStateRoutes(
   app.delete("/api/history/search", async (request) => {
     const actor = requireActor(request);
     const query = z.object({ keyword: z.string().optional() }).parse(request.query);
-    if (query.keyword) {
-      return { items: userStateRepo.removeSearchHistory(actor.userId, query.keyword) };
+    if (query.keyword !== undefined) {
+      const trimmed = query.keyword.trim();
+      if (!trimmed) {
+        return { items: userStateRepo.getSearchHistory(actor.userId) };
+      }
+      return { items: userStateRepo.removeSearchHistory(actor.userId, trimmed) };
     }
     userStateRepo.clearSearchHistory(actor.userId);
     return { items: [] };

@@ -6,6 +6,26 @@ export function writeUint32BigEndian(value: number): Uint8Array {
   return new Uint8Array([(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]);
 }
 
+export function readUint32LittleEndian(bytes: Uint8Array, offset: number): number {
+  return (
+    ((bytes[offset] ?? 0) |
+      ((bytes[offset + 1] ?? 0) << 8) |
+      ((bytes[offset + 2] ?? 0) << 16) |
+      ((bytes[offset + 3] ?? 0) << 24)) >>>
+    0
+  );
+}
+
+export function readUint32BigEndian(bytes: Uint8Array, offset: number): number {
+  return (
+    (((bytes[offset] ?? 0) << 24) |
+      ((bytes[offset + 1] ?? 0) << 16) |
+      ((bytes[offset + 2] ?? 0) << 8) |
+      (bytes[offset + 3] ?? 0)) >>>
+    0
+  );
+}
+
 export function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
   let totalLength = 0;
   for (const chunk of chunks) {
@@ -21,20 +41,21 @@ export function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
 }
 
 /**
- * Safely returns the ID3v2 header + body (+ optional footer) length, or 0 if invalid/out-of-bounds.
+ * Safely returns the ID3v2 header + body (+ optional footer) length at startOffset, or 0 if invalid/out-of-bounds.
+ * Supports 10-byte empty ID3v2 tags (tagSize === 0) as long as audio bytes follow.
  */
-export function getId3v2TagLength(bytes: Uint8Array): number {
-  if (bytes.length < 10) return 0;
-  const b0 = bytes[0] ?? 0;
-  const b1 = bytes[1] ?? 0;
-  const b2 = bytes[2] ?? 0;
-  const major = bytes[3] ?? 0;
-  const revision = bytes[4] ?? 0;
-  const flags = bytes[5] ?? 0;
-  const s0 = bytes[6] ?? 0;
-  const s1 = bytes[7] ?? 0;
-  const s2 = bytes[8] ?? 0;
-  const s3 = bytes[9] ?? 0;
+export function getId3v2TagLength(bytes: Uint8Array, startOffset = 0): number {
+  if (bytes.length < startOffset + 10) return 0;
+  const b0 = bytes[startOffset] ?? 0;
+  const b1 = bytes[startOffset + 1] ?? 0;
+  const b2 = bytes[startOffset + 2] ?? 0;
+  const major = bytes[startOffset + 3] ?? 0;
+  const revision = bytes[startOffset + 4] ?? 0;
+  const flags = bytes[startOffset + 5] ?? 0;
+  const s0 = bytes[startOffset + 6] ?? 0;
+  const s1 = bytes[startOffset + 7] ?? 0;
+  const s2 = bytes[startOffset + 8] ?? 0;
+  const s3 = bytes[startOffset + 9] ?? 0;
 
   if (b0 !== 0x49 || b1 !== 0x44 || b2 !== 0x33) return 0;
   // Valid ID3v2 major versions are 2, 3, or 4; revision 0xff is forbidden by spec.
@@ -46,8 +67,21 @@ export function getId3v2TagLength(bytes: Uint8Array): number {
   const total = 10 + tagSize + (hasFooter ? 10 : 0);
 
   // Never exceed the file buffer (prevents malformed headers from stripping the entire audio stream).
-  if (total <= 10 || total >= bytes.length) {
+  if (total < 10 || startOffset + total >= bytes.length) {
     return 0;
   }
   return total;
+}
+
+/**
+ * Sums the lengths of one or more consecutive stacked ID3v2 tags at the start of a file.
+ */
+export function getAllId3v2TagsLength(bytes: Uint8Array): number {
+  let offset = 0;
+  for (let i = 0; i < 16; i += 1) {
+    const len = getId3v2TagLength(bytes, offset);
+    if (len <= 0) break;
+    offset += len;
+  }
+  return offset;
 }

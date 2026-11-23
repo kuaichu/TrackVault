@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const QualityLevelSchema = z.enum([
   "standard",
+  "higher",
   "exhigh",
   "lossless",
   "hires",
@@ -17,12 +18,13 @@ export type PreferenceQualityLevel = z.infer<typeof PreferenceQualityLevelSchema
 
 export const QUALITY_RANK: Record<QualityLevel, number> = {
   standard: 1,
-  exhigh: 2,
-  lossless: 3,
-  hires: 4,
-  jyeffect: 5,
-  sky: 6,
-  jymaster: 7,
+  higher: 2,
+  exhigh: 3,
+  lossless: 4,
+  hires: 5,
+  jyeffect: 6,
+  sky: 7,
+  jymaster: 8,
 };
 
 export const QUALITY_META: Record<
@@ -30,6 +32,7 @@ export const QUALITY_META: Record<
   { label: string; shortLabel: string; minBitrate: number; lossless: boolean }
 > = {
   standard: { label: "标准 128K", shortLabel: "128K", minBitrate: 0, lossless: false },
+  higher: { label: "较高 192K", shortLabel: "192K", minBitrate: 180_000, lossless: false },
   exhigh: { label: "极高 320K", shortLabel: "320K", minBitrate: 300_000, lossless: false },
   lossless: { label: "无损 FLAC", shortLabel: "FLAC", minBitrate: 700_000, lossless: true },
   hires: { label: "Hi-Res 高解析", shortLabel: "Hi-Res", minBitrate: 900_000, lossless: true },
@@ -55,9 +58,23 @@ export const QUALITY_FALLBACK_ORDER: readonly QualityLevel[] = [
   "hires",
   "lossless",
   "exhigh",
+  "higher",
   "standard",
 ];
 
-export function getQualityLabel(level: QualityLevel): string {
-  return QUALITY_META[level].shortLabel;
+export function normalizeQualityLevel(
+  raw: string | null | undefined,
+  fallback: QualityLevel = "standard",
+): QualityLevel {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) return fallback;
+  const parsed = QualityLevelSchema.safeParse(normalized);
+  return parsed.success ? parsed.data : fallback;
+}
+
+export function getQualityLabel(level: QualityLevel | string): string {
+  const meta = QUALITY_META[level as QualityLevel];
+  if (meta) return meta.shortLabel;
+  const trimmed = typeof level === "string" ? level.trim() : "";
+  return trimmed ? trimmed.toUpperCase() : "未知";
 }

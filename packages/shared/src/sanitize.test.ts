@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { QualityLevelSchema, getQualityLabel, normalizeQualityLevel } from "./quality.js";
 import {
   escapeCsvCell,
   isAllowedCoverHost,
@@ -57,4 +58,36 @@ test("sanitizeCssUrl encodes characters that could break out of CSS url(...)", (
   assert.ok(encoded);
   assert.equal(encoded.includes('"'), false);
   assert.equal(encoded.includes(")"), false);
+});
+
+test("sanitizeDownloadFilename protects surrogate pairs, trailing dots, Windows reserved extensions, and C1 controls (C043/B30)", () => {
+  // Surrogate pair emoji right at the maxLength boundary must never be split or cause URIError
+  const emojiTitle = `${"a".repeat(19)}🎵🎵`;
+  const truncated = sanitizeDownloadFilename(emojiTitle, "Fallback", 20);
+  assert.equal(Array.from(truncated).length, 20);
+  assert.doesNotThrow(() => encodeURIComponent(truncated));
+
+  // Lone surrogate in raw input is replaced cleanly
+  const loneSurrogate = "Track\uD800Name";
+  const safeLone = sanitizeDownloadFilename(loneSurrogate);
+  assert.doesNotThrow(() => encodeURIComponent(safeLone));
+
+  // Post-truncation trailing dot and space removed
+  assert.equal(sanitizeDownloadFilename("abcdef...gh", "Fallback", 7), "abcdef");
+
+  // Windows reserved device names with extensions blocked
+  assert.equal(sanitizeDownloadFilename("CON.mp3"), "TrackVault-Audio");
+  assert.equal(sanitizeDownloadFilename("nul.flac"), "TrackVault-Audio");
+  assert.equal(sanitizeDownloadFilename("COM1.wav"), "TrackVault-Audio");
+
+  // C1 control characters (0x80-0x9F) stripped
+  assert.equal(sanitizeDownloadFilename("Hello\u0085World\u009BTest"), "HelloWorldTest");
+});
+
+test("quality helpers include higher 192K and never crash on unknown levels (A14)", () => {
+  assert.equal(QualityLevelSchema.safeParse("higher").success, true);
+  assert.equal(getQualityLabel("higher"), "192K");
+  assert.equal(getQualityLabel("unknown_future_tier"), "UNKNOWN_FUTURE_TIER");
+  assert.equal(normalizeQualityLevel("HIGHER", "standard"), "higher");
+  assert.equal(normalizeQualityLevel("nonexistent", "exhigh"), "exhigh");
 });

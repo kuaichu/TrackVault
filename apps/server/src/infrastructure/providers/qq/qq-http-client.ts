@@ -26,6 +26,9 @@ export function parseJsonpOrJson<T>(rawText: string): T {
   }
 }
 
+const MAX_QQ_JSON_BYTES = 8 * 1024 * 1024;
+const textDecoder = new TextDecoder("utf-8", { fatal: false });
+
 /**
  * Completely stateless QQ Music HTTP client.
  * Every request explicitly receives its own cookieMap — zero process-wide global singleton state.
@@ -45,6 +48,7 @@ export class QqMusicHttpClient {
     referer?: string;
     contentType?: string;
     cookieMap?: Record<string, string>;
+    signal?: AbortSignal;
   }): Promise<T> {
     const parsedUrl = new URL(input.url);
     if (input.query) {
@@ -67,25 +71,26 @@ export class QqMusicHttpClient {
       headers.Cookie = serializeQqCookie(input.cookieMap);
     }
 
-    const { response } = await this.#http.fetchResponse(parsedUrl.toString(), {
+    const { bytes } = await this.#http.fetchBoundedBytes(parsedUrl.toString(), {
       method: input.method ?? "GET",
       headers,
       body: input.body,
       allowedHostSuffixes: QQ_ALLOWED_HOST_SUFFIXES,
       allowHttp: false,
       maxRedirects: 2,
+      maxBytes: MAX_QQ_JSON_BYTES,
+      signal: input.signal,
     });
 
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw new AppError("UPSTREAM_ERROR", `QQ 音乐接口响应异常：HTTP ${response.status}`);
-    }
-
-    const text = await response.text();
+    const text = textDecoder.decode(bytes);
     return parseJsonpOrJson<T>(text);
   }
 
-  async musicu<T>(payload: Record<string, unknown>, cookieMap?: Record<string, string>): Promise<T> {
+  async musicu<T>(
+    payload: Record<string, unknown>,
+    cookieMap?: Record<string, string>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const uin = cookieMap?.uin ?? "0";
     const key = cookieMap?.qm_keyst || cookieMap?.qqmusic_key || "";
     const body = JSON.stringify({
@@ -115,6 +120,7 @@ export class QqMusicHttpClient {
       body,
       contentType: "application/json; charset=utf-8",
       cookieMap,
+      signal,
     });
   }
 }

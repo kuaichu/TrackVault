@@ -35,7 +35,8 @@ export function evaluateNeteaseAvailability(input: NeteasePrivilegeInput): SongA
   const dl = parseOptionalNumber(input.dl);
   const st = parseOptionalNumber(input.st);
   const cp = parseOptionalNumber(input.cp);
-  const hasCopyrightHint = Boolean(input.noCopyrightRcmd) || (st !== null && st < 0);
+  // A08: noCopyrightRcmd is an informational recommendation hint and must NOT override explicit playable privileges.
+  const hasCopyrightHint = st !== null && st < 0;
 
   if (fee === null && pl === null && dl === null && cp === null && !hasCopyrightHint) {
     return undefined;
@@ -45,7 +46,10 @@ export function evaluateNeteaseAvailability(input: NeteasePrivilegeInput): SongA
   const downloadLocked = dl !== null && dl <= 0;
   const isVip = fee === 1;
   const isPaidAlbum = fee === 4;
-  const copyrightUnavailable = hasCopyrightHint || (playbackLocked && !isVip && !isPaidAlbum);
+  // C040 guardrail: cp === 0 frequently appears on playable VIP songs (pl > 0);
+  // only treat cp === 0 as an auxiliary copyright block when pl is absent/zero and track is neither VIP nor paid album.
+  const cpBlocked = cp !== null && cp === 0 && (pl === null || pl <= 0) && !isVip && !isPaidAlbum;
+  const copyrightUnavailable = hasCopyrightHint || (playbackLocked && !isVip && !isPaidAlbum) || cpBlocked;
 
   const playback = copyrightUnavailable
     ? { status: "copyright" as const, locked: true, label: "无版权", reason: "当前地区或曲库暂无播放版权。" }

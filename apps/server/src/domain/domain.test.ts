@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildDownwardQualityOrder } from "./policies/quality-policy.js";
+import { buildDownwardQualityOrder, isQualityDowngraded } from "./policies/quality-policy.js";
 import {
   evaluateNeteaseAvailability,
   evaluateQqAvailability,
@@ -47,6 +47,50 @@ test("evaluateQqAvailability prioritizes switch === 0 as copyright unavailable",
 test("buildDownwardQualityOrder never upgrades quality when requested tier is absent", () => {
   const order = buildDownwardQualityOrder("exhigh", ["hires", "lossless", "standard"]);
   assert.deepEqual(order, ["standard"]);
+});
+
+test("isQualityDowngraded compares quality tier rank before container extension (A05)", () => {
+  // Hi-Res requested, ordinary lossless FLAC returned -> MUST report downgraded: true
+  assert.equal(isQualityDowngraded("hires", { bitrate: 950_000, format: "flac", level: "lossless" }), true);
+  // Hi-Res requested, Hi-Res FLAC returned -> not downgraded
+  assert.equal(isQualityDowngraded("hires", { bitrate: 1_800_000, format: "flac", level: "hires" }), false);
+  // 320K requested, 192K higher returned -> downgraded
+  assert.equal(isQualityDowngraded("exhigh", { bitrate: 192_000, format: "mp3", level: "higher" }), true);
+});
+
+test("evaluateNeteaseAvailability ignores noCopyrightRcmd when playable (A08) and respects cp===0 VIP guardrail (C040)", () => {
+  // A08: explicit playable privilege with informational noCopyrightRcmd must NOT be locked
+  const playableWithHint = evaluateNeteaseAvailability({
+    fee: 0,
+    pl: 320000,
+    dl: 320000,
+    st: 0,
+    noCopyrightRcmd: { type: 1, typeDesc: "可替换版本" },
+  });
+  assert.equal(playableWithHint?.playback.status, "available");
+  assert.equal(playableWithHint?.playback.locked, false);
+
+  // C040 guardrail: VIP track with pl > 0 and cp === 0 must remain VIP playable, NOT locked as copyright
+  const vipPlayableCp0 = evaluateNeteaseAvailability({
+    fee: 1,
+    pl: 320000,
+    dl: 320000,
+    st: 0,
+    cp: 0,
+  });
+  assert.equal(vipPlayableCp0?.playback.status, "vip");
+  assert.equal(vipPlayableCp0?.playback.locked, false);
+
+  // Auxiliary cp === 0 when pl is absent and non-VIP / non-paid-album marks copyright unavailable
+  const noCopyrightCp0 = evaluateNeteaseAvailability({
+    fee: 0,
+    pl: null,
+    dl: null,
+    st: 0,
+    cp: 0,
+  });
+  assert.equal(noCopyrightCp0?.playback.status, "copyright");
+  assert.equal(noCopyrightCp0?.playback.locked, true);
 });
 
 test("matcher prevents parenthesized empty-title collision and single-char artist false positives", () => {

@@ -69,6 +69,9 @@ function mapRow(row: RawJobRow): StoredJobRecord {
 }
 
 export function toJobView(record: StoredJobRecord): JobView {
+  const artifactExpired = Boolean(record.metadata?.artifactExpired);
+  const isDirectLink = Boolean(record.directUrl) || record.metadata?.mode === "direct_link";
+
   return {
     id: record.id,
     kind: record.kind,
@@ -80,8 +83,14 @@ export function toJobView(record: StoredJobRecord): JobView {
     result: record.result,
     errorCode: record.errorCode,
     errorMessage: record.errorMessage,
+    // J04: Separate local server artifact availability from directUrl / expired artifacts (zero DB migration)
     downloadReady:
-      record.kind === "download" && record.status === "completed" && Boolean(record.artifactFilename),
+      record.kind === "download" &&
+      record.status === "completed" &&
+      Boolean(record.artifactFilename) &&
+      !isDirectLink &&
+      !artifactExpired,
+    artifactExpired: artifactExpired || undefined,
     directUrl: record.directUrl,
     artifactFilename: record.artifactFilename,
     createdAt: record.createdAt,
@@ -98,21 +107,31 @@ export class JobRepository {
 
   /**
    * On server startup, mark any previously queued/running jobs as interrupted so they never hang.
+   * Returns recovered jobs so partial temp artifacts can be cleaned up (C021).
    */
-  recoverInterruptedJobs(): void {
-    this.#sqlite.db
-      .prepare(
-        `UPDATE background_jobs
-         SET status = 'failed',
-             error_code = 'INTERNAL_ERROR',
-             error_message = '任务在服务重启前被中断，请重试。',
-             updated_at = ?
-         WHERE status IN ('queued', 'running')`,
-      )
-      .run(Date.now());
+  recoverInterruptedJobs(): Array<{ id: string; userId: string }> {
+    const interrupted = this.#sqlite.db
+      .prepare("SELECT id, user_id FROM background_jobs WHERE status IN ('queued', 'running')")
+      .all() as Array<{ id: string; user_id: string }>;
+
+    if (interrupted.length > 0) {
+      this.#sqlite.db
+        .prepare(
+          `UPDATE background_jobs
+           SET status = 'failed',
+               error_code = 'INTERNAL_ERROR',
+               error_message = '任务在服务重启前被中断，请重试。',
+               updated_at = ?
+           WHERE status IN ('queued', 'running')`,
+        )
+        .run(Date.now());
+    }
+
+    return interrupted.map((row) => ({ id: row.id, userId: row.user_id }));
   }
 
-  insert(record: StoredJobRecord): void {
+  insert(record: StoredJobRecord): string[] {
+    let evictedIds: string[] = [];
     this.#sqlite.transaction(() => {
       this.#sqlite.db
         .prepare(
@@ -139,10 +158,10 @@ export class JobRepository {
           record.updatedAt,
         );
 
-      // Retain per-user per-kind history independently so one user can NEVER evict another user's jobs
-      this.#sqlite.db
+      // Retain per-user per-kind history independently and return evicted IDs for orphan artifact cleanup (C021)
+      const evictedRows = this.#sqlite.db
         .prepare(
-          `DELETE FROM background_jobs
+          `SELECT id FROM background_jobs
            WHERE user_id = ? AND kind = ? AND status IN ('completed', 'failed', 'cancelled')
              AND id NOT IN (
                SELECT id FROM background_jobs
@@ -150,8 +169,26 @@ export class JobRepository {
                ORDER BY created_at DESC LIMIT ?
              )`,
         )
-        .run(record.userId, record.kind, record.userId, record.kind, MAX_JOBS_PER_USER_AND_KIND);
+        .all(record.userId, record.kind, record.userId, record.kind, MAX_JOBS_PER_USER_AND_KIND) as Array<{
+        id: string;
+      }>;
+
+      evictedIds = evictedRows.map((row) => row.id);
+      if (evictedIds.length > 0) {
+        this.#sqlite.db
+          .prepare(
+            `DELETE FROM background_jobs
+             WHERE user_id = ? AND kind = ? AND status IN ('completed', 'failed', 'cancelled')
+               AND id NOT IN (
+                 SELECT id FROM background_jobs
+                 WHERE user_id = ? AND kind = ?
+                 ORDER BY created_at DESC LIMIT ?
+               )`,
+          )
+          .run(record.userId, record.kind, record.userId, record.kind, MAX_JOBS_PER_USER_AND_KIND);
+      }
     });
+    return evictedIds;
   }
 
   update(

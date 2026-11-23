@@ -4,6 +4,7 @@ import type {
   AuthStatus,
   ChartDetail,
   ChartSummary,
+  CloudTracksPage,
   CompareStatus,
   CreateDownloadJobInput,
   CreateMemberInput,
@@ -111,7 +112,13 @@ export const api = {
     apiRequest<{ album: AlbumDetail }>(`/api/albums/${platform}/${encodeURIComponent(id)}`),
   getPersonalFm: () => apiRequest<{ songs: Song[] }>("/api/fm"),
   getDailyRecommend: () => apiRequest<{ songs: Song[] }>("/api/recommend/daily"),
-  getCloudSongs: () => apiRequest<{ songs: Song[] }>("/api/cloud/songs"),
+  getCloudSongs: (params?: { offset?: number; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+    if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+    const query = qs.toString();
+    return apiRequest<CloudTracksPage>(query ? `/api/cloud/songs?${query}` : "/api/cloud/songs");
+  },
   getUserPlaylists: (platform: MusicPlatform) =>
     apiRequest<{ playlists: PlaylistSummary[] }>(`/api/playlists?platform=${platform}`),
   createPlaylist: (platform: MusicPlatform, name: string, trackIds: string[] = []) =>

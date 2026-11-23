@@ -15,6 +15,8 @@ function mimeForAudioFormat(format: string): string {
       return "audio/mp4";
     case "aac":
       return "audio/aac";
+    case "ogg":
+      return "audio/ogg";
     default:
       return "audio/mpeg";
   }
@@ -65,10 +67,19 @@ export function registerMediaRoutes(app: FastifyInstance, deps: { mediaService: 
         abortController.signal,
       );
 
-      const forwardHeaders = ["accept-ranges", "content-length", "content-range"] as const;
+      const forwardHeaders = [
+        "accept-ranges",
+        "content-length",
+        "content-range",
+        "content-encoding",
+      ] as const;
       for (const key of forwardHeaders) {
         const value = response.headers.get(key);
         if (value) reply.header(key, value);
+      }
+
+      if (response.status === 416) {
+        return reply.code(416).header("Cache-Control", "no-store").send();
       }
 
       reply

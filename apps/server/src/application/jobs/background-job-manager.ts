@@ -66,7 +66,10 @@ export class BackgroundJobManager {
     this.#globalMaxDownload = options.globalMaxConcurrentDownloads;
     this.#globalMaxGeneral = options.globalMaxConcurrentJobs;
     this.#events.setMaxListeners(100);
-    this.#repo.recoverInterruptedJobs();
+    const recovered = this.#repo.recoverInterruptedJobs();
+    for (const item of recovered) {
+      void this.#deleteArtifactById(item.userId, item.id).catch(() => undefined);
+    }
   }
 
   startPeriodicCleanup(): void {
@@ -139,7 +142,11 @@ export class BackgroundJobManager {
       updatedAt: now,
     };
 
-    this.#repo.insert(record);
+    const evictedIds = this.#repo.insert(record);
+    for (const evictedId of evictedIds) {
+      this.#emit(input.actor.userId, { type: "job_removed", jobId: evictedId, timestamp: now });
+      void this.#deleteArtifactById(input.actor.userId, evictedId).catch(() => undefined);
+    }
     const view = toJobView(record);
     this.#emit(input.actor.userId, { type: "job_updated", job: view, timestamp: now });
 
@@ -246,7 +253,15 @@ export class BackgroundJobManager {
     jobId: string,
   ): Promise<{ filePath: string; downloadFilename: string }> {
     const record = this.getOwnedJob(actor, jobId);
-    if (record.kind !== "download" || record.status !== "completed" || !record.artifactFilename) {
+    const isDirectLink = Boolean(record.directUrl) || record.metadata?.mode === "direct_link";
+    const isExpired = Boolean(record.metadata?.artifactExpired);
+    if (
+      record.kind !== "download" ||
+      record.status !== "completed" ||
+      !record.artifactFilename ||
+      isDirectLink ||
+      isExpired
+    ) {
       throw new AppError("NOT_FOUND", "下载文件尚未就绪或已过期。");
     }
 
@@ -257,10 +272,29 @@ export class BackgroundJobManager {
         throw new AppError("NOT_FOUND", "下载文件不存在。");
       }
     } catch {
+      this.#markArtifactExpired(record);
       throw new AppError("NOT_FOUND", "下载文件已过期清理，请重新下载。");
     }
 
     return { filePath: safeFilePath, downloadFilename: record.artifactFilename };
+  }
+
+  #markArtifactExpired(record: StoredJobRecord): void {
+    if (record.metadata?.artifactExpired) return;
+    const updated = this.#repo.update(record.id, {
+      subtitle: "临时文件已过期，请重新下载",
+      metadata: {
+        ...(record.metadata ?? {}),
+        artifactExpired: true,
+      },
+    });
+    if (updated) {
+      this.#emit(record.userId, {
+        type: "job_updated",
+        job: toJobView(updated),
+        timestamp: Date.now(),
+      });
+    }
   }
 
   #resolveSafeArtifactPath(userId: string, jobId: string): string {
@@ -289,6 +323,12 @@ export class BackgroundJobManager {
         const stat = await fs.stat(full).catch(() => null);
         if (stat && now - stat.mtimeMs > ARTIFACT_TTL_MS) {
           await fs.unlink(full).catch(() => undefined);
+          // J04: Synchronize DB state and SSE event when expired artifact is purged
+          const jobId = file.replace(/\.bin$/i, "");
+          const record = this.#repo.findById(jobId);
+          if (record) {
+            this.#markArtifactExpired(record);
+          }
         }
       }
     }
@@ -336,6 +376,8 @@ export class BackgroundJobManager {
     });
 
     let lastPersistedProgress = 0;
+    let lastPersistedSubtitle: string | undefined = record.subtitle;
+    let lastPersistedAt = 0;
     const startRecord = this.#repo.update(record.id, { status: "running", progress: 1 });
     if (startRecord) {
       this.#emit(record.userId, { type: "job_updated", job: toJobView(startRecord), timestamp: Date.now() });
@@ -347,10 +389,26 @@ export class BackgroundJobManager {
       updateProgress: (progress, subtitle) => {
         if (controller.signal.aborted) return;
         const clamped = Math.min(99, Math.max(1, Math.round(progress)));
-        if (clamped - lastPersistedProgress < 4 && subtitle === undefined) {
+        const nextSubtitle = subtitle !== undefined ? subtitle : lastPersistedSubtitle;
+        const progressChanged = clamped !== lastPersistedProgress;
+        const subtitleChanged = nextSubtitle !== lastPersistedSubtitle;
+
+        // J06: Skip completely unchanged progress/subtitle ticks, and throttle high-frequency updates
+        if (!progressChanged && !subtitleChanged) {
           return;
         }
+        const now = Date.now();
+        if (
+          lastPersistedAt > 0 &&
+          Math.abs(clamped - lastPersistedProgress) < 4 &&
+          now - lastPersistedAt < 500
+        ) {
+          return;
+        }
+
         lastPersistedProgress = clamped;
+        lastPersistedSubtitle = nextSubtitle;
+        lastPersistedAt = now;
         const updated = this.#repo.update(record.id, {
           progress: clamped,
           ...(subtitle !== undefined ? { subtitle } : {}),
@@ -359,7 +417,7 @@ export class BackgroundJobManager {
           this.#emit(record.userId, {
             type: "job_updated",
             job: toJobView(updated),
-            timestamp: Date.now(),
+            timestamp: now,
           });
         }
       },

@@ -1,23 +1,36 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play, Trash2 } from "lucide-react";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Loader2, Play, Trash2 } from "lucide-react";
 import { SongTable } from "../../entities/song/SongTable.js";
 import { api } from "../../shared/api/endpoints.js";
 import { toast } from "../../shared/store/toast-store.js";
 import { EmptyState } from "../../shared/ui/primitives.js";
 import { audioEngine } from "../player/engine/audio-engine.js";
 
+const CLOUD_PAGE_SIZE = 100;
+
 export function CloudPage() {
-  const cloudQuery = useQuery({
+  const cloudQuery = useInfiniteQuery({
     queryKey: ["cloud-songs"],
-    queryFn: () => api.getCloudSongs(),
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.getCloudSongs({ offset: pageParam, limit: CLOUD_PAGE_SIZE }),
+    getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.offset + lastPage.songs.length : undefined),
   });
 
-  const songs = cloudQuery.data?.songs ?? [];
+  const pages = cloudQuery.data?.pages ?? [];
+  const songs = pages.flatMap((page) => page.songs);
+  const total = pages[0]?.total ?? songs.length;
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
-        <h1 className="text-[28px] font-bold tracking-tight text-[var(--tv-text)]">云盘</h1>
+        <div className="flex items-baseline gap-2.5">
+          <h1 className="text-[28px] font-bold tracking-tight text-[var(--tv-text)]">云盘</h1>
+          {total > 0 && (
+            <span className="text-xs tabular-nums text-[var(--tv-text-muted)]">
+              已加载 {songs.length} / {total} 首
+            </span>
+          )}
+        </div>
         {songs.length > 0 && (
           <button
             type="button"
@@ -45,7 +58,22 @@ export function CloudPage() {
           description={cloudQuery.error instanceof Error ? cloudQuery.error.message : "请先绑定网易云账号"}
         />
       ) : (
-        <SongTable songs={songs} emptyText="云盘暂无歌曲" />
+        <>
+          <SongTable songs={songs} emptyText="云盘暂无歌曲" />
+          {cloudQuery.hasNextPage && (
+            <div className="flex justify-center pt-2">
+              <button
+                type="button"
+                disabled={cloudQuery.isFetchingNextPage}
+                onClick={() => void cloudQuery.fetchNextPage()}
+                className="inline-flex items-center gap-2 rounded-full bg-[var(--tv-surface)] px-5 py-2 text-xs font-medium text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)] disabled:opacity-50"
+              >
+                {cloudQuery.isFetchingNextPage && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {cloudQuery.isFetchingNextPage ? "正在加载更多..." : "加载更多"}
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

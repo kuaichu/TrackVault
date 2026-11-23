@@ -76,7 +76,9 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
     providers = options.providersOverride;
   } else {
     providers = new ProviderRegistry();
-    providers.register(new NeteaseAdapter({ realIp: config.neteaseRealIp }));
+    providers.register(
+      new NeteaseAdapter({ realIp: config.neteaseRealIp, timeoutMs: config.upstreamTimeoutMs }),
+    );
     providers.register(new QqMusicAdapter(httpClient));
   }
 
@@ -296,6 +298,11 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
   registerMediaRoutes(app, { mediaService });
   sseRegistry = registerTransferAndJobRoutes(app, { jobs, transferService, isAllowedOrigin });
   registerUserStateRoutes(app, { userStateRepo });
+
+  // J05: Close all hijacked SSE streams & heartbeats even when app.close() is invoked directly
+  app.addHook("preClose", async () => {
+    sseRegistry?.closeAllConnections();
+  });
 
   // Serve built frontend bundle when present (self-hosted single-container / production mode)
   const webDistDir = path.resolve(__dirname, "../../web/dist");

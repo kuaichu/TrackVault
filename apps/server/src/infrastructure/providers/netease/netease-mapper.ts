@@ -43,6 +43,14 @@ export interface RawNeteaseSong {
   pc?: unknown;
 }
 
+export function truncateCodePoints(text: string, maxLength: number): string {
+  const nativeFn = (text as { toWellFormed?: () => string }).toWellFormed;
+  const safe = typeof nativeFn === "function" ? nativeFn.call(text) : text;
+  const chars = Array.from(safe);
+  if (chars.length <= maxLength) return safe;
+  return maxLength > 3 ? `${chars.slice(0, maxLength - 3).join("")}...` : chars.slice(0, maxLength).join("");
+}
+
 export function formatDurationSeconds(seconds: number): string {
   const safe = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
   const mins = Math.floor(safe / 60);
@@ -53,6 +61,7 @@ export function formatDurationSeconds(seconds: number): string {
 export function formatNeteaseTime(ms: number | undefined): string {
   if (!ms || !Number.isFinite(ms)) return "";
   return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -84,8 +93,9 @@ export function mapNeteaseSong(
   options?: { privilege?: RawNeteasePrivilege | null; isCloud?: boolean },
 ): Song | null {
   const id = raw.id !== undefined && raw.id !== null ? String(raw.id).trim() : "";
-  const title = raw.name?.trim() ?? "";
-  if (!id || !title) return null;
+  const rawTitle = raw.name?.trim() ?? "";
+  if (!id || !rawTitle) return null;
+  const title = truncateCodePoints(rawTitle, 500);
 
   const rawArtists = (raw.ar ?? raw.artists ?? []).slice(0, 100);
   const artists = rawArtists
@@ -94,14 +104,14 @@ export function mapNeteaseSong(
         artist.id !== undefined && artist.id !== null && String(artist.id) !== "0"
           ? String(artist.id)
           : undefined,
-      name: artist.name?.trim() ?? "",
+      name: truncateCodePoints(artist.name?.trim() ?? "", 200),
     }))
     .filter((artist) => Boolean(artist.name));
 
   const fullArtistText = artists.map((a) => a.name).join(" / ") || "未知歌手";
-  const artistText = fullArtistText.length > 900 ? `${fullArtistText.slice(0, 897)}...` : fullArtistText;
+  const artistText = truncateCodePoints(fullArtistText, 900);
   const albumObj = raw.al ?? raw.album;
-  const album = albumObj?.name?.trim() || "未知专辑";
+  const album = truncateCodePoints(albumObj?.name?.trim() || "未知专辑", 500);
   const albumId =
     albumObj?.id !== undefined && albumObj.id !== null && String(albumObj.id) !== "0"
       ? String(albumObj.id)

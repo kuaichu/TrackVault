@@ -83,14 +83,44 @@ export class TransferService {
     this.#jobs = deps.jobs;
   }
 
-  #buildAuth(actor: ActorContext, platform: MusicPlatform): ProviderAuthContext {
-    const binding = this.#credentials.getBindingView(actor.userId, platform);
+  #buildAuth(actor: ActorContext, platform: MusicPlatform, signal?: AbortSignal): ProviderAuthContext {
+    const binding =
+      typeof this.#credentials.getBindingView === "function"
+        ? this.#credentials.getBindingView(actor.userId, platform)
+        : null;
     return {
       platform,
       cookie: this.#credentials.getDecryptedCookie(actor.userId, platform),
       scopeKey: actor.userId,
-      accountUid: binding.accountUid,
+      accountUid: binding?.accountUid ?? null,
+      signal,
     };
+  }
+
+  /**
+   * C015: Read-only public candidate search auth context for transfer/audit matching.
+   * NEVER used for reading private user playlists or creating/modifying playlists.
+   */
+  #buildPublicSearchAuth(
+    actor: ActorContext,
+    platform: MusicPlatform,
+    signal?: AbortSignal,
+  ): ProviderAuthContext {
+    const personal = this.#buildAuth(actor, platform, signal);
+    if (personal.cookie) return personal;
+    if (actor.trustedFallback && typeof this.#credentials.getDecryptedSystemFallbackCookie === "function") {
+      const fallbackCookie = this.#credentials.getDecryptedSystemFallbackCookie(platform);
+      if (fallbackCookie) {
+        return {
+          platform,
+          cookie: fallbackCookie,
+          scopeKey: "system-fallback",
+          accountUid: null,
+          signal,
+        };
+      }
+    }
+    return personal;
   }
 
   async #loadSourceTracks(actor: ActorContext, input: StartTransferInput): Promise<TransferTrack[]> {
@@ -138,7 +168,7 @@ export class TransferService {
         }
 
         const targetAdapter = this.#providers.get(input.targetProvider);
-        const targetAuth = this.#buildAuth(actor, input.targetProvider);
+        const targetAuth = this.#buildPublicSearchAuth(actor, input.targetProvider, handle.signal);
         const seenKeys = new Set<string>();
         const results: TransferTrackResult[] = [];
 
@@ -222,7 +252,8 @@ export class TransferService {
       maxUserConcurrency: 1,
       runner: async (handle) => {
         const netease = this.#providers.get("netease");
-        const auth = this.#buildAuth(actor, "netease");
+        const auth = this.#buildAuth(actor, "netease", handle.signal);
+        const searchAuth = this.#buildPublicSearchAuth(actor, "netease", handle.signal);
 
         handle.updateProgress(5, "拉取歌单曲目...");
         const songs = await netease.getAllPlaylistTracks(input.playlistId, auth, input.maxTracks);
@@ -252,7 +283,7 @@ export class TransferService {
             try {
               const found = await netease.searchTracks(
                 `${song.title} ${song.artist}`,
-                auth,
+                searchAuth,
                 input.candidateLimit + 2,
               );
               const matched = matchTransferTrack(

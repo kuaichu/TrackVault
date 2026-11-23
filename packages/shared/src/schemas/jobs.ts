@@ -31,6 +31,7 @@ export const JobViewSchema = z.object({
   errorCode: ErrorCodeSchema.optional(),
   errorMessage: z.string().optional(),
   downloadReady: z.boolean().optional(),
+  artifactExpired: z.boolean().optional(),
   directUrl: z.string().optional(),
   artifactFilename: z.string().optional(),
   createdAt: z.number(),

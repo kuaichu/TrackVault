@@ -53,15 +53,42 @@ export function normalizeCoverUrl(raw: string | null | undefined, size = 400): s
   return parsed.toString();
 }
 
+function toWellFormedString(raw: string): string {
+  const nativeFn = (raw as { toWellFormed?: () => string }).toWellFormed;
+  if (typeof nativeFn === "function") {
+    return nativeFn.call(raw);
+  }
+  let out = "";
+  for (let i = 0; i < raw.length; i += 1) {
+    const code = raw.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = raw.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        out += `${raw[i] ?? ""}${raw[i + 1] ?? ""}`;
+        i += 1;
+      } else {
+        out += "\uFFFD";
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      out += "\uFFFD";
+    } else {
+      out += raw[i] ?? "";
+    }
+  }
+  return out;
+}
+
 export function sanitizeDownloadFilename(
   raw: string,
   fallback = "TrackVault-Audio",
   maxLength = 120,
 ): string {
+  const wellFormed = toWellFormedString(raw);
   let cleaned = "";
-  for (const ch of raw) {
-    const code = ch.charCodeAt(0);
-    if (code >= 0x20 && code !== 0x7f) {
+  for (const ch of wellFormed) {
+    const code = ch.codePointAt(0) ?? 0;
+    // Strip C0 (0x00-0x1F), DEL (0x7F), and C1 (0x80-0x9F) control characters
+    if (code >= 0x20 && code !== 0x7f && (code < 0x80 || code > 0x9f)) {
       cleaned += ch;
     }
   }
@@ -69,11 +96,21 @@ export function sanitizeDownloadFilename(
     .replace(/[\\/:*?"<>|]/g, "-")
     .replace(/\.\.+/g, ".")
     .replace(/\s+/g, " ")
-    .replace(/^[.\s-]+|[.\s-]+$/g, "")
-    .slice(0, maxLength)
-    .trim();
+    .replace(/^[.\s-]+|[.\s-]+$/g, "");
 
-  if (!cleaned || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(cleaned)) {
+  // Truncate by Unicode code points so surrogate pairs (emoji / CJK Extension B) are never split
+  const safeMax = Math.max(1, Math.floor(maxLength));
+  const codePoints = Array.from(cleaned);
+  if (codePoints.length > safeMax) {
+    cleaned = codePoints.slice(0, safeMax).join("");
+  }
+
+  // Re-strip trailing/leading dots, spaces, and dashes exposed by truncation
+  cleaned = cleaned.replace(/^[.\s-]+|[.\s-]+$/g, "").trim();
+
+  // Reject Windows reserved device names both bare (CON) and with extensions (CON.mp3)
+  const stem = cleaned.split(".")[0] ?? cleaned;
+  if (!cleaned || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(stem)) {
     return fallback;
   }
   return cleaned;

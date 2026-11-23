@@ -96,7 +96,13 @@ export function registerCatalogRoutes(
 
   app.get("/api/cloud/songs", async (request) => {
     const actor = requireActor(request);
-    return { songs: await catalogService.getCloudTracks(actor) };
+    const query = z
+      .object({
+        offset: z.coerce.number().int().min(0).default(0),
+        limit: z.coerce.number().int().min(1).max(200).default(100),
+      })
+      .parse(request.query);
+    return catalogService.getCloudTracksPage(actor, query);
   });
 
   app.get("/api/playlists", async (request) => {

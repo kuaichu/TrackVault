@@ -91,8 +91,19 @@ export const PlaylistTracksPageSchema = z.object({
   page: z.number().int().positive(),
   limit: z.number().int().positive(),
   hasMore: z.boolean(),
+  truncated: z.boolean().optional(),
+  scannedTotal: z.number().int().nonnegative().optional(),
 });
 export type PlaylistTracksPage = z.infer<typeof PlaylistTracksPageSchema>;
+
+export const CloudTracksPageSchema = z.object({
+  songs: z.array(SongSchema),
+  total: z.number().int().nonnegative(),
+  offset: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  hasMore: z.boolean(),
+});
+export type CloudTracksPage = z.infer<typeof CloudTracksPageSchema>;
 
 export const ArtistSummarySchema = z.object({
   id: z.string(),

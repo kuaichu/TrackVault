@@ -16,12 +16,17 @@ const ESSENTIAL_QQ_COOKIE_KEYS = new Set([
 ]);
 
 /**
- * Single canonical QQ cookie parser supporting ";" separators, line breaks, and Base64 values containing "=".
+ * Single canonical QQ cookie parser supporting "Cookie:" prefixes, ";" separators, line breaks, and Base64 values containing "=".
  */
 export function parseQqCookie(raw: string): Record<string, string> {
   const map: Record<string, string> = {};
-  const parts = raw
-    .replace(/\r?\n+/g, "; ")
+  const cleanedRaw = raw
+    .split(/\r?\n+/)
+    .map((line) => line.trim().replace(/^cookie\s*:\s*/i, ""))
+    .filter(Boolean)
+    .join("; ");
+
+  const parts = cleanedRaw
     .split(/;\s*/)
     .map((p) => p.trim())
     .filter(Boolean);

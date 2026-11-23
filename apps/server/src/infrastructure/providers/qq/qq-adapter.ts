@@ -46,7 +46,8 @@ import { QqQrAuthManager } from "./qq-qr-auth.js";
 
 type QqFileSpec = { prefix: string; ext: string; bitrate: number; level: QualityLevel };
 
-const QQ_QUALITY_SPECS: Record<"flac" | "320" | "128" | "m4a", QqFileSpec> = {
+const QQ_QUALITY_SPECS: Record<"hires" | "flac" | "320" | "128" | "m4a", QqFileSpec> = {
+  hires: { prefix: "RS01", ext: "flac", bitrate: 1_800_000, level: "hires" },
   flac: { prefix: "F000", ext: "flac", bitrate: 950_000, level: "lossless" },
   "320": { prefix: "M800", ext: "mp3", bitrate: 320_000, level: "exhigh" },
   "128": { prefix: "M500", ext: "mp3", bitrate: 128_000, level: "standard" },
@@ -64,9 +65,16 @@ function levelToQqSpecs(level: QualityLevel): QqFileSpec[] {
     }
   };
   for (const item of ordered) {
-    if (item === "hires" || item === "lossless" || item === "jymaster") add(QQ_QUALITY_SPECS.flac);
-    else if (item === "exhigh" || item === "jyeffect" || item === "sky") add(QQ_QUALITY_SPECS["320"]);
-    else add(QQ_QUALITY_SPECS["128"]);
+    if (item === "hires" || item === "jymaster") {
+      add(QQ_QUALITY_SPECS.hires);
+      add(QQ_QUALITY_SPECS.flac);
+    } else if (item === "lossless") {
+      add(QQ_QUALITY_SPECS.flac);
+    } else if (item === "exhigh" || item === "jyeffect" || item === "sky") {
+      add(QQ_QUALITY_SPECS["320"]);
+    } else {
+      add(QQ_QUALITY_SPECS["128"]);
+    }
   }
   add(QQ_QUALITY_SPECS["128"]);
   add(QQ_QUALITY_SPECS.m4a);
@@ -127,7 +135,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
     platform: "qq",
     canLikeSong: false,
     canManagePlaylistTracks: false,
-    canCreatePlaylist: true,
+    canCreatePlaylist: false,
     canLoadCloudDisk: false,
     canReadComments: true,
     canLikeComments: true,
@@ -163,6 +171,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
     defaultTtlMs: 2 * 60 * 1000,
   });
   readonly #lyricCache = new ScopedLruCache<SongLyrics>({ maxEntries: 300, defaultTtlMs: 30 * 60 * 1000 });
+  readonly #songIdCache = new ScopedLruCache<string>({ maxEntries: 300, defaultTtlMs: 30 * 60 * 1000 });
 
   constructor(http: SafeHttpClient) {
     this.#client = new QqMusicHttpClient(http);
@@ -172,10 +181,16 @@ export class QqMusicAdapter implements MusicProviderAdapter {
   invalidateScope(scopeKey: string): void {
     this.#discoverCache.invalidateScope(scopeKey);
     this.#recommendedPlaylistsCache.invalidateScope(scopeKey);
+    this.#chartsCache.invalidateScope(scopeKey);
     this.#chartDetailCache.invalidateScope(scopeKey);
     this.#artistCache.invalidateScope(scopeKey);
     this.#albumCache.invalidateScope(scopeKey);
     this.#playlistCache.invalidateScope(scopeKey);
+  }
+
+  #cacheScope(auth: ProviderAuthContext, cookieMap: Record<string, string> | undefined): string {
+    // C039: Authenticated QQ requests must NEVER write into the shared "public" cache scope
+    return cookieMap ? auth.scopeKey : "public";
   }
 
   #parseCookie(auth: ProviderAuthContext): Record<string, string> | undefined {
@@ -344,10 +359,11 @@ export class QqMusicAdapter implements MusicProviderAdapter {
   }
 
   async getDiscoverTracks(auth: ProviderAuthContext): Promise<Song[]> {
-    const cached = this.#discoverCache.get("public", "discover");
+    const cookieMap = this.#parseCookie(auth);
+    const scope = this.#cacheScope(auth, cookieMap);
+    const cached = this.#discoverCache.get(scope, "discover");
     if (cached) return cached;
 
-    const cookieMap = this.#parseCookie(auth);
     const response = await this.#client.musicu<{
       new_song?: { data?: { songlist?: RawQqSong[] } };
     }>(
@@ -359,6 +375,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         },
       },
       cookieMap,
+      auth.signal,
     );
 
     const songs = (response.new_song?.data?.songlist ?? [])
@@ -366,7 +383,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
       .filter((song): song is Song => song !== null)
       .slice(0, 30);
 
-    this.#discoverCache.set("public", "discover", songs);
+    this.#discoverCache.set(scope, "discover", songs);
     return songs;
   }
 
@@ -374,13 +391,56 @@ export class QqMusicAdapter implements MusicProviderAdapter {
     const cookieMap = this.#requireCookie(auth);
     const gtk = computeQqGtk(cookieMap);
 
+    const fetchCollectedPlaylists = async (): Promise<{
+      code?: number;
+      items: RawQqPlaylist[];
+    }> => {
+      const items: RawQqPlaylist[] = [];
+      const pageSize = 50;
+      for (let page = 0; page < 10; page += 1) {
+        const sin = page * pageSize;
+        const res = await this.#client.requestJson<{
+          code?: number;
+          data?: { totaldiss?: number; cdlist?: RawQqPlaylist[] };
+        }>({
+          url: "https://c.y.qq.com/fav/fcgi-bin/fcg_get_profile_order_asset.fcg",
+          query: {
+            ct: 20,
+            cid: 205360956,
+            userid: cookieMap.uin,
+            reqtype: 3,
+            sin,
+            ein: sin + pageSize - 1,
+            format: "json",
+            g_tk: gtk,
+          },
+          referer: "https://y.qq.com/portal/profile.html",
+          cookieMap,
+          signal: auth.signal,
+        });
+        if (res.code === 1000 || res.code === 301) {
+          throw new AppError("CREDENTIAL_INVALID", "QQ 音乐登录态已失效，请重新绑定。");
+        }
+        if (res.code !== undefined && res.code !== 0) {
+          return { code: res.code, items };
+        }
+        const batch = res.data?.cdlist ?? [];
+        items.push(...batch);
+        const total = Number(res.data?.totaldiss ?? 0);
+        if (batch.length < pageSize || (total > 0 && items.length >= total)) {
+          break;
+        }
+      }
+      return { code: 0, items };
+    };
+
     const [createdRes, collectedRes] = await Promise.allSettled([
       this.#client.requestJson<{
+        code?: number;
         data?: { hostname?: string; disslist?: RawQqPlaylist[] };
       }>({
         url: "https://c.y.qq.com/rsc/fcgi-bin/fcg_user_created_diss",
         query: {
-          hostUin: 0,
           hostuin: cookieMap.uin,
           sin: 0,
           size: 200,
@@ -395,41 +455,56 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         },
         referer: "https://y.qq.com/portal/profile.html",
         cookieMap,
+        signal: auth.signal,
       }),
-      this.#client.requestJson<{
-        data?: { cdlist?: RawQqPlaylist[] };
-      }>({
-        url: "https://c.y.qq.com/fav/fcgi-bin/fcg_get_profile_order_asset.fcg",
-        query: {
-          ct: 20,
-          cid: 205360956,
-          userid: cookieMap.uin,
-          reqtype: 3,
-          sin: 0,
-          ein: 50,
-          format: "json",
-          g_tk: gtk,
-        },
-        referer: "https://y.qq.com/portal/profile.html",
-        cookieMap,
-      }),
+      fetchCollectedPlaylists(),
     ]);
 
+    // A11: Never mask expired credentials (code 1000/301) as an empty playlist list
+    if (createdRes.status === "fulfilled") {
+      const code = createdRes.value.code;
+      if (code === 1000 || code === 301) {
+        throw new AppError("CREDENTIAL_INVALID", "QQ 音乐登录态已失效，请重新绑定。");
+      }
+    }
+    if (
+      collectedRes.status === "rejected" &&
+      collectedRes.reason instanceof AppError &&
+      collectedRes.reason.code === "CREDENTIAL_INVALID"
+    ) {
+      throw collectedRes.reason;
+    }
+
+    const createdFailed =
+      createdRes.status === "rejected" ||
+      (createdRes.value.code !== undefined && createdRes.value.code !== 0);
+    const collectedFailed =
+      collectedRes.status === "rejected" ||
+      (collectedRes.value.code !== undefined && collectedRes.value.code !== 0);
+
+    if (createdFailed && collectedFailed) {
+      if (createdRes.status === "rejected" && createdRes.reason instanceof AppError) {
+        throw createdRes.reason;
+      }
+      const errCode = createdRes.status === "fulfilled" ? createdRes.value.code : "unknown";
+      throw new AppError("UPSTREAM_ERROR", `获取 QQ 音乐歌单列表失败 (code ${errCode})。`);
+    }
+
     const fallbackCreator =
-      createdRes.status === "fulfilled"
+      createdRes.status === "fulfilled" && !createdFailed
         ? createdRes.value.data?.hostname?.trim() || `QQ ${cookieMap.uin}`
         : `QQ ${cookieMap.uin}`;
 
     const created =
-      createdRes.status === "fulfilled"
+      createdRes.status === "fulfilled" && !createdFailed
         ? (createdRes.value.data?.disslist ?? [])
             .map((p) => mapQqPlaylist(p, fallbackCreator, true))
             .filter((p): p is PlaylistSummary => p !== null)
         : [];
 
     const collected =
-      collectedRes.status === "fulfilled"
-        ? (collectedRes.value.data?.cdlist ?? [])
+      collectedRes.status === "fulfilled" && !collectedFailed
+        ? collectedRes.value.items
             .map((p) => mapQqPlaylist(p, fallbackCreator, false))
             .filter((p): p is PlaylistSummary => p !== null)
         : [];
@@ -451,16 +526,19 @@ export class QqMusicAdapter implements MusicProviderAdapter {
       throw new AppError("VALIDATION_ERROR", "缺少 QQ 音乐歌单 ID。");
     }
 
-    const cached = this.#playlistCache.get(auth.scopeKey, cleanId);
+    const cookieMap = this.#parseCookie(auth);
+    const cacheScope = this.#cacheScope(auth, cookieMap);
+    const cached = this.#playlistCache.get(cacheScope, cleanId);
     if (cached) return cached;
 
-    const cookieMap = this.#parseCookie(auth);
     const data = await this.#client.requestJson<{
+      code?: number;
       cdlist?: Array<{
         disstid?: string;
         dissname?: string;
         logo?: string;
         nickname?: string;
+        uin?: string | number;
         desc?: string;
         songlist?: RawQqSong[];
       }>;
@@ -471,27 +549,44 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         utf8: 1,
         disstid: cleanId,
         loginUin: cookieMap?.uin ?? 0,
+        g_tk: cookieMap ? computeQqGtk(cookieMap) : 5381,
         format: "json",
       },
       referer: "https://y.qq.com/n/yqq/playlist",
       cookieMap,
+      signal: auth.signal,
     });
 
+    // A11: Validate business code and payload BEFORE mapping or caching
+    if (data.code === 1000 || data.code === 301) {
+      throw new AppError("CREDENTIAL_INVALID", "QQ 音乐登录态已失效，请重新绑定。");
+    }
+    if (data.code !== undefined && data.code !== 0) {
+      throw new AppError("UPSTREAM_ERROR", `获取 QQ 音乐歌单详情失败 (code ${data.code})。`);
+    }
+
     const cd = data.cdlist?.[0];
-    const songs = (cd?.songlist ?? []).map(mapQqSong).filter((s): s is Song => s !== null);
+    if (!cd) {
+      throw new AppError("NOT_FOUND", "未找到该 QQ 音乐歌单或无访问权限。");
+    }
+
+    const songs = (cd.songlist ?? []).map(mapQqSong).filter((s): s is Song => s !== null);
+    const creatorUin = cd.uin !== undefined && cd.uin !== null ? String(cd.uin).replace(/\D/g, "") : "";
+    const owned = Boolean(cookieMap?.uin && creatorUin && cookieMap.uin === creatorUin);
+
     const playlist: PlaylistSummary = {
       id: cleanId,
       platform: "qq",
-      name: cd?.dissname?.trim() || `QQ 歌单 ${cleanId}`,
-      coverUrl: normalizeCoverUrl(cd?.logo, 300),
+      name: cd.dissname?.trim() || `QQ 歌单 ${cleanId}`,
+      coverUrl: normalizeCoverUrl(cd.logo, 300),
       trackCount: songs.length,
-      creatorName: cd?.nickname?.trim() || "QQ 音乐用户",
-      owned: false,
-      description: cd?.desc?.trim() || undefined,
+      creatorName: cd.nickname?.trim() || "QQ 音乐用户",
+      owned,
+      description: cd.desc?.trim() || undefined,
     };
 
     const bundle = { playlist, songs };
-    this.#playlistCache.set(auth.scopeKey, cleanId, bundle);
+    this.#playlistCache.set(cacheScope, cleanId, bundle);
     return bundle;
   }
 
@@ -528,92 +623,72 @@ export class QqMusicAdapter implements MusicProviderAdapter {
   }
 
   async createPlaylistWithTracks(
-    name: string,
-    trackMids: string[],
-    auth: ProviderAuthContext,
+    _name: string,
+    _trackMids: string[],
+    _auth: ProviderAuthContext,
   ): Promise<CreatePlaylistResult> {
-    const cookieMap = this.#requireCookie(auth);
-    const playlistName = name.trim();
-    const uniqueMids = [...new Set(trackMids.map((m) => m.trim()).filter(Boolean))];
-    if (!playlistName) throw new AppError("VALIDATION_ERROR", "请输入 QQ 音乐新歌单名称。");
-    if (uniqueMids.length === 0) throw new AppError("VALIDATION_ERROR", "没有可导入的 QQ 歌曲。");
+    throw new AppError(
+      "FEATURE_UNSUPPORTED",
+      "QQ 音乐暂不支持服务端自动创建歌单，请导出清单后手动导入或选择网易云作为目标平台。",
+    );
+  }
 
-    const gtk = computeQqGtk(cookieMap);
-    const createBody = new URLSearchParams({
-      loginUin: cookieMap.uin ?? "",
-      hostUin: "0",
-      format: "json",
-      inCharset: "utf8",
-      outCharset: "utf8",
-      notice: "0",
-      platform: "yqq",
-      needNewCode: "0",
-      g_tk: String(gtk),
-      uin: cookieMap.uin ?? "",
-      name: playlistName,
-      show: "1",
-      formsender: "1",
-      utf8: "1",
-      qzreferrer: "https://y.qq.com/portal/profile.html",
-    }).toString();
-
-    const created = await this.#client.requestJson<{ code?: number; dirid?: number | string; msg?: string }>({
-      url: "https://c.y.qq.com/splcloud/fcgi-bin/create_playlist.fcg",
-      method: "POST",
-      query: { g_tk: gtk },
-      body: createBody,
-      contentType: "application/x-www-form-urlencoded",
-      referer: "https://y.qq.com/n/yqq/playlist",
-      cookieMap,
-    });
-
-    if (Number(created.code) !== 0 || !created.dirid) {
-      throw new AppError(
-        "UPSTREAM_ERROR",
-        created.msg || `创建 QQ 歌单失败 (code ${created.code ?? "unknown"})`,
-      );
+  async #resolveNumericSongId(songId: string, auth: ProviderAuthContext): Promise<string> {
+    const clean = songId.trim();
+    if (!clean) {
+      throw new AppError("VALIDATION_ERROR", "缺少 QQ 音乐歌曲 ID。");
+    }
+    if (/^\d+$/.test(clean)) {
+      return clean;
     }
 
-    const dirid = String(created.dirid);
-    const chunkSize = 50;
-    for (let i = 0; i < uniqueMids.length; i += chunkSize) {
-      const chunk = uniqueMids.slice(i, i + chunkSize);
-      const addRes = await this.#client.requestJson<{ code?: number; msg?: string }>({
-        url: "https://c.y.qq.com/splcloud/fcgi-bin/fcg_music_add2songdir.fcg",
-        query: {
-          g_tk: gtk,
-          midlist: chunk.join(","),
-          typelist: chunk.map(() => "13").join(","),
-          dirid,
-          addtype: "",
-          formsender: 4,
-          r2: 0,
-          r3: 1,
-          utf8: 1,
-          format: "json",
+    const cached = this.#songIdCache.get("public", clean);
+    if (cached) return cached;
+
+    const cookieMap = this.#parseCookie(auth);
+    const res = await this.#client.musicu<{
+      songinfo?: {
+        data?: {
+          track_info?: { id?: number | string };
+        };
+      };
+    }>(
+      {
+        songinfo: {
+          module: "music.pf_song_detail_svr",
+          method: "get_song_detail_yqq",
+          param: { song_mid: clean, song_type: 0 },
         },
-        referer: "https://y.qq.com/n/yqq/playlist",
-        cookieMap,
-      });
-      if (Number(addRes.code) !== 0) {
-        throw new AppError("UPSTREAM_ERROR", addRes.msg || `向 QQ 歌单添加歌曲失败 (code ${addRes.code})`);
-      }
-    }
+      },
+      cookieMap,
+      auth.signal,
+    );
 
-    return {
-      playlistId: dirid,
-      playlistName,
-      playlistUrl: "https://y.qq.com/n/ryqq/profile/like/song",
-      addedCount: uniqueMids.length,
-    };
+    const numericId = res.songinfo?.data?.track_info?.id;
+    const resolved = numericId !== undefined && numericId !== null ? String(numericId).trim() : "";
+    if (!/^\d+$/.test(resolved)) {
+      throw new AppError("NOT_FOUND", "无法解析该 QQ 音乐曲目的数字 songid，暂不支持加载评论。");
+    }
+    this.#songIdCache.set("public", clean, resolved);
+    return resolved;
   }
 
   async getLyrics(
     songId: string,
     mediaId: string | undefined,
-    _auth: ProviderAuthContext,
+    auth: ProviderAuthContext,
   ): Promise<SongLyrics> {
-    const targetMid = (mediaId && !/^\d+$/.test(mediaId) ? mediaId : songId).trim();
+    // BUG-13: QQ lyric API requires songmid (non-numeric songId), NOT media_mid (mediaId),
+    // which differs from songmid on many tracks (e.g. 周杰伦《晴天》).
+    const cleanSongId = songId.trim();
+    const cleanMediaId = mediaId?.trim() ?? "";
+    const targetMid =
+      cleanSongId && !/^\d+$/.test(cleanSongId)
+        ? cleanSongId
+        : cleanMediaId && !/^\d+$/.test(cleanMediaId)
+          ? cleanMediaId
+          : cleanSongId;
+
     const cached = this.#lyricCache.get("public", targetMid);
     if (cached) return cached;
 
@@ -634,6 +709,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
           needNewCode: 0,
         },
         referer: "https://y.qq.com/",
+        signal: auth.signal,
       });
 
       const lines = mergeLyricTranslations(
@@ -659,15 +735,13 @@ export class QqMusicAdapter implements MusicProviderAdapter {
     limit: number,
     auth: ProviderAuthContext,
   ): Promise<SongCommentsPage> {
-    const safeId = songId.trim();
-    if (!/^\d+$/.test(safeId)) {
-      throw new AppError("VALIDATION_ERROR", "QQ 音乐评论需要数字 songid。");
-    }
+    const safeId = await this.#resolveNumericSongId(songId, auth);
     const safePage = Math.max(1, Math.floor(page) || 1);
     const safeLimit = Math.min(50, Math.max(5, Math.floor(limit) || 20));
     const cookieMap = this.#parseCookie(auth);
 
     const data = await this.#client.requestJson<{
+      code?: number;
       comment?: { commenttotal?: number; commentlist?: RawQqComment[] };
       hot_comment?: { commentlist?: RawQqComment[] };
     }>({
@@ -682,7 +756,12 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         format: "json",
       },
       cookieMap,
+      signal: auth.signal,
     });
+
+    if (data.code !== undefined && data.code !== 0) {
+      throw new AppError("UPSTREAM_ERROR", `获取 QQ 音乐评论失败 (code ${data.code})。`);
+    }
 
     const comments = (data.comment?.commentlist ?? [])
       .map(mapQqComment)
@@ -694,6 +773,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
             .filter((c): c is NonNullable<typeof c> => c !== null)
         : [];
     const total = Math.max(0, Number(data.comment?.commenttotal ?? 0) || comments.length);
+    const offset = (safePage - 1) * safeLimit;
 
     return {
       songId: safeId,
@@ -701,19 +781,20 @@ export class QqMusicAdapter implements MusicProviderAdapter {
       total,
       page: safePage,
       limit: safeLimit,
-      hasMore: comments.length >= safeLimit,
+      hasMore: comments.length > 0 && offset + comments.length < total,
       hotComments,
       comments,
     };
   }
 
   async setCommentLiked(
-    _songId: string,
+    songId: string,
     commentId: string,
     liked: boolean,
     auth: ProviderAuthContext,
   ): Promise<{ liked: boolean }> {
     const cookieMap = this.#requireCookie(auth);
+    const topId = await this.#resolveNumericSongId(songId, auth);
     const res = await this.#client.requestJson<{ code?: number; msg?: string }>({
       url: "https://c.y.qq.com/base/fcgi-bin/fcg_global_comment_praise_h5.fcg",
       query: {
@@ -722,14 +803,20 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         format: "json",
         inCharset: "utf8",
         outCharset: "utf-8",
+        biztype: 1,
+        topid: topId,
         cmd: liked ? 1 : 2,
         reqtype: 2,
         commentid: commentId.trim(),
       },
       cookieMap,
+      signal: auth.signal,
     });
-    if (Number(res.code ?? 0) !== 0) {
-      throw new AppError("UPSTREAM_ERROR", res.msg || "QQ 音乐评论点赞失败。");
+    if (res.code !== 0) {
+      throw new AppError(
+        "UPSTREAM_ERROR",
+        res.msg || `QQ 音乐评论点赞失败 (code ${res.code ?? "unknown"})。`,
+      );
     }
     return { liked };
   }
@@ -746,17 +833,31 @@ export class QqMusicAdapter implements MusicProviderAdapter {
     const specs = levelToQqSpecs(level);
     const guid = String(Math.floor(Math.random() * 10_000_000));
 
+    let gotValidUpstreamResponse = false;
+    let lastTransportError: AppError | null = null;
+    let firstTrialFallback: ResolvedAudio | null = null;
+
     for (const spec of specs) {
       const filename = `${spec.prefix}${mediaMid}${spec.ext ? `.${spec.ext}` : ""}`;
-      const res = await this.#client
-        .musicu<{
-          req_0?: {
-            data?: {
-              sip?: string[];
-              midurlinfo?: Array<{ purl?: string; songmid?: string }>;
-            };
+      let res: {
+        code?: number;
+        req_0?: {
+          code?: number;
+          data?: {
+            sip?: string[];
+            midurlinfo?: Array<{
+              purl?: string;
+              opi30surl?: string;
+              songmid?: string;
+              filename?: string;
+              result?: number;
+            }>;
           };
-        }>(
+        };
+      };
+
+      try {
+        res = await this.#client.musicu(
           {
             req_0: {
               module: "vkey.GetVkeyServer",
@@ -773,30 +874,69 @@ export class QqMusicAdapter implements MusicProviderAdapter {
             },
           },
           cookieMap,
-        )
-        .catch(() => null);
+          auth.signal,
+        );
+        gotValidUpstreamResponse = true;
+      } catch (error) {
+        if (error instanceof AppError && error.code === "UPSTREAM_TIMEOUT") {
+          lastTransportError = error;
+        } else if (error instanceof AppError) {
+          lastTransportError = error;
+        } else {
+          lastTransportError = new AppError("UPSTREAM_ERROR", "QQ 音乐音源解析请求失败。", { cause: error });
+        }
+        continue;
+      }
 
-      const purl = res?.req_0?.data?.midurlinfo?.[0]?.purl?.trim();
-      const sipList = res?.req_0?.data?.sip ?? [];
+      const info = res.req_0?.data?.midurlinfo?.[0];
+      const rawPurl = info?.purl?.trim() ?? "";
+      const rawTrialUrl = info?.opi30surl?.trim() ?? "";
+      const sipList = res.req_0?.data?.sip ?? [];
       const sip = sipList.find((s) => s.startsWith("https://")) ?? sipList[0];
-      if (!purl || !sip) continue;
 
-      const fullUrl = `${sip.replace(/^http:\/\//i, "https://")}${purl}`;
+      const effectivePurl = rawPurl || rawTrialUrl;
+      if (!effectivePurl || !sip) continue;
+
+      const isTrialUrl =
+        !rawPurl ||
+        (Boolean(rawTrialUrl) && rawPurl === rawTrialUrl) ||
+        /(?:^|\/)(?:O4M0|RS02)/i.test(effectivePurl) ||
+        (info?.result !== undefined && info.result !== 0);
+
+      const fullUrl = `${sip.replace(/^http:\/\//i, "https://")}${effectivePurl}`;
       const downgraded = isQualityDowngraded(level, {
         bitrate: spec.bitrate,
         format: spec.ext,
         level: spec.level,
       });
 
-      return {
+      const candidate: ResolvedAudio = {
         url: fullUrl,
         format: spec.ext,
         bitrate: spec.bitrate,
         level: spec.level,
         durationSeconds: target.durationSeconds ?? null,
-        trial: false,
+        trial: isTrialUrl,
         downgraded,
       };
+
+      if (isTrialUrl) {
+        if (!firstTrialFallback) {
+          firstTrialFallback = candidate;
+        }
+        continue;
+      }
+
+      return candidate;
+    }
+
+    if (firstTrialFallback) {
+      return firstTrialFallback;
+    }
+
+    // A12: Distinguish upstream transport failures (503/timeout) from genuine copyright unavailability
+    if (!gotValidUpstreamResponse && lastTransportError) {
+      throw lastTransportError;
     }
 
     throw new AppError(
@@ -808,10 +948,11 @@ export class QqMusicAdapter implements MusicProviderAdapter {
   async getRecommendedPlaylists(auth: ProviderAuthContext, limit = 10): Promise<PlaylistSummary[]> {
     const safeLimit = Math.min(30, Math.max(1, limit));
     const cacheKey = `rec:${safeLimit}`;
-    const cached = this.#recommendedPlaylistsCache.get("public", cacheKey);
+    const cookieMap = this.#parseCookie(auth);
+    const scope = this.#cacheScope(auth, cookieMap);
+    const cached = this.#recommendedPlaylistsCache.get(scope, cacheKey);
     if (cached) return cached;
 
-    const cookieMap = this.#parseCookie(auth);
     const res = await this.#client.musicu<{
       rec?: {
         data?: {
@@ -832,6 +973,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         },
       },
       cookieMap,
+      auth.signal,
     );
 
     const playlists: PlaylistSummary[] = (res.rec?.data?.grids ?? [])
@@ -847,15 +989,16 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         owned: false,
       }));
 
-    this.#recommendedPlaylistsCache.set("public", cacheKey, playlists);
+    this.#recommendedPlaylistsCache.set(scope, cacheKey, playlists);
     return playlists;
   }
 
   async getCharts(auth: ProviderAuthContext): Promise<ChartSummary[]> {
-    const cached = this.#chartsCache.get("public", "charts");
+    const cookieMap = this.#parseCookie(auth);
+    const scope = this.#cacheScope(auth, cookieMap);
+    const cached = this.#chartsCache.get(scope, "charts");
     if (cached) return cached;
 
-    const cookieMap = this.#parseCookie(auth);
     const res = await this.#client.musicu<{
       charts?: {
         data?: {
@@ -882,6 +1025,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         },
       },
       cookieMap,
+      auth.signal,
     );
 
     const seen = new Set<string>();
@@ -908,7 +1052,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
     }
 
     const capped = list.slice(0, 36);
-    this.#chartsCache.set("public", "charts", capped);
+    this.#chartsCache.set(scope, "charts", capped);
     return capped;
   }
 
@@ -918,10 +1062,11 @@ export class QqMusicAdapter implements MusicProviderAdapter {
       throw new AppError("VALIDATION_ERROR", "非法的 QQ 音乐榜单 ID。");
     }
 
-    const cached = this.#chartDetailCache.get("public", String(topId));
+    const cookieMap = this.#parseCookie(auth);
+    const scope = this.#cacheScope(auth, cookieMap);
+    const cached = this.#chartDetailCache.get(scope, String(topId));
     if (cached) return cached;
 
-    const cookieMap = this.#parseCookie(auth);
     const res = await this.#client.musicu<{
       detail?: {
         data?: {
@@ -945,6 +1090,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         },
       },
       cookieMap,
+      auth.signal,
     );
 
     const info = res.detail?.data?.data;
@@ -964,7 +1110,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
       songs,
     };
 
-    this.#chartDetailCache.set("public", String(topId), result);
+    this.#chartDetailCache.set(scope, String(topId), result);
     return result;
   }
 
@@ -974,10 +1120,11 @@ export class QqMusicAdapter implements MusicProviderAdapter {
       throw new AppError("VALIDATION_ERROR", "缺少 QQ 音乐歌手 ID。");
     }
 
-    const cached = this.#artistCache.get("public", singerMid);
+    const cookieMap = this.#parseCookie(auth);
+    const scope = this.#cacheScope(auth, cookieMap);
+    const cached = this.#artistCache.get(scope, singerMid);
     if (cached) return cached;
 
-    const cookieMap = this.#parseCookie(auth);
     const res = await this.#client.musicu<{
       singerInfo?: {
         data?: {
@@ -1032,6 +1179,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         },
       },
       cookieMap,
+      auth.signal,
     );
 
     const info = res.singerInfo?.data?.singer_list?.[0];
@@ -1070,7 +1218,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
       albums,
     };
 
-    this.#artistCache.set("public", singerMid, result);
+    this.#artistCache.set(scope, singerMid, result);
     return result;
   }
 
@@ -1080,10 +1228,11 @@ export class QqMusicAdapter implements MusicProviderAdapter {
       throw new AppError("VALIDATION_ERROR", "缺少 QQ 音乐专辑 ID。");
     }
 
-    const cached = this.#albumCache.get("public", albumMid);
+    const cookieMap = this.#parseCookie(auth);
+    const scope = this.#cacheScope(auth, cookieMap);
+    const cached = this.#albumCache.get(scope, albumMid);
     if (cached) return cached;
 
-    const cookieMap = this.#parseCookie(auth);
     const res = await this.#client.musicu<{
       detail?: {
         data?: {
@@ -1117,6 +1266,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         },
       },
       cookieMap,
+      auth.signal,
     );
 
     const basic = res.detail?.data?.basicInfo;
@@ -1145,7 +1295,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
       songs,
     };
 
-    this.#albumCache.set("public", albumMid, result);
+    this.#albumCache.set(scope, albumMid, result);
     return result;
   }
 

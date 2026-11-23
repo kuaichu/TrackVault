@@ -123,6 +123,12 @@ export function DownloadsPage() {
                       </a>
                     )}
 
+                    {job.artifactExpired && !job.downloadReady && !safeDirectUrl && (
+                      <span className="inline-flex items-center rounded-lg bg-[var(--tv-surface)] px-2.5 py-1.5 text-xs text-[var(--tv-text-subtle)]">
+                        临时文件已过期
+                      </span>
+                    )}
+
                     {safeDirectUrl && (
                       <a
                         href={safeDirectUrl}

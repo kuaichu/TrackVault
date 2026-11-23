@@ -14,7 +14,12 @@ export interface SafeFetchOptions {
   allowedHostSuffixes: readonly string[];
   allowHttp?: boolean;
   maxRedirects?: number;
+  /** "follow" (default) follows validated redirects up to maxRedirects; "manual" returns the 3xx response directly. */
+  redirectMode?: "follow" | "manual";
+  /** Timeout for DNS + connect + receiving response headers (ms). */
   timeoutMs?: number;
+  /** Max idle gap between response body chunks (ms). Active streams reset this timer on every chunk. */
+  idleTimeoutMs?: number;
   signal?: AbortSignal;
   /** If true, drops Cookie/Authorization headers when redirecting to a different host. */
   stripSensitiveHeadersOnHostChange?: boolean;
@@ -25,6 +30,7 @@ export interface SafeBufferResult {
   contentType: string;
   finalUrl: string;
   status: number;
+  headers: Headers;
 }
 
 interface PinnedAddress {
@@ -165,6 +171,75 @@ export function matchesHostSuffixes(hostname: string, suffixes: readonly string[
   return suffixes.some((suffix) => {
     const clean = suffix.trim().toLowerCase().replace(/^\./, "");
     return normalized === clean || normalized.endsWith(`.${clean}`);
+  });
+}
+
+function createTimeoutError(message: string): Error {
+  const err = new Error(message);
+  err.name = "TimeoutError";
+  return err;
+}
+
+function wrapBodyWithIdleTimeout(
+  body: ReadableStream<Uint8Array>,
+  idleTimeoutMs: number,
+  onIdleTimeout: (err: Error) => void,
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  let timer: NodeJS.Timeout | null = null;
+  const clearTimer = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      let timeoutError: Error | null = null;
+      const readPromise = reader.read();
+      const timeoutPromise = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          const err = createTimeoutError("上游音频或数据流读取空闲超时。");
+          timeoutError = err;
+          onIdleTimeout(err);
+          reject(err);
+          void reader.cancel(err).catch(() => undefined);
+        }, idleTimeoutMs);
+        timer.unref?.();
+      });
+
+      try {
+        const result = await Promise.race([readPromise, timeoutPromise]);
+        clearTimer();
+        if (timeoutError) {
+          throw timeoutError;
+        }
+        if (result.done) {
+          reader.releaseLock();
+          controller.close();
+          return;
+        }
+        if (result.value) {
+          controller.enqueue(result.value);
+        }
+      } catch (err) {
+        clearTimer();
+        if (!timeoutError) {
+          reader.releaseLock();
+        }
+        controller.error(timeoutError ?? err);
+      }
+    },
+    async cancel(reason) {
+      clearTimer();
+      await reader.cancel(reason).catch(() => undefined);
+      try {
+        reader.releaseLock();
+      } catch {
+        // already released
+      }
+    },
   });
 }
 
@@ -393,75 +468,115 @@ export class SafeHttpClient {
     rawUrl: string,
     options: SafeFetchOptions,
   ): Promise<{ response: Response; finalUrl: string }> {
+    const redirectMode = options.redirectMode ?? "follow";
     const maxRedirects = options.maxRedirects ?? 4;
     const timeoutMs = options.timeoutMs ?? this.#defaultTimeoutMs;
-    const timeoutSignal = AbortSignal.timeout(timeoutMs);
-    const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+    const idleTimeoutMs = options.idleTimeoutMs ?? timeoutMs;
+
+    // Separate header/connect timeout from body idle timeout (J03) so active streams are never cut off
+    const headerTimeoutController = new AbortController();
+    let headerTimer: NodeJS.Timeout | null = setTimeout(() => {
+      headerTimeoutController.abort(createTimeoutError("上游连接或响应头超时。"));
+    }, timeoutMs);
+    headerTimer.unref?.();
+    const clearHeaderTimer = () => {
+      if (headerTimer) {
+        clearTimeout(headerTimer);
+        headerTimer = null;
+      }
+    };
+
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, headerTimeoutController.signal])
+      : headerTimeoutController.signal;
 
     let currentUrl = rawUrl;
     const headers = new Headers(options.headers ?? {});
     let previousHost: string | null = null;
 
-    for (let hop = 0; hop <= maxRedirects; hop += 1) {
-      const { safeUrl, pinnedAddresses } = await this.#assertSafeTarget(currentUrl, options);
+    try {
+      for (let hop = 0; hop <= maxRedirects; hop += 1) {
+        const { safeUrl, pinnedAddresses } = await this.#assertSafeTarget(currentUrl, options);
 
-      if (
-        options.stripSensitiveHeadersOnHostChange !== false &&
-        previousHost &&
-        previousHost !== safeUrl.hostname.toLowerCase()
-      ) {
-        headers.delete("cookie");
-        headers.delete("authorization");
-      }
-      previousHost = safeUrl.hostname.toLowerCase();
-
-      const hopMethod = hop === 0 ? (options.method ?? "GET") : "GET";
-      const hopBody = hop === 0 ? options.body : undefined;
-
-      let response: Response;
-      try {
-        if (this.#customFetchImpl) {
-          response = await this.#customFetchImpl(safeUrl.toString(), {
-            method: hopMethod,
-            headers,
-            body: hopBody,
-            redirect: "manual",
-            signal,
-          });
-        } else {
-          response = await this.#performPinnedRequest(
-            safeUrl,
-            hopMethod,
-            headers,
-            hopBody,
-            signal,
-            pinnedAddresses,
-          );
+        if (
+          options.stripSensitiveHeadersOnHostChange !== false &&
+          previousHost &&
+          previousHost !== safeUrl.hostname.toLowerCase()
+        ) {
+          headers.delete("cookie");
+          headers.delete("authorization");
         }
-      } catch (error) {
-        if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-          throw new AppError("UPSTREAM_TIMEOUT", "上游请求超时或已取消。", { cause: error });
-        }
-        throw new AppError("UPSTREAM_ERROR", "上游网络请求失败。", { cause: error });
-      }
+        previousHost = safeUrl.hostname.toLowerCase();
 
-      const isRedirect = response.status >= 300 && response.status < 400;
-      const location = response.headers.get("location");
-      if (isRedirect && location) {
-        if (hop >= maxRedirects) {
+        const hopMethod = hop === 0 ? (options.method ?? "GET") : "GET";
+        const hopBody = hop === 0 ? options.body : undefined;
+
+        let response: Response;
+        try {
+          if (this.#customFetchImpl) {
+            response = await this.#customFetchImpl(safeUrl.toString(), {
+              method: hopMethod,
+              headers,
+              body: hopBody,
+              redirect: "manual",
+              signal,
+            });
+          } else {
+            response = await this.#performPinnedRequest(
+              safeUrl,
+              hopMethod,
+              headers,
+              hopBody,
+              signal,
+              pinnedAddresses,
+            );
+          }
+        } catch (error) {
+          if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+            throw new AppError("UPSTREAM_TIMEOUT", "上游请求超时或已取消。", { cause: error });
+          }
+          throw new AppError("UPSTREAM_ERROR", "上游网络请求失败。", { cause: error });
+        }
+
+        const isRedirect = response.status >= 300 && response.status < 400;
+        const location = response.headers.get("location");
+        if (isRedirect && location) {
+          if (redirectMode === "manual") {
+            clearHeaderTimer();
+            return { response, finalUrl: safeUrl.toString() };
+          }
+          if (hop >= maxRedirects) {
+            await response.body?.cancel().catch(() => undefined);
+            throw new AppError("UPSTREAM_ERROR", "外部地址重定向次数过多。");
+          }
+          // Cancel redirect response body so sockets are released immediately
           await response.body?.cancel().catch(() => undefined);
-          throw new AppError("UPSTREAM_ERROR", "外部地址重定向次数过多。");
+          currentUrl = new URL(location, safeUrl).toString();
+          continue;
         }
-        // Cancel redirect response body so sockets are released immediately
-        await response.body?.cancel().catch(() => undefined);
-        currentUrl = new URL(location, safeUrl).toString();
-        continue;
+
+        // Response headers arrived: disarm connect/header timer and guard body reads with per-chunk idle timeout
+        clearHeaderTimer();
+        if (response.body && idleTimeoutMs > 0) {
+          const guardedBody = wrapBodyWithIdleTimeout(response.body, idleTimeoutMs, (err) => {
+            headerTimeoutController.abort(err);
+          });
+          const guardedResponse = new Response(guardedBody, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          });
+          return { response: guardedResponse, finalUrl: safeUrl.toString() };
+        }
+
+        return { response, finalUrl: safeUrl.toString() };
       }
 
-      return { response, finalUrl: safeUrl.toString() };
+      throw new AppError("UPSTREAM_ERROR", "外部请求超过最大跳转次数。");
+    } catch (error) {
+      clearHeaderTimer();
+      throw error;
     }
-
-    throw new AppError("UPSTREAM_ERROR", "外部请求超过最大跳转次数。");
   }
 
   /**
@@ -494,7 +609,13 @@ export class SafeHttpClient {
     }
 
     if (!response.body) {
-      return { bytes: new Uint8Array(), contentType, finalUrl, status: response.status };
+      return {
+        bytes: new Uint8Array(),
+        contentType,
+        finalUrl,
+        status: response.status,
+        headers: response.headers,
+      };
     }
 
     const reader = response.body.getReader();
@@ -530,6 +651,6 @@ export class SafeHttpClient {
       offset += chunk.byteLength;
     }
 
-    return { bytes: output, contentType, finalUrl, status: response.status };
+    return { bytes: output, contentType, finalUrl, status: response.status, headers: response.headers };
   }
 }

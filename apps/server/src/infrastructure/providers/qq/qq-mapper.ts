@@ -6,7 +6,7 @@ import {
   normalizeCoverUrl,
 } from "#shared";
 import { evaluateQqAvailability } from "../../../domain/policies/song-availability.js";
-import { formatDurationSeconds, formatNeteaseTime } from "../netease/netease-mapper.js";
+import { formatDurationSeconds, formatNeteaseTime, truncateCodePoints } from "../netease/netease-mapper.js";
 
 export interface RawQqSinger {
   id?: number | string;
@@ -67,20 +67,24 @@ export function mapQqSong(raw: RawQqSong): Song | null {
   const songMid = (raw.mid ?? raw.songmid ?? "").trim();
   const numericId = raw.id ?? raw.songid;
   const id = songMid || (numericId !== undefined ? String(numericId).trim() : "");
-  const title = (raw.title ?? raw.name ?? raw.songname ?? "").trim();
-  if (!id || !title) return null;
+  const rawTitle = (raw.title ?? raw.name ?? raw.songname ?? "").trim();
+  if (!id || !rawTitle) return null;
+  const title = truncateCodePoints(rawTitle, 500);
 
   const artists = (raw.singer ?? [])
     .slice(0, 100)
     .map((s) => ({
       id: s.mid || (s.id !== undefined ? String(s.id) : undefined),
-      name: s.name?.trim() ?? "",
+      name: truncateCodePoints(s.name?.trim() ?? "", 200),
     }))
     .filter((a) => Boolean(a.name));
 
   const fullArtistText = artists.map((a) => a.name).join(" / ") || "未知歌手";
-  const artistText = fullArtistText.length > 900 ? `${fullArtistText.slice(0, 897)}...` : fullArtistText;
-  const albumName = (raw.album?.title ?? raw.album?.name ?? raw.albumname ?? "").trim() || "未知专辑";
+  const artistText = truncateCodePoints(fullArtistText, 900);
+  const albumName = truncateCodePoints(
+    (raw.album?.title ?? raw.album?.name ?? raw.albumname ?? "").trim() || "未知专辑",
+    500,
+  );
   const albumMid = raw.album?.mid ?? raw.albummid;
   const durationSeconds = Math.max(0, Number(raw.interval ?? 0) || 0);
   const availableQualities = deriveQqQualities(raw);

@@ -83,14 +83,27 @@ export function registerTransferAndJobRoutes(
     const actor = requireActor(request);
     const { id } = z.object({ id: z.string().min(1) }).parse(request.params);
     const { filePath, downloadFilename } = await jobs.resolveOwnedArtifactFile(actor, id);
-    const stat = await fs.promises.stat(filePath);
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.stat(filePath);
+    } catch {
+      throw new AppError("NOT_FOUND", "下载文件已过期清理，请重新下载。");
+    }
+
+    const readStream = fs.createReadStream(filePath);
+    readStream.on("error", () => {
+      if (!reply.raw.headersSent) {
+        reply.raw.statusCode = 404;
+      }
+      reply.raw.end();
+    });
 
     return reply
       .header("Content-Type", "application/octet-stream")
       .header("Content-Length", String(stat.size))
       .header("Content-Disposition", buildContentDisposition(downloadFilename))
       .header("Cache-Control", "no-store")
-      .send(fs.createReadStream(filePath));
+      .send(readStream);
   });
 
   // --- Real-time SSE Job Stream (replaces 1.2s permanent polling) ---

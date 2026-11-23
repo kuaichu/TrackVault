@@ -1,28 +1,65 @@
-import { concatBytes, getId3v2TagLength, writeUint32BigEndian } from "./bytes.js";
+import {
+  concatBytes,
+  getAllId3v2TagsLength,
+  getId3v2TagLength,
+  readUint32BigEndian,
+  writeUint32BigEndian,
+} from "./bytes.js";
 import type { AudioCoverData, AudioTagMetadata } from "./flac.js";
 
 const textEncoder = new TextEncoder();
+const textDecoderUtf8 = new TextDecoder("utf-8", { fatal: false });
+const textDecoderUtf16Le = new TextDecoder("utf-16le", { fatal: false });
+const textDecoderUtf16Be = new TextDecoder("utf-16be", { fatal: false });
+const textDecoderLatin1 = new TextDecoder("latin1", { fatal: false });
 
 function writeSyncsafeUint32(value: number): Uint8Array {
   return new Uint8Array([(value >>> 21) & 0x7f, (value >>> 14) & 0x7f, (value >>> 7) & 0x7f, value & 0x7f]);
 }
 
-function isMpegAudioFrameSync(bytes: Uint8Array, offset: number): boolean {
-  if (bytes.length < offset + 2) return false;
+function readSyncsafeUint32(bytes: Uint8Array, offset: number): number | null {
   const b0 = bytes[offset] ?? 0;
   const b1 = bytes[offset + 1] ?? 0;
-  // 11-bit sync word (0xFFE0), MPEG version not reserved (bits 4..3 != 01), layer not reserved (bits 2..1 != 00)
-  return b0 === 0xff && (b1 & 0xe0) === 0xe0 && (b1 & 0x18) !== 0x08 && (b1 & 0x06) !== 0x00;
+  const b2 = bytes[offset + 2] ?? 0;
+  const b3 = bytes[offset + 3] ?? 0;
+  if (b0 > 0x7f || b1 > 0x7f || b2 > 0x7f || b3 > 0x7f) return null;
+  return (b0 << 21) | (b1 << 14) | (b2 << 7) | b3;
+}
+
+function isMpegAudioFrameSync(bytes: Uint8Array, offset: number): boolean {
+  if (bytes.length < offset + 4) return false;
+  const b0 = bytes[offset] ?? 0;
+  const b1 = bytes[offset + 1] ?? 0;
+  const b2 = bytes[offset + 2] ?? 0;
+  // 4-byte MPEG frame header check:
+  // - 11-bit sync word (0xFFE0)
+  // - MPEG version not reserved (bits 4..3 != 01)
+  // - Layer not reserved (bits 2..1 != 00)
+  // - Bitrate index not 0xF (bad/invalid)
+  // - Sample rate index not 0x3 (reserved)
+  return (
+    b0 === 0xff &&
+    (b1 & 0xe0) === 0xe0 &&
+    (b1 & 0x18) !== 0x08 &&
+    (b1 & 0x06) !== 0x00 &&
+    (b2 & 0xf0) !== 0xf0 &&
+    (b2 & 0x0c) !== 0x0c
+  );
 }
 
 export function isMp3Bytes(input: Uint8Array): boolean {
-  const id3v2Length = getId3v2TagLength(input);
-  const offset = id3v2Length > 0 ? id3v2Length : 0;
-  return isMpegAudioFrameSync(input, offset);
+  const id3v2Length = getAllId3v2TagsLength(input);
+  let pos = id3v2Length;
+  // Allow leading zero/silence padding bytes before the first MPEG audio frame
+  const maxScan = Math.min(input.length - 4, pos + 4096);
+  while (pos <= maxScan && input[pos] === 0x00) {
+    pos += 1;
+  }
+  return isMpegAudioFrameSync(input, pos);
 }
 
 function stripExistingId3Tags(bytes: Uint8Array): Uint8Array {
-  const id3v2Length = getId3v2TagLength(bytes);
+  const id3v2Length = getAllId3v2TagsLength(bytes);
   const withoutId3v2 = id3v2Length > 0 ? bytes.subarray(id3v2Length) : bytes;
   const hasId3v1 =
     withoutId3v2.length >= 128 &&
@@ -33,15 +70,132 @@ function stripExistingId3Tags(bytes: Uint8Array): Uint8Array {
   return hasId3v1 ? withoutId3v2.subarray(0, withoutId3v2.length - 128) : withoutId3v2;
 }
 
+function deunsynchronize(bytes: Uint8Array): Uint8Array {
+  const out: number[] = [];
+  for (let i = 0; i < bytes.length; i += 1) {
+    const b = bytes[i] ?? 0;
+    out.push(b);
+    if (b === 0xff && bytes[i + 1] === 0x00) {
+      i += 1;
+    }
+  }
+  return new Uint8Array(out);
+}
+
+function decodeTxxxDescription(data: Uint8Array): string {
+  if (data.length < 2) return "";
+  const encoding = data[0] ?? 0;
+  if (encoding === 0 || encoding === 3) {
+    let end = 1;
+    while (end < data.length && data[end] !== 0x00) end += 1;
+    const slice = data.subarray(1, end);
+    return (encoding === 3 ? textDecoderUtf8 : textDecoderLatin1).decode(slice).trim();
+  }
+  if (encoding === 1 || encoding === 2) {
+    let end = 1;
+    while (end + 1 < data.length && !(data[end] === 0x00 && data[end + 1] === 0x00)) {
+      end += 2;
+    }
+    const slice = data.subarray(1, end);
+    if (encoding === 1 && slice.length >= 2) {
+      if (slice[0] === 0xfe && slice[1] === 0xff) {
+        return textDecoderUtf16Be.decode(slice.subarray(2)).trim();
+      }
+      if (slice[0] === 0xff && slice[1] === 0xfe) {
+        return textDecoderUtf16Le.decode(slice.subarray(2)).trim();
+      }
+    }
+    return (encoding === 2 ? textDecoderUtf16Be : textDecoderUtf16Le).decode(slice).trim();
+  }
+  return "";
+}
+
+interface ParsedId3Frame {
+  id: string;
+  txxxDesc?: string;
+  data: Uint8Array;
+}
+
+function parseExistingId3v2Frames(bytes: Uint8Array): ParsedId3Frame[] {
+  const frames: ParsedId3Frame[] = [];
+  let tagStart = 0;
+
+  for (let tagIdx = 0; tagIdx < 16; tagIdx += 1) {
+    const totalLen = getId3v2TagLength(bytes, tagStart);
+    if (totalLen <= 0) break;
+
+    const major = bytes[tagStart + 3] ?? 0;
+    const flags = bytes[tagStart + 5] ?? 0;
+    const hasFooter = major === 4 && Boolean(flags & 0x10);
+    const bodyEnd = tagStart + totalLen - (hasFooter ? 10 : 0);
+
+    if (major === 3 || major === 4) {
+      let body = bytes.subarray(tagStart + 10, bodyEnd);
+      if (major === 3 && Boolean(flags & 0x80)) {
+        body = deunsynchronize(body);
+      }
+
+      let offset = 0;
+      if (flags & 0x40) {
+        if (offset + 4 <= body.length) {
+          const extSize =
+            major === 4 ? (readSyncsafeUint32(body, offset) ?? 0) : readUint32BigEndian(body, offset);
+          offset += major === 4 ? extSize : 4 + extSize;
+        }
+      }
+
+      while (offset + 10 <= body.length) {
+        const b0 = body[offset] ?? 0;
+        if (b0 === 0x00) break; // Padding
+        const id = textDecoderLatin1.decode(body.subarray(offset, offset + 4));
+        if (!/^[A-Z0-9]{4}$/.test(id)) break;
+
+        const rawSize =
+          major === 4 ? readSyncsafeUint32(body, offset + 4) : readUint32BigEndian(body, offset + 4);
+        if (rawSize === null || rawSize <= 0) break;
+        const frameFlags1 = body[offset + 9] ?? 0;
+        offset += 10;
+        if (offset + rawSize > body.length) break;
+
+        let frameData = body.subarray(offset, offset + rawSize);
+        offset += rawSize;
+
+        // Skip compressed/encrypted frames that cannot be safely re-emitted as plain ID3v2.3
+        if (major === 3 && (frameFlags1 & 0xc0) !== 0) continue;
+        if (major === 4 && (frameFlags1 & 0x0c) !== 0) continue;
+
+        if (major === 4) {
+          if (frameFlags1 & 0x02) {
+            frameData = deunsynchronize(frameData);
+          }
+          if (frameFlags1 & 0x01) {
+            if (frameData.length <= 4) continue;
+            frameData = frameData.subarray(4);
+          }
+        }
+
+        const txxxDesc = id === "TXXX" ? decodeTxxxDescription(frameData).toUpperCase() : undefined;
+        frames.push({ id, txxxDesc, data: frameData });
+      }
+    }
+
+    tagStart += totalLen;
+  }
+
+  return frames;
+}
+
 function encodeUtf16Le(text: string, withBom = false): Uint8Array {
-  const output = new Uint8Array((withBom ? 2 : 0) + text.length * 2);
+  const nativeFn = (text as { toWellFormed?: () => string }).toWellFormed;
+  const safeText = typeof nativeFn === "function" ? nativeFn.call(text) : text;
+  const output = new Uint8Array((withBom ? 2 : 0) + safeText.length * 2);
   let offset = 0;
   if (withBom) {
     output[offset++] = 0xff;
     output[offset++] = 0xfe;
   }
-  for (let i = 0; i < text.length; i += 1) {
-    const code = text.charCodeAt(i);
+  for (let i = 0; i < safeText.length; i += 1) {
+    const code = safeText.charCodeAt(i);
     output[offset++] = code & 0xff;
     output[offset++] = (code >>> 8) & 0xff;
   }
@@ -116,8 +270,37 @@ export function injectMp3Metadata(
   }
 
   const artistText = meta.artists?.length ? meta.artists.map((a) => a.name).join("; ") : meta.artist;
+  const hasTitle = Boolean(meta.title?.trim());
+  const hasArtist = Boolean(artistText?.trim());
+  const hasAlbum = Boolean(meta.album?.trim());
+  const hasAlbumArtist = Boolean(meta.artist?.trim());
+  const hasSource = Boolean(meta.source?.trim());
+  const hasLyrics = Boolean(lyricsText.trim());
+  const hasCover = Boolean(cover && cover.bytes.length > 0);
 
-  const frames = [
+  const replacedIds = new Set<string>();
+  if (hasTitle) replacedIds.add("TIT2");
+  if (hasArtist) replacedIds.add("TPE1");
+  if (hasAlbum) replacedIds.add("TALB");
+  if (hasAlbumArtist) replacedIds.add("TPE2");
+  if (hasLyrics) replacedIds.add("USLT");
+  if (hasCover) replacedIds.add("APIC");
+
+  const replacedTxxx = new Set<string>();
+  if (hasSource) replacedTxxx.add("TRACKVAULT_SOURCE");
+  if (hasLyrics) replacedTxxx.add("LYRICS");
+
+  // Preserve existing frames that are not being replaced (original cover, lyrics, track number, etc.)
+  const existingFrames = parseExistingId3v2Frames(input)
+    .filter((frame) => {
+      if (frame.id === "TXXX") {
+        return !frame.txxxDesc || !replacedTxxx.has(frame.txxxDesc);
+      }
+      return !replacedIds.has(frame.id);
+    })
+    .map((frame) => buildFrame(frame.id, frame.data));
+
+  const newFrames = [
     buildTextFrame("TIT2", meta.title),
     buildTextFrame("TPE1", artistText),
     buildTextFrame("TALB", meta.album),
@@ -128,6 +311,7 @@ export function injectMp3Metadata(
     buildPictureFrame(cover),
   ].filter((frame): frame is Uint8Array => frame !== null);
 
+  const frames = [...newFrames, ...existingFrames];
   const body = concatBytes(frames);
   if (body.length > 0x0fffffff) {
     throw new Error("ID3 tag body exceeds syncsafe limit");

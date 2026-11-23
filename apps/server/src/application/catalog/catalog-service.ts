@@ -5,6 +5,7 @@ import type {
   ArtistSummary,
   ChartDetail,
   ChartSummary,
+  CloudTracksPage,
   EntitySearchResult,
   EntitySearchType,
   MusicPlatform,
@@ -40,13 +41,51 @@ export class CatalogService {
     this.#userState = deps.userState;
   }
 
-  #buildAuth(actor: ActorContext, platform: MusicPlatform): ProviderAuthContext {
+  /**
+   * Strictly personal auth context — NEVER falls back to admin/system credentials.
+   * Used for private reads (user playlists, cloud disk, FM, daily recommend, likes) and all write operations.
+   */
+  #buildPersonalAuth(actor: ActorContext, platform: MusicPlatform): ProviderAuthContext {
     const binding = this.#credentials.getBindingView(actor.userId, platform);
     return {
       platform,
       cookie: this.#credentials.getDecryptedCookie(actor.userId, platform),
       scopeKey: actor.userId,
       accountUid: binding.accountUid,
+    };
+  }
+
+  /**
+   * C015: Read-only public catalog auth context.
+   * Allows trustedFallback members without their own binding to use system fallback ONLY for public read queries.
+   */
+  #buildPublicReadAuth(actor: ActorContext, platform: MusicPlatform): ProviderAuthContext {
+    const personalCookie = this.#credentials.getDecryptedCookie(actor.userId, platform);
+    if (personalCookie) {
+      const binding = this.#credentials.getBindingView(actor.userId, platform);
+      return {
+        platform,
+        cookie: personalCookie,
+        scopeKey: actor.userId,
+        accountUid: binding.accountUid,
+      };
+    }
+    if (actor.trustedFallback) {
+      const fallbackCookie = this.#credentials.getDecryptedSystemFallbackCookie(platform);
+      if (fallbackCookie) {
+        return {
+          platform,
+          cookie: fallbackCookie,
+          scopeKey: "system-fallback",
+          accountUid: null,
+        };
+      }
+    }
+    return {
+      platform,
+      cookie: null,
+      scopeKey: actor.userId,
+      accountUid: null,
     };
   }
 
@@ -59,14 +98,16 @@ export class CatalogService {
     if (!keyword) return { results: [], warnings: [] };
 
     if (mode === "netease" || mode === "qq") {
-      const results = await this.#providers.get(mode).searchTracks(keyword, this.#buildAuth(actor, mode));
+      const results = await this.#providers
+        .get(mode)
+        .searchTracks(keyword, this.#buildPublicReadAuth(actor, mode));
       return { results, warnings: [] };
     }
 
     // Aggregate mode: query both in parallel, surface partial failure explicitly in warnings instead of silent swallow
     const [neteaseRes, qqRes] = await Promise.allSettled([
-      this.#providers.get("netease").searchTracks(keyword, this.#buildAuth(actor, "netease"), 20),
-      this.#providers.get("qq").searchTracks(keyword, this.#buildAuth(actor, "qq"), 20),
+      this.#providers.get("netease").searchTracks(keyword, this.#buildPublicReadAuth(actor, "netease"), 20),
+      this.#providers.get("qq").searchTracks(keyword, this.#buildPublicReadAuth(actor, "qq"), 20),
     ]);
 
     const warnings: string[] = [];
@@ -119,7 +160,7 @@ export class CatalogService {
           playlists: [] as PlaylistSummary[],
         };
       }
-      const res = await adapter.searchEntities(keyword, type, this.#buildAuth(actor, platform), 20);
+      const res = await adapter.searchEntities(keyword, type, this.#buildPublicReadAuth(actor, platform), 20);
       return {
         artists: res.artists ?? [],
         albums: res.albums ?? [],
@@ -177,13 +218,13 @@ export class CatalogService {
   async getRecommendedPlaylists(actor: ActorContext, platform: MusicPlatform): Promise<PlaylistSummary[]> {
     const adapter = this.#providers.get(platform);
     if (!adapter.getRecommendedPlaylists) return [];
-    return adapter.getRecommendedPlaylists(this.#buildAuth(actor, platform), 10);
+    return adapter.getRecommendedPlaylists(this.#buildPublicReadAuth(actor, platform), 10);
   }
 
   async getCharts(actor: ActorContext, platform: MusicPlatform): Promise<ChartSummary[]> {
     const adapter = this.#providers.get(platform);
     if (!adapter.getCharts) return [];
-    return adapter.getCharts(this.#buildAuth(actor, platform));
+    return adapter.getCharts(this.#buildPublicReadAuth(actor, platform));
   }
 
   async getChartDetail(actor: ActorContext, platform: MusicPlatform, chartId: string): Promise<ChartDetail> {
@@ -191,7 +232,7 @@ export class CatalogService {
     if (!adapter.getChartDetail) {
       throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持排行榜详情。`);
     }
-    return adapter.getChartDetail(chartId, this.#buildAuth(actor, platform));
+    return adapter.getChartDetail(chartId, this.#buildPublicReadAuth(actor, platform));
   }
 
   async getArtistDetail(
@@ -203,7 +244,7 @@ export class CatalogService {
     if (!adapter.getArtistDetail) {
       throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持歌手详情页。`);
     }
-    return adapter.getArtistDetail(artistId, this.#buildAuth(actor, platform));
+    return adapter.getArtistDetail(artistId, this.#buildPublicReadAuth(actor, platform));
   }
 
   async getAlbumDetail(actor: ActorContext, platform: MusicPlatform, albumId: string): Promise<AlbumDetail> {
@@ -211,7 +252,7 @@ export class CatalogService {
     if (!adapter.getAlbumDetail) {
       throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持专辑详情页。`);
     }
-    return adapter.getAlbumDetail(albumId, this.#buildAuth(actor, platform));
+    return adapter.getAlbumDetail(albumId, this.#buildPublicReadAuth(actor, platform));
   }
 
   async getPersonalFm(actor: ActorContext): Promise<Song[]> {
@@ -219,7 +260,7 @@ export class CatalogService {
     if (!adapter.getPersonalFm) {
       throw new AppError("FEATURE_UNSUPPORTED", "暂不支持私人 FM。");
     }
-    return adapter.getPersonalFm(this.#buildAuth(actor, "netease"));
+    return adapter.getPersonalFm(this.#buildPersonalAuth(actor, "netease"));
   }
 
   async createPlaylist(actor: ActorContext, platform: MusicPlatform, name: string, trackIds: string[] = []) {
@@ -227,19 +268,42 @@ export class CatalogService {
     if (!adapter.createPlaylistWithTracks) {
       throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持创建歌单。`);
     }
-    return adapter.createPlaylistWithTracks(name, trackIds, this.#buildAuth(actor, platform));
+    return adapter.createPlaylistWithTracks(name, trackIds, this.#buildPersonalAuth(actor, platform));
   }
 
   async getLikedSongIds(actor: ActorContext, platform: MusicPlatform): Promise<string[]> {
     const adapter = this.#providers.get(platform);
     if (!adapter.getLikedSongIds) return [];
-    return adapter.getLikedSongIds(this.#buildAuth(actor, platform));
+    return adapter.getLikedSongIds(this.#buildPersonalAuth(actor, platform));
   }
 
   async getDiscover(actor: ActorContext, platform?: MusicPlatform): Promise<Song[]> {
-    const resolved: MusicPlatform =
-      platform ?? (this.#userState.getSettings(actor.userId).providerMode === "qq" ? "qq" : "netease");
-    return this.#providers.get(resolved).getDiscoverTracks(this.#buildAuth(actor, resolved));
+    const mode = platform ?? this.#userState.getSettings(actor.userId).providerMode;
+    if (mode === "netease" || mode === "qq") {
+      return this.#providers.get(mode).getDiscoverTracks(this.#buildPublicReadAuth(actor, mode));
+    }
+
+    // C030: In aggregate mode, combine discover tracks from both Netease and QQ interleaved
+    const [neRes, qqRes] = await Promise.allSettled([
+      this.#providers.get("netease").getDiscoverTracks(this.#buildPublicReadAuth(actor, "netease")),
+      this.#providers.get("qq").getDiscoverTracks(this.#buildPublicReadAuth(actor, "qq")),
+    ]);
+
+    const neSongs = neRes.status === "fulfilled" ? neRes.value : [];
+    const qqSongs = qqRes.status === "fulfilled" ? qqRes.value : [];
+    if (neRes.status === "rejected" && qqRes.status === "rejected") {
+      throw neRes.reason;
+    }
+
+    const merged: Song[] = [];
+    const maxLen = Math.max(neSongs.length, qqSongs.length);
+    for (let i = 0; i < maxLen; i += 1) {
+      const n = neSongs[i];
+      const q = qqSongs[i];
+      if (n) merged.push(n);
+      if (q) merged.push(q);
+    }
+    return merged;
   }
 
   async getDailyRecommend(actor: ActorContext): Promise<Song[]> {
@@ -247,7 +311,7 @@ export class CatalogService {
     if (!adapter.getDailyRecommendTracks) {
       throw new AppError("FEATURE_UNSUPPORTED", "暂不支持每日推荐。");
     }
-    return adapter.getDailyRecommendTracks(this.#buildAuth(actor, "netease"));
+    return adapter.getDailyRecommendTracks(this.#buildPersonalAuth(actor, "netease"));
   }
 
   async getCloudTracks(actor: ActorContext): Promise<Song[]> {
@@ -255,11 +319,35 @@ export class CatalogService {
     if (!adapter.getCloudTracks) {
       throw new AppError("FEATURE_UNSUPPORTED", "暂不支持云盘音乐。");
     }
-    return adapter.getCloudTracks(this.#buildAuth(actor, "netease"));
+    return adapter.getCloudTracks(this.#buildPersonalAuth(actor, "netease"));
+  }
+
+  async getCloudTracksPage(
+    actor: ActorContext,
+    options?: { offset?: number; limit?: number },
+  ): Promise<CloudTracksPage> {
+    const adapter = this.#providers.get("netease");
+    if (adapter.getCloudTracksPage) {
+      return adapter.getCloudTracksPage(this.#buildPersonalAuth(actor, "netease"), options);
+    }
+    if (!adapter.getCloudTracks) {
+      throw new AppError("FEATURE_UNSUPPORTED", "暂不支持云盘音乐。");
+    }
+    const all = await adapter.getCloudTracks(this.#buildPersonalAuth(actor, "netease"));
+    const safeOffset = Math.max(0, Math.floor(options?.offset ?? 0) || 0);
+    const safeLimit = Math.min(200, Math.max(1, Math.floor(options?.limit ?? 100) || 100));
+    const slice = all.slice(safeOffset, safeOffset + safeLimit);
+    return {
+      songs: slice,
+      total: all.length,
+      offset: safeOffset,
+      limit: safeLimit,
+      hasMore: safeOffset + slice.length < all.length,
+    };
   }
 
   async getUserPlaylists(actor: ActorContext, platform: MusicPlatform): Promise<PlaylistSummary[]> {
-    return this.#providers.get(platform).getUserPlaylists(this.#buildAuth(actor, platform));
+    return this.#providers.get(platform).getUserPlaylists(this.#buildPersonalAuth(actor, platform));
   }
 
   async getPlaylistTracks(
@@ -270,7 +358,7 @@ export class CatalogService {
   ): Promise<PlaylistTracksPage> {
     return this.#providers
       .get(platform)
-      .getPlaylistTracks(playlistId, query, this.#buildAuth(actor, platform));
+      .getPlaylistTracks(playlistId, query, this.#buildPersonalAuth(actor, platform));
   }
 
   async addTracksToPlaylist(
@@ -283,7 +371,7 @@ export class CatalogService {
     if (!adapter.addTracksToPlaylist) {
       throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持向歌单添加歌曲。`);
     }
-    return adapter.addTracksToPlaylist(playlistId, trackIds, this.#buildAuth(actor, platform));
+    return adapter.addTracksToPlaylist(playlistId, trackIds, this.#buildPersonalAuth(actor, platform));
   }
 
   async removeTracksFromPlaylist(
@@ -296,7 +384,7 @@ export class CatalogService {
     if (!adapter.removeTracksFromPlaylist) {
       throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持从歌单移除歌曲。`);
     }
-    return adapter.removeTracksFromPlaylist(playlistId, trackIds, this.#buildAuth(actor, platform));
+    return adapter.removeTracksFromPlaylist(playlistId, trackIds, this.#buildPersonalAuth(actor, platform));
   }
 
   async getLyrics(
@@ -305,7 +393,9 @@ export class CatalogService {
     songId: string,
     mediaId?: string,
   ): Promise<SongLyrics> {
-    return this.#providers.get(platform).getLyrics(songId, mediaId, this.#buildAuth(actor, platform));
+    return this.#providers
+      .get(platform)
+      .getLyrics(songId, mediaId, this.#buildPublicReadAuth(actor, platform));
   }
 
   async getComments(
@@ -319,7 +409,7 @@ export class CatalogService {
     if (!adapter.getComments) {
       throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持评论读取。`);
     }
-    return adapter.getComments(songId, page, limit, this.#buildAuth(actor, platform));
+    return adapter.getComments(songId, page, limit, this.#buildPublicReadAuth(actor, platform));
   }
 
   async setCommentLiked(
@@ -333,13 +423,13 @@ export class CatalogService {
     if (!adapter.setCommentLiked) {
       throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持评论点赞。`);
     }
-    return adapter.setCommentLiked(songId, commentId, liked, this.#buildAuth(actor, platform));
+    return adapter.setCommentLiked(songId, commentId, liked, this.#buildPersonalAuth(actor, platform));
   }
 
   async isSongLiked(actor: ActorContext, platform: MusicPlatform, songId: string): Promise<boolean> {
     const adapter = this.#providers.get(platform);
     if (!adapter.isSongLiked) return false;
-    return adapter.isSongLiked(songId, this.#buildAuth(actor, platform));
+    return adapter.isSongLiked(songId, this.#buildPersonalAuth(actor, platform));
   }
 
   async toggleSongLike(
@@ -352,6 +442,6 @@ export class CatalogService {
     if (!adapter.toggleSongLike) {
       throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持红心收藏。`);
     }
-    return adapter.toggleSongLike(songId, liked, this.#buildAuth(actor, platform));
+    return adapter.toggleSongLike(songId, liked, this.#buildPersonalAuth(actor, platform));
   }
 }

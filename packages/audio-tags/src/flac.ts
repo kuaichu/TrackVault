@@ -1,4 +1,10 @@
-import { concatBytes, getId3v2TagLength, writeUint32BigEndian, writeUint32LittleEndian } from "./bytes.js";
+import {
+  concatBytes,
+  getAllId3v2TagsLength,
+  readUint32LittleEndian,
+  writeUint32BigEndian,
+  writeUint32LittleEndian,
+} from "./bytes.js";
 
 export interface AudioTagMetadata {
   title: string;
@@ -14,6 +20,8 @@ export interface AudioCoverData {
 }
 
 const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder("utf-8", { fatal: false });
+const MAX_FLAC_METADATA_BLOCK_BYTES = 0xffffff;
 
 function findFlacStartOffset(bytes: Uint8Array): number {
   const isFlacAt = (offset: number) =>
@@ -25,7 +33,7 @@ function findFlacStartOffset(bytes: Uint8Array): number {
 
   if (isFlacAt(0)) return 0;
 
-  const id3Length = getId3v2TagLength(bytes);
+  const id3Length = getAllId3v2TagsLength(bytes);
   if (id3Length > 0 && isFlacAt(id3Length)) {
     return id3Length;
   }
@@ -37,9 +45,50 @@ export function isFlacBytes(input: Uint8Array): boolean {
   return findFlacStartOffset(input) >= 0;
 }
 
-function buildVorbisCommentBlock(meta: AudioTagMetadata, lyricsText: string): Uint8Array {
+function parseExistingVorbisComments(data: Uint8Array | undefined): {
+  vendor: string;
+  entries: Array<{ key: string; raw: string }>;
+} {
+  if (!data || data.length < 8) {
+    return { vendor: "TrackVault", entries: [] };
+  }
+  let offset = 0;
+  const vendorLen = readUint32LittleEndian(data, offset);
+  offset += 4;
+  if (offset + vendorLen + 4 > data.length) {
+    return { vendor: "TrackVault", entries: [] };
+  }
+  const vendor = textDecoder.decode(data.subarray(offset, offset + vendorLen)) || "TrackVault";
+  offset += vendorLen;
+
+  const count = readUint32LittleEndian(data, offset);
+  offset += 4;
+  const entries: Array<{ key: string; raw: string }> = [];
+
+  for (let i = 0; i < count && offset + 4 <= data.length; i += 1) {
+    const len = readUint32LittleEndian(data, offset);
+    offset += 4;
+    if (offset + len > data.length) break;
+    const raw = textDecoder.decode(data.subarray(offset, offset + len));
+    offset += len;
+    const eq = raw.indexOf("=");
+    if (eq > 0) {
+      entries.push({ key: raw.slice(0, eq).toUpperCase(), raw });
+    }
+  }
+
+  return { vendor, entries };
+}
+
+function buildVorbisCommentBlock(
+  meta: AudioTagMetadata,
+  lyricsText: string,
+  existingData?: Uint8Array,
+): Uint8Array {
+  const existing = parseExistingVorbisComments(existingData);
   const artistText = meta.artists?.length ? meta.artists.map((a) => a.name).join("; ") : meta.artist;
-  const pairs: Array<[string, string]> = [
+
+  const replacements: Array<[string, string]> = [
     ["TITLE", meta.title],
     ["ARTIST", artistText],
     ["ALBUM", meta.album],
@@ -47,14 +96,20 @@ function buildVorbisCommentBlock(meta: AudioTagMetadata, lyricsText: string): Ui
     ["TRACKVAULT_SOURCE", meta.source],
   ];
   if (lyricsText.trim()) {
-    pairs.push(["LYRICS", lyricsText.trim()]);
+    replacements.push(["LYRICS", lyricsText.trim()]);
   }
 
-  const encodedComments = pairs
-    .filter(([, value]) => Boolean(value.trim()))
-    .map(([key, value]) => textEncoder.encode(`${key}=${value.trim()}`));
+  const activeReplacements = replacements.filter(([, value]) => Boolean(value.trim()));
+  const replacedKeys = new Set(activeReplacements.map(([key]) => key.toUpperCase()));
 
-  const vendor = textEncoder.encode("TrackVault");
+  const preservedComments = existing.entries
+    .filter((entry) => !replacedKeys.has(entry.key))
+    .map((entry) => textEncoder.encode(entry.raw));
+
+  const newComments = activeReplacements.map(([key, value]) => textEncoder.encode(`${key}=${value.trim()}`));
+  const encodedComments = [...preservedComments, ...newComments];
+
+  const vendor = textEncoder.encode(existing.vendor || "TrackVault");
   const chunks: Uint8Array[] = [
     writeUint32LittleEndian(vendor.length),
     vendor,
@@ -71,7 +126,7 @@ function buildFlacPictureBlock(cover: AudioCoverData | null): Uint8Array | null 
   if (!cover || cover.bytes.length === 0) return null;
   const mimeType = textEncoder.encode(cover.mimeType.split(";")[0]?.trim() || "image/jpeg");
   const description = new Uint8Array();
-  return concatBytes([
+  const block = concatBytes([
     writeUint32BigEndian(3), // Front cover
     writeUint32BigEndian(mimeType.length),
     mimeType,
@@ -84,10 +139,15 @@ function buildFlacPictureBlock(cover: AudioCoverData | null): Uint8Array | null 
     writeUint32BigEndian(cover.bytes.length),
     cover.bytes,
   ]);
+  // FLAC metadata blocks have a 24-bit length limit (16,777,215 bytes); skip oversized covers gracefully
+  if (block.length > MAX_FLAC_METADATA_BLOCK_BYTES) {
+    return null;
+  }
+  return block;
 }
 
 function buildFlacMetadataBlock(type: number, data: Uint8Array, isLast: boolean): Uint8Array {
-  if (data.length > 0xffffff) {
+  if (data.length > MAX_FLAC_METADATA_BLOCK_BYTES) {
     throw new Error("FLAC metadata block exceeds 16MB limit");
   }
   return concatBytes([
@@ -118,6 +178,10 @@ export function injectFlacMetadata(
   while (offset + 4 <= bytes.length) {
     const header = bytes[offset] ?? 0;
     const type = header & 0x7f;
+    // Block type 127 is invalid/forbidden by the FLAC specification
+    if (type === 127) {
+      return input;
+    }
     const length =
       ((bytes[offset + 1] ?? 0) << 16) | ((bytes[offset + 2] ?? 0) << 8) | (bytes[offset + 3] ?? 0);
     offset += 4;
@@ -143,11 +207,19 @@ export function injectFlacMetadata(
   const streamInfo = blocks.find((b) => b.type === 0);
   if (!streamInfo) return input;
 
+  const existingVorbis = blocks.find((b) => b.type === 4);
+  const mergedVorbis = buildVorbisCommentBlock(meta, lyricsText, existingVorbis?.data);
+  const vorbisBlock =
+    mergedVorbis.length <= MAX_FLAC_METADATA_BLOCK_BYTES ? mergedVorbis : existingVorbis?.data;
+
   const pictureBlock = buildFlacPictureBlock(cover);
+  const existingPictures = blocks.filter((b) => b.type === 6);
+  const pictureBlocksToWrite = pictureBlock ? [{ type: 6, data: pictureBlock }] : existingPictures;
+
   const metadataBlocks = [
     streamInfo,
-    { type: 4, data: buildVorbisCommentBlock(meta, lyricsText) },
-    ...(pictureBlock ? [{ type: 6, data: pictureBlock }] : []),
+    ...(vorbisBlock ? [{ type: 4, data: vorbisBlock }] : []),
+    ...pictureBlocksToWrite,
     ...blocks.filter((b) => b !== streamInfo && b.type !== 4 && b.type !== 6),
   ];
 
