@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Heart, Maximize2, Pause, Play, RefreshCw, SkipForward } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { getSongKey, sanitizeCssUrl } from "#shared";
 import { AlbumLink, ArtistLinks } from "../../entities/music/EntityLinks.js";
@@ -22,16 +22,19 @@ export function PersonalFmPage() {
   const fmError = usePlayerStore((s) => s.fmError);
   const setFullscreenOpen = usePlayerStore((s) => s.setFullscreenOpen);
 
+  const mountedRef = useRef(true);
+
   useEffect(() => {
+    mountedRef.current = true;
     const state = usePlayerStore.getState();
     if (state.fmQueue.length === 0 && !state.fmLoading) {
-      void audioEngine.loadFmBatch({ autoPlay: false }).catch(() => undefined);
+      void audioEngine.loadFmBatch({ autoPlay: false, source: "page" }).catch(() => undefined);
     }
     return () => {
-      // Cancel in-flight preview/refresh fetches when leaving FM page if FM is not actively playing
-      if (!usePlayerStore.getState().fmMode) {
-        audioEngine.cancelPendingFmFetch();
-      }
+      mountedRef.current = false;
+      // P09: Always cancel page-initiated manual/preview FM fetches when leaving /fm
+      // (without disturbing active FM playback or engine-driven queue-end continuations)
+      audioEngine.cancelPageFmFetch();
     };
   }, []);
 
@@ -58,11 +61,13 @@ export function PersonalFmPage() {
 
   const handleRefreshBatch = async (autoPlay = true) => {
     try {
-      const nextBatch = await audioEngine.loadFmBatch({ autoPlay });
+      const nextBatch = await audioEngine.loadFmBatch({ autoPlay, source: "page" });
+      if (!mountedRef.current) return;
       if (nextBatch.length === 0) {
         toast.info("暂时没有更多推荐歌曲");
       }
     } catch (err) {
+      if (!mountedRef.current) return;
       toast.error(err instanceof Error ? err.message : "加载下一批 FM 失败");
     }
   };

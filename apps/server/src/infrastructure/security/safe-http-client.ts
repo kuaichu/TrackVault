@@ -590,7 +590,9 @@ export class SafeHttpClient {
     const { response, finalUrl } = await this.fetchResponse(rawUrl, options);
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
-      throw new AppError("UPSTREAM_ERROR", `上游响应状态异常：${response.status}`);
+      throw new AppError("UPSTREAM_ERROR", `上游响应状态异常：${response.status}`, {
+        details: { status: response.status },
+      });
     }
 
     const contentType = response.headers.get("content-type") ?? "application/octet-stream";

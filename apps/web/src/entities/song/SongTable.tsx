@@ -33,7 +33,7 @@ import { toast } from "../../shared/store/toast-store.js";
 import { CoverArt, EmptyState, EqualizerBars, PlatformBadge } from "../../shared/ui/primitives.js";
 import { AlbumLink, ArtistLinks } from "../music/EntityLinks.js";
 
-const PLAY_TRIGGER_DEDUP_MS = 350;
+const PLAY_TRIGGER_DEDUP_MS = 550;
 
 interface SongTableProps {
   songs: Song[];
@@ -141,8 +141,13 @@ export function SongTable({
             action: { label: "打开直链", href: safeDirectUrl },
           });
         } else {
-          trackPendingDirectLinkJob(res.job.id);
-          toast.success(`正在解析直链：${vars.song.title}（${getQualityLabel(vars.level)}）`);
+          const alreadyResolvedViaSse = trackPendingDirectLinkJob(res.job.id, {
+            queryClient,
+            fallbackTitle: `${vars.song.title}（${getQualityLabel(vars.level)}）`,
+          });
+          if (!alreadyResolvedViaSse) {
+            toast.success(`正在解析直链：${vars.song.title}（${getQualityLabel(vars.level)}）`);
+          }
         }
       } else {
         toast.success(`已加入下载：${vars.song.title}（${getQualityLabel(vars.level)}）`);
@@ -253,7 +258,11 @@ export function SongTable({
           return (
             <div
               key={rowKey}
-              onDoubleClick={() => triggerPlayTrack(song)}
+              onDoubleClick={(e) => {
+                const target = e.target as HTMLElement | null;
+                if (target?.closest("button, a, input, select")) return;
+                triggerPlayTrack(song);
+              }}
               className={`group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 rounded-lg px-2 py-2 transition-colors @lg:grid-cols-[32px_minmax(0,1fr)_48px_96px] @lg:gap-3 @lg:px-3 @3xl:grid-cols-[36px_minmax(0,1.65fr)_minmax(0,1fr)_52px_104px] ${
                 active ? "bg-[var(--tv-accent-soft)]" : "hover:bg-[var(--tv-surface-hover)]"
               }`}

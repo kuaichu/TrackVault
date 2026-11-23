@@ -1,5 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Play, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import type { Song } from "#shared";
 import { SongTable } from "../../entities/song/SongTable.js";
 import { api } from "../../shared/api/endpoints.js";
 import { toast } from "../../shared/store/toast-store.js";
@@ -7,18 +9,90 @@ import { EmptyState } from "../../shared/ui/primitives.js";
 import { audioEngine } from "../player/engine/audio-engine.js";
 
 const CLOUD_PAGE_SIZE = 100;
+const MAX_CLOUD_PLAY_ALL_PAGES = 30;
+
+function dedupCloudSongs(list: readonly Song[]): Song[] {
+  const seen = new Set<string>();
+  const out: Song[] = [];
+  for (const song of list) {
+    if (!seen.has(song.id)) {
+      seen.add(song.id);
+      out.push(song);
+    }
+  }
+  return out;
+}
 
 export function CloudPage() {
+  const [isLoadingAllForPlay, setIsLoadingAllForPlay] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const cloudQuery = useInfiniteQuery({
     queryKey: ["cloud-songs"],
     initialPageParam: 0,
     queryFn: ({ pageParam }) => api.getCloudSongs({ offset: pageParam, limit: CLOUD_PAGE_SIZE }),
-    getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.offset + lastPage.songs.length : undefined),
+    // A10: Advance cursor by upstream raw consumed count (`nextOffset`) so filtered items never duplicate tail rows
+    getNextPageParam: (lastPage) =>
+      lastPage.hasMore
+        ? (lastPage.nextOffset ?? lastPage.offset + Math.max(lastPage.songs.length, 1))
+        : undefined,
   });
 
   const pages = cloudQuery.data?.pages ?? [];
-  const songs = pages.flatMap((page) => page.songs);
+  const songs = dedupCloudSongs(pages.flatMap((page) => page.songs));
   const total = pages[0]?.total ?? songs.length;
+
+  const handlePlayAll = async () => {
+    if (isLoadingAllForPlay || songs.length === 0) return;
+
+    if (!cloudQuery.hasNextPage) {
+      const first = songs[0];
+      if (first) void audioEngine.playTrack(first, { queue: songs });
+      return;
+    }
+
+    setIsLoadingAllForPlay(true);
+    try {
+      let latestPages = pages;
+      let canFetchMore = Boolean(cloudQuery.hasNextPage);
+      let fetchedCount = 0;
+
+      while (canFetchMore && fetchedCount < MAX_CLOUD_PLAY_ALL_PAGES && mountedRef.current) {
+        fetchedCount += 1;
+        const nextRes = await cloudQuery.fetchNextPage();
+        if (nextRes.data?.pages) {
+          latestPages = nextRes.data.pages;
+        }
+        if (nextRes.isError || !nextRes.hasNextPage) {
+          canFetchMore = false;
+          break;
+        }
+        canFetchMore = Boolean(nextRes.hasNextPage);
+      }
+
+      if (!mountedRef.current) return;
+
+      const fullSongs = dedupCloudSongs(latestPages.flatMap((page) => page.songs));
+      const first = fullSongs[0];
+      if (first) {
+        void audioEngine.playTrack(first, { queue: fullSongs });
+      }
+      if (canFetchMore) {
+        toast.info(`已加载前 ${fullSongs.length} 首云盘歌曲加入播放队列`);
+      }
+    } finally {
+      if (mountedRef.current) {
+        setIsLoadingAllForPlay(false);
+      }
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -34,14 +108,16 @@ export function CloudPage() {
         {songs.length > 0 && (
           <button
             type="button"
-            onClick={() => {
-              const first = songs[0];
-              if (first) void audioEngine.playTrack(first, { queue: songs });
-            }}
-            className="inline-flex items-center gap-1.5 rounded-full bg-[var(--tv-accent)] px-4 py-2 text-xs font-semibold text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+            disabled={isLoadingAllForPlay}
+            onClick={() => void handlePlayAll()}
+            className="inline-flex items-center gap-1.5 rounded-full bg-[var(--tv-accent)] px-4 py-2 text-xs font-semibold text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)] disabled:opacity-50"
           >
-            <Play className="h-3.5 w-3.5 fill-current" />
-            播放全部
+            {isLoadingAllForPlay ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Play className="h-3.5 w-3.5 fill-current" />
+            )}
+            {isLoadingAllForPlay ? "加载全部中..." : "播放全部"}
           </button>
         )}
       </div>

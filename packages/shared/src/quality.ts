@@ -7,6 +7,8 @@ export const QualityLevelSchema = z.enum([
   "lossless",
   "hires",
   "jyeffect",
+  "vivid",
+  "dolby",
   "jymaster",
   "sky",
 ]);
@@ -23,8 +25,10 @@ export const QUALITY_RANK: Record<QualityLevel, number> = {
   lossless: 4,
   hires: 5,
   jyeffect: 6,
-  sky: 7,
-  jymaster: 8,
+  vivid: 7,
+  dolby: 8,
+  sky: 9,
+  jymaster: 10,
 };
 
 export const QUALITY_META: Record<
@@ -37,6 +41,8 @@ export const QUALITY_META: Record<
   lossless: { label: "无损 FLAC", shortLabel: "FLAC", minBitrate: 700_000, lossless: true },
   hires: { label: "Hi-Res 高解析", shortLabel: "Hi-Res", minBitrate: 900_000, lossless: true },
   jyeffect: { label: "高清环绕声", shortLabel: "高清环绕", minBitrate: 300_000, lossless: false },
+  vivid: { label: "臻音全景 384K", shortLabel: "臻音 384K", minBitrate: 320_000, lossless: false },
+  dolby: { label: "杜比全景声", shortLabel: "杜比全景声", minBitrate: 300_000, lossless: false },
   sky: { label: "沉浸环绕声", shortLabel: "沉浸环绕", minBitrate: 300_000, lossless: false },
   jymaster: { label: "超清母带", shortLabel: "超清母带", minBitrate: 900_000, lossless: true },
 };
@@ -54,6 +60,8 @@ export const PREFERENCE_QUALITY_OPTIONS: ReadonlyArray<{
 export const QUALITY_FALLBACK_ORDER: readonly QualityLevel[] = [
   "jymaster",
   "sky",
+  "dolby",
+  "vivid",
   "jyeffect",
   "hires",
   "lossless",
@@ -62,19 +70,65 @@ export const QUALITY_FALLBACK_ORDER: readonly QualityLevel[] = [
   "standard",
 ];
 
+export function inferQualityLevelFromBitrate(
+  bitrate: number | null | undefined,
+  format?: string | null,
+): QualityLevel | null {
+  const cleanFmt = format?.replace(/^\./, "").trim().toLowerCase() ?? "";
+  const isLossless = cleanFmt === "flac" || cleanFmt === "wav" || cleanFmt === "ape";
+  const br = typeof bitrate === "number" && Number.isFinite(bitrate) && bitrate > 0 ? bitrate : 0;
+  if (isLossless) {
+    return br >= 1_200_000 ? "hires" : "lossless";
+  }
+  if (br <= 0) return null;
+  if (br >= 900_000) return "hires";
+  if (br >= 700_000) return "lossless";
+  if (br >= 350_000) return "vivid";
+  if (br >= 256_000) return "exhigh";
+  if (br >= 160_000) return "higher";
+  return "standard";
+}
+
 export function normalizeQualityLevel(
   raw: string | null | undefined,
   fallback: QualityLevel = "standard",
+  hint?: { bitrate?: number | null; format?: string | null },
 ): QualityLevel {
   const normalized = raw?.trim().toLowerCase();
-  if (!normalized) return fallback;
-  const parsed = QualityLevelSchema.safeParse(normalized);
-  return parsed.success ? parsed.data : fallback;
+  if (normalized) {
+    const parsed = QualityLevelSchema.safeParse(normalized);
+    if (parsed.success) return parsed.data;
+  }
+  if (hint) {
+    const inferred = inferQualityLevelFromBitrate(hint.bitrate, hint.format);
+    if (inferred) return inferred;
+  }
+  return fallback;
 }
 
-export function getQualityLabel(level: QualityLevel | string): string {
+export function getQualityLabel(level: QualityLevel | string, bitrate?: number | null): string {
+  const kbps =
+    typeof bitrate === "number" && Number.isFinite(bitrate) && bitrate > 0
+      ? Math.round(bitrate / 1000)
+      : null;
+
   const meta = QUALITY_META[level as QualityLevel];
-  if (meta) return meta.shortLabel;
+  if (meta) {
+    if (level === "vivid") {
+      return kbps ? `臻音 ${kbps}K` : meta.shortLabel;
+    }
+    if (level === "dolby") {
+      return kbps ? `杜比 ${kbps}K` : meta.shortLabel;
+    }
+    if (!meta.lossless && kbps && (level === "standard" || level === "higher" || level === "exhigh")) {
+      return `${kbps}K`;
+    }
+    return meta.shortLabel;
+  }
+
   const trimmed = typeof level === "string" ? level.trim() : "";
+  if (kbps) {
+    return trimmed ? `${trimmed.toUpperCase()} ${kbps}K` : `${kbps}K`;
+  }
   return trimmed ? trimmed.toUpperCase() : "未知";
 }

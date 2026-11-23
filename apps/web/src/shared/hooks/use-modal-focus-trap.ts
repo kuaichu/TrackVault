@@ -31,6 +31,26 @@ function getFocusableElements(container: HTMLElement): HTMLElement[] {
   return nodes.filter((el) => isFocusableVisible(el, container));
 }
 
+const inertSyncCallbacks = new Set<() => void>();
+
+/**
+ * Registers a synchronous callback that reconciles background `inert` state on live DOM nodes.
+ * Invoked immediately before `useModalFocusTrap` restores focus on close so Chromium never blocks
+ * `previouslyFocused.focus()` due to stale `inert` attributes awaiting passive `useEffect` flush (U04).
+ */
+export function registerInertSynchronizer(syncFn: () => void): () => void {
+  inertSyncCallbacks.add(syncFn);
+  return () => {
+    inertSyncCallbacks.delete(syncFn);
+  };
+}
+
+function flushInertSynchronizers(): void {
+  for (const syncFn of inertSyncCallbacks) {
+    syncFn();
+  }
+}
+
 export interface UseModalFocusTrapOptions {
   onClose?: () => void;
 }
@@ -105,6 +125,8 @@ export function useModalFocusTrap(
 
     return () => {
       document.removeEventListener("keydown", onKeyDown);
+      // U04: Release background inert attributes synchronously BEFORE restoring focus (real Chromium requirement)
+      flushInertSynchronizers();
       if (previouslyFocused?.isConnected && typeof previouslyFocused.focus === "function") {
         previouslyFocused.focus();
       }

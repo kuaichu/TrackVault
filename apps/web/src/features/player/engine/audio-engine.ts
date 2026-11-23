@@ -8,6 +8,7 @@ import {
   getSongKey,
 } from "#shared";
 import { api } from "../../../shared/api/endpoints.js";
+import { toast } from "../../../shared/store/toast-store.js";
 import { usePlaybackClockStore, usePlayerStore } from "../store/player-store.js";
 
 const FADE_DURATION_MS = 220;
@@ -135,7 +136,9 @@ export function resolveEffectivePlaybackQuality(
  */
 export class AudioEngine {
   readonly #audio: HTMLAudioElement;
+  #sessionEpoch = 0;
   #playToken = 0;
+  #playIntent = false;
   #volumeRevision = 0;
   #pendingPause = false;
   #fadeFrameId: number | null = null;
@@ -146,10 +149,13 @@ export class AudioEngine {
   #listenersBound = false;
   #pagehideHandler: (() => void) | null = null;
   #onPlayHistoryRecorded: ((res: { items: Song[] }) => void) | null = null;
+  #historyRequestSeq = 0;
+  #latestAppliedHistorySeq = 0;
   #pendingHistorySong: { token: number; song: Song } | null = null;
   #recordedHistoryForCurrentPlay = false;
   #fmAbortController: AbortController | null = null;
   #fmFetching = false;
+  #fmFetchSource: "page" | "engine" | null = null;
 
   constructor(audioElement?: HTMLAudioElement) {
     this.#audio = audioElement ?? new Audio();
@@ -219,11 +225,14 @@ export class AudioEngine {
       if (pending && pending.token === this.#playToken && !this.#recordedHistoryForCurrentPlay) {
         this.#recordedHistoryForCurrentPlay = true;
         this.#pendingHistorySong = null;
-        const recordToken = pending.token;
+        // F14: Validate against #sessionEpoch (NOT #playToken) so pausing right after "playing" never drops the callback
+        const recordEpoch = this.#sessionEpoch;
+        const reqSeq = ++this.#historyRequestSeq;
         void api
           .recordPlayHistory(pending.song)
           .then((res) => {
-            if (recordToken === this.#playToken) {
+            if (recordEpoch === this.#sessionEpoch && reqSeq >= this.#latestAppliedHistorySeq) {
+              this.#latestAppliedHistorySeq = reqSeq;
               this.#onPlayHistoryRecorded?.(res);
             }
           })
@@ -260,6 +269,8 @@ export class AudioEngine {
     this.#audio.addEventListener("error", () => {
       // Ignore synthetic MEDIA_ERR_SRC_NOT_SUPPORTED fired when stop() clears audio src
       if (!usePlayerStore.getState().currentTrack) return;
+
+      this.#playIntent = false;
 
       const errorToken = this.#playToken;
       const failedSrc = this.#audio.currentSrc || this.#audio.src;
@@ -419,6 +430,7 @@ export class AudioEngine {
       }
     } catch {
       if (token !== this.#playToken || this.#pendingPause) return;
+      this.#playIntent = false;
       const latestState = usePlayerStore.getState();
       const latestTarget = latestState.muted ? 0 : latestState.volume;
       this.#audio.volume = latestTarget;
@@ -462,6 +474,8 @@ export class AudioEngine {
       playQueue: serializeQueueWindow(state.queue, state.currentTrack, MAX_PERSISTED_QUEUE_LENGTH),
       playbackSeconds: Math.floor(currentTime),
       volume: state.muted ? 0 : state.volume,
+      muted: state.muted,
+      lastNonZeroVolume: state.lastNonZeroVolume,
       playbackMode: state.playbackMode,
     };
     return keepalive ? buildBoundedKeepalivePlayerState(base) : base;
@@ -492,6 +506,7 @@ export class AudioEngine {
       this.#fmAbortController.abort();
       this.#fmAbortController = null;
     }
+    this.#fmFetchSource = null;
     if (this.#fmFetching) {
       this.#fmFetching = false;
       usePlayerStore.getState().setStatePatch({ fmLoading: false });
@@ -500,6 +515,16 @@ export class AudioEngine {
 
   cancelPendingFmFetch(): void {
     this.#abortFmFetch();
+  }
+
+  /**
+   * P09: Cancels only manual/preview FM batch requests initiated from PersonalFmPage on unmount,
+   * without interrupting active FM playback or engine-driven batch continuations at queue end.
+   */
+  cancelPageFmFetch(): void {
+    if (this.#fmFetchSource === "page") {
+      this.#abortFmFetch();
+    }
   }
 
   /**
@@ -534,6 +559,8 @@ export class AudioEngine {
     playQueue: Song[];
     playbackSeconds: number;
     volume: number;
+    muted?: boolean;
+    lastNonZeroVolume?: number;
     playbackMode: PlaybackMode;
   }): void {
     const store = usePlayerStore.getState();
@@ -544,8 +571,20 @@ export class AudioEngine {
     }
 
     const clampedVolume = Math.min(1, Math.max(0, Number.isFinite(input.volume) ? input.volume : 0.85));
-    const isMuted = clampedVolume === 0;
-    this.#audio.volume = clampedVolume;
+    const isMuted =
+      typeof input.muted === "boolean" ? input.muted || clampedVolume === 0 : clampedVolume === 0;
+    const effectiveVolume = isMuted ? 0 : clampedVolume;
+    const restoredLastNonZero =
+      typeof input.lastNonZeroVolume === "number" &&
+      Number.isFinite(input.lastNonZeroVolume) &&
+      input.lastNonZeroVolume > 0
+        ? Math.min(1, input.lastNonZeroVolume)
+        : clampedVolume > 0
+          ? clampedVolume
+          : 0.8;
+
+    this.#playIntent = false;
+    this.#audio.volume = effectiveVolume;
     this.#audio.muted = isMuted;
     this.#pendingSeek = input.playbackSeconds > 0 ? input.playbackSeconds : null;
     this.#pendingHistorySong = null;
@@ -555,9 +594,9 @@ export class AudioEngine {
       currentTrack: input.currentTrack,
       queue: input.playQueue,
       priorityQueue: [],
-      volume: clampedVolume,
+      volume: effectiveVolume,
       muted: isMuted,
-      lastNonZeroVolume: clampedVolume > 0 ? clampedVolume : 0.8,
+      lastNonZeroVolume: restoredLastNonZero,
       playbackMode: input.playbackMode,
       hydrated: true,
     });
@@ -582,9 +621,11 @@ export class AudioEngine {
       startAtSeconds?: number;
       recordHistory?: boolean;
       fm?: boolean;
+      preservePriorityQueue?: boolean;
     },
   ): Promise<void> {
     const token = ++this.#playToken;
+    this.#playIntent = true;
     this.#cancelFade();
     this.#pendingPause = false;
 
@@ -595,12 +636,16 @@ export class AudioEngine {
 
     const state = usePlayerStore.getState();
     const songKey = getSongKey(song);
+    const replacingQueue = Boolean(options?.queue) && !options?.preservePriorityQueue;
     const nextQueue = options?.queue
       ? options.queue
       : state.queue.some((item) => getSongKey(item) === songKey)
         ? state.queue
         : [...state.queue, song];
-    const nextPriorityQueue = state.priorityQueue.filter((item) => getSongKey(item) !== songKey);
+    // P11: Replacing the playlist clears stale priorityQueue entries from the previous playlist
+    const nextPriorityQueue = replacingQueue
+      ? []
+      : state.priorityQueue.filter((item) => getSongKey(item) !== songKey);
 
     const level = options?.level ?? state.defaultPlaybackQuality;
     this.#pendingSeek = options?.startAtSeconds ?? null;
@@ -608,6 +653,8 @@ export class AudioEngine {
     if (options?.recordHistory !== false) {
       this.#pendingHistorySong = { token, song };
       this.#recordedHistoryForCurrentPlay = false;
+    } else {
+      this.#pendingHistorySong = null;
     }
 
     state.setStatePatch({
@@ -633,24 +680,37 @@ export class AudioEngine {
     await this.#startAudioWithFade(token);
   }
 
-  async playFmTrack(song: Song, options?: { queue?: Song[]; startAtSeconds?: number }): Promise<void> {
+  async playFmTrack(
+    song: Song,
+    options?: { queue?: Song[]; startAtSeconds?: number; preservePriorityQueue?: boolean },
+  ): Promise<void> {
     const queue = options?.queue ?? usePlayerStore.getState().fmQueue;
     await this.playTrack(song, {
       queue: queue.length > 0 ? queue : [song],
       startAtSeconds: options?.startAtSeconds,
       fm: true,
+      preservePriorityQueue: options?.preservePriorityQueue,
     });
   }
 
-  async loadFmBatch(options?: { autoPlay?: boolean }): Promise<Song[]> {
+  async loadFmBatch(options?: { autoPlay?: boolean; source?: "page" | "engine" }): Promise<Song[]> {
+    const source = options?.source ?? "engine";
     if (this.#fmFetching) {
-      return usePlayerStore.getState().fmQueue;
+      if (source === "page" && this.#fmFetchSource === "page") {
+        return usePlayerStore.getState().fmQueue;
+      }
+      if (source === "engine") {
+        // Promote source to engine so page unmount will not abort an engine-required continuation
+        this.#fmFetchSource = "engine";
+        return usePlayerStore.getState().fmQueue;
+      }
     }
 
     this.#abortFmFetch();
     const controller = new AbortController();
     this.#fmAbortController = controller;
     this.#fmFetching = true;
+    this.#fmFetchSource = source;
     const requestToken = this.#playToken;
 
     usePlayerStore.getState().setStatePatch({ fmLoading: true, fmError: null });
@@ -672,9 +732,10 @@ export class AudioEngine {
       });
 
       if (options?.autoPlay && songs.length > 0) {
-        const first = songs.find((item) => this.#isPlayable(item)) ?? songs[0];
+        // P10: Never auto-play a locked track when all FM items are locked
+        const first = songs.find((item) => this.#isPlayable(item));
         if (first) {
-          await this.playFmTrack(first, { queue: songs });
+          await this.playFmTrack(first, { queue: songs, preservePriorityQueue: source === "engine" });
         }
       }
       return songs;
@@ -692,6 +753,7 @@ export class AudioEngine {
       if (this.#fmAbortController === controller) {
         this.#fmAbortController = null;
         this.#fmFetching = false;
+        this.#fmFetchSource = null;
         usePlayerStore.getState().setStatePatch({ fmLoading: false });
       }
     }
@@ -707,12 +769,12 @@ export class AudioEngine {
     for (let idx = currentIdx + 1; idx < fmQueue.length; idx += 1) {
       const candidate = fmQueue[idx];
       if (this.#isPlayable(candidate)) {
-        await this.playFmTrack(candidate, { queue: fmQueue });
+        await this.playFmTrack(candidate, { queue: fmQueue, preservePriorityQueue: true });
         return;
       }
     }
 
-    await this.loadFmBatch({ autoPlay: true }).catch(() => undefined);
+    await this.loadFmBatch({ autoPlay: true, source: "engine" }).catch(() => undefined);
   }
 
   async switchPlaybackQuality(level: QualityLevel): Promise<void> {
@@ -721,13 +783,18 @@ export class AudioEngine {
     if (!currentTrack) return;
 
     const resumeAt = usePlaybackClockStore.getState().currentTime;
-    const wasPlaying = state.isPlaying && !this.#audio.paused && !this.#pendingPause;
+    // P12 + P19: Keep playback intent alive if track is actively playing OR still loading before first "playing"
+    const shouldPlay = (state.isPlaying || state.isLoading || this.#playIntent) && !this.#pendingPause;
 
-    if (!wasPlaying) {
-      this.#playToken += 1;
+    if (!shouldPlay) {
+      const token = ++this.#playToken;
+      this.#playIntent = false;
       this.#cancelFade();
       this.#pendingPause = false;
       this.#pendingSeek = resumeAt > 0 ? resumeAt : null;
+      if (!this.#recordedHistoryForCurrentPlay) {
+        this.#pendingHistorySong = { token, song: currentTrack };
+      }
       state.setStatePatch({
         activeQualityOverride: level,
         isLoading: false,
@@ -739,11 +806,13 @@ export class AudioEngine {
       return;
     }
 
+    const shouldRecordHistory = !this.#recordedHistoryForCurrentPlay;
     await this.playTrack(currentTrack, {
       level,
       startAtSeconds: resumeAt,
-      recordHistory: false,
+      recordHistory: shouldRecordHistory,
       fm: state.fmMode,
+      preservePriorityQueue: true,
     });
   }
 
@@ -752,16 +821,20 @@ export class AudioEngine {
     const { currentTrack, queue } = state;
     if (!currentTrack) {
       if (queue.length === 0) return;
-      const first = queue.find((item) => this.#isPlayable(item)) ?? queue[0];
-      if (first) {
-        await this.playTrack(first);
+      // P10: Refuse fallback to locked tracks when the entire queue is locked
+      const first = queue.find((item) => this.#isPlayable(item));
+      if (!first) {
+        toast.info("当前队列中的歌曲均不可播放");
+        return;
       }
+      await this.playTrack(first);
       return;
     }
 
     if (this.#audio.paused || this.#pendingPause) {
       const wasPendingPause = this.#pendingPause;
       this.#pendingPause = false;
+      this.#playIntent = true;
       const token = ++this.#playToken;
       this.#cancelFade();
 
@@ -787,6 +860,7 @@ export class AudioEngine {
 
     // Optimistic pause state + pendingPause guard eliminates 140ms double-click / volume-drag races
     this.#pendingPause = true;
+    this.#playIntent = false;
     const token = ++this.#playToken;
     const pauseRev = this.#volumeRevision;
     state.setStatePatch({ isPlaying: false, isLoading: false });
@@ -875,22 +949,23 @@ export class AudioEngine {
   async playNext(): Promise<void> {
     const { queue, priorityQueue, currentTrack, playbackMode, fmMode } = usePlayerStore.getState();
 
-    if (fmMode) {
-      await this.nextFmTrack();
-      return;
-    }
-
+    // P11: Always honor user-scheduled "下一首播放" priority items first (even during FM or shuffle)
     if (priorityQueue.length > 0) {
       const remaining = [...priorityQueue];
       while (remaining.length > 0) {
         const nextPriority = remaining.shift();
         if (this.#isPlayable(nextPriority)) {
           usePlayerStore.getState().setStatePatch({ priorityQueue: remaining });
-          await this.playTrack(nextPriority);
+          await this.playTrack(nextPriority, { fm: fmMode, preservePriorityQueue: true });
           return;
         }
       }
       usePlayerStore.getState().setStatePatch({ priorityQueue: [] });
+    }
+
+    if (fmMode) {
+      await this.nextFmTrack();
+      return;
     }
 
     if (queue.length === 0) return;
@@ -902,7 +977,7 @@ export class AudioEngine {
       if (playableOthers.length > 0) {
         const pick = playableOthers[Math.floor(Math.random() * playableOthers.length)];
         if (pick) {
-          await this.playTrack(pick);
+          await this.playTrack(pick, { preservePriorityQueue: true });
           return;
         }
       }
@@ -910,7 +985,7 @@ export class AudioEngine {
       if (anyPlayable.length > 0) {
         const pick = anyPlayable[Math.floor(Math.random() * anyPlayable.length)];
         if (pick) {
-          await this.playTrack(pick);
+          await this.playTrack(pick, { preservePriorityQueue: true });
           return;
         }
       }
@@ -922,40 +997,52 @@ export class AudioEngine {
     for (let step = 1; step <= queue.length; step += 1) {
       const candidate = queue[positiveMod(currentIdx + step, queue.length)];
       if (this.#isPlayable(candidate)) {
-        await this.playTrack(candidate);
+        await this.playTrack(candidate, { preservePriorityQueue: true });
         return;
       }
     }
-    const fallback = queue[positiveMod(currentIdx + 1, queue.length)];
-    if (fallback) await this.playTrack(fallback);
+
+    // P10: Never fall back to calling playTrack() on a locked song when the entire queue is locked
+    this.#playIntent = false;
+    usePlayerStore.getState().setStatePatch({ isPlaying: false, isLoading: false });
+    toast.info("当前队列中的歌曲均不可播放");
   }
 
   async playPrevious(): Promise<void> {
-    const { queue, currentTrack } = usePlayerStore.getState();
-    if (queue.length === 0) return;
+    const { queue, fmQueue, currentTrack, fmMode } = usePlayerStore.getState();
+    const sourceList = fmMode && fmQueue.length > 0 ? fmQueue : queue;
+    if (sourceList.length === 0) return;
     if (currentTrack && usePlaybackClockStore.getState().currentTime > 4) {
       this.seek(0);
       return;
     }
 
     const currentIdx = currentTrack
-      ? queue.findIndex((item) => getSongKey(item) === getSongKey(currentTrack))
+      ? sourceList.findIndex((item) => getSongKey(item) === getSongKey(currentTrack))
       : -1;
     const baseIdx = currentIdx >= 0 ? currentIdx : 0;
 
-    for (let step = 1; step <= queue.length; step += 1) {
-      const candidate = queue[positiveMod(baseIdx - step, queue.length)];
+    for (let step = 1; step <= sourceList.length; step += 1) {
+      const candidate = sourceList[positiveMod(baseIdx - step, sourceList.length)];
       if (this.#isPlayable(candidate)) {
-        await this.playTrack(candidate);
+        // P07: Preserve fmMode when stepping backward within Personal FM
+        await this.playTrack(candidate, {
+          fm: fmMode,
+          ...(fmMode ? { queue: sourceList } : {}),
+          preservePriorityQueue: true,
+        });
         return;
       }
     }
-    const fallback = queue[positiveMod(baseIdx - 1, queue.length)];
-    if (fallback) await this.playTrack(fallback);
+
+    // P10: Never fall back to calling playTrack() on a locked song when the entire queue is locked
+    toast.info("当前队列中的歌曲均不可播放");
   }
 
   stop(): void {
+    this.#sessionEpoch += 1;
     this.#playToken += 1;
+    this.#playIntent = false;
     this.#volumeRevision += 1;
     this.#pendingPause = false;
     this.#cancelFade();

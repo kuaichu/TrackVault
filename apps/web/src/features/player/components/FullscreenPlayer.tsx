@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
   ChevronDown,
+  FileText,
   Heart,
   ListMusic,
   Loader2,
@@ -16,7 +17,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type QualityLevel, getQualityLabel, sanitizeCssUrl } from "#shared";
 import { AlbumLink, ArtistLinks } from "../../../entities/music/EntityLinks.js";
 import { api } from "../../../shared/api/endpoints.js";
@@ -28,12 +29,15 @@ import { audioEngine, resolveEffectivePlaybackQuality } from "../engine/audio-en
 import { usePlayerStore } from "../store/player-store.js";
 import { LyricScroller } from "./LyricScroller.js";
 import { PlaybackProgressBar } from "./PlaybackProgressBar.js";
+import { PlayQueuePanel, TrackCommentsPanel } from "./PlayerDrawerPanels.js";
+
+type FullscreenRightPanel = "lyrics" | "comments" | "queue";
 
 export function FullscreenPlayer() {
   const open = usePlayerStore((s) => s.fullscreenOpen);
   const setOpen = usePlayerStore((s) => s.setFullscreenOpen);
-  const setDrawerTab = usePlayerStore((s) => s.setDrawerTab);
   const currentTrack = usePlayerStore((s) => s.currentTrack);
+  const queueLength = usePlayerStore((s) => s.queue.length);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const isLoading = usePlayerStore((s) => s.isLoading);
   const playerError = usePlayerStore((s) => s.playerError);
@@ -43,9 +47,17 @@ export function FullscreenPlayer() {
   const defaultPlaybackQuality = usePlayerStore((s) => s.defaultPlaybackQuality);
   const activeQualityOverride = usePlayerStore((s) => s.activeQualityOverride);
 
-  const [mobileView, setMobileView] = useState<"cover" | "lyrics">("cover");
+  const [mobileShowCover, setMobileShowCover] = useState(true);
+  const [rightPanel, setRightPanel] = useState<FullscreenRightPanel>("lyrics");
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const isActive = Boolean(open && currentTrack);
+
+  useEffect(() => {
+    if (!open) {
+      setMobileShowCover(true);
+      setRightPanel("lyrics");
+    }
+  }, [open]);
 
   useModalFocusTrap(dialogRef, isActive, { onClose: () => setOpen(false) });
 
@@ -59,7 +71,7 @@ export function FullscreenPlayer() {
     queryKey: ["lyrics", currentTrack?.platform, currentTrack?.id],
     queryFn: () =>
       currentTrack ? api.getLyrics(currentTrack.platform, currentTrack.id, currentTrack.mediaId) : null,
-    enabled: isActive,
+    enabled: Boolean(isActive && rightPanel === "lyrics"),
   });
 
   const capabilities = useCapabilities();
@@ -93,6 +105,11 @@ export function FullscreenPlayer() {
     if (next) void audioEngine.switchPlaybackQuality(next.level as QualityLevel);
   };
 
+  const selectPanel = (nextPanel: FullscreenRightPanel) => {
+    setRightPanel(nextPanel);
+    setMobileShowCover(false);
+  };
+
   return (
     <dialog
       ref={dialogRef}
@@ -111,79 +128,102 @@ export function FullscreenPlayer() {
       )}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-black/55 via-black/65 to-black/80" />
 
-      {/* Top Header with Mobile Cover/Lyrics Switcher + Desktop/Mobile Drawer Shortcuts */}
-      <header className="tv-pt-safe relative flex shrink-0 items-center justify-between px-4 pb-3 [--tv-safe-pt-base:0.75rem] md:px-8 md:pb-4 md:[--tv-safe-pt-base:1.25rem] [@media(max-height:500px)]:pb-1.5 [@media(max-height:500px)]:[--tv-safe-pt-base:0.375rem]">
+      {/* Top Header with Mobile Cover/Content Switcher + Inline Lyrics/Comments/Queue Switcher */}
+      <header className="tv-pt-safe relative flex shrink-0 items-center justify-between gap-2 px-4 pb-3 [--tv-safe-pt-base:0.75rem] md:px-8 md:pb-4 md:[--tv-safe-pt-base:1.25rem] [@media(max-height:500px)]:pb-1.5 [@media(max-height:500px)]:[--tv-safe-pt-base:0.375rem]">
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/85 backdrop-blur-md transition-colors hover:bg-white/20 [@media(max-height:500px)]:h-8 [@media(max-height:500px)]:w-8"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-white/85 backdrop-blur-md transition-colors hover:bg-white/20 [@media(max-height:500px)]:h-8 [@media(max-height:500px)]:w-8"
           title="收起 (Esc)"
           aria-label="收起全屏播放器"
         >
           <ChevronDown className="h-5 w-5" />
         </button>
 
-        {/* Mobile View Switcher */}
+        {/* Mobile Cover Toggle (< md) */}
         <div className="inline-flex rounded-full bg-white/10 p-0.5 text-xs backdrop-blur-md md:hidden">
           <button
             type="button"
-            onClick={() => setMobileView("cover")}
-            className={`rounded-full px-3.5 py-1 font-medium transition-colors ${
-              mobileView === "cover" ? "bg-white text-[#111113]" : "text-white/75"
+            onClick={() => setMobileShowCover(true)}
+            className={`rounded-full px-3 py-1 font-medium transition-colors ${
+              mobileShowCover ? "bg-white text-[#111113]" : "text-white/75"
             }`}
           >
             封面
           </button>
           <button
             type="button"
-            onClick={() => setMobileView("lyrics")}
-            className={`rounded-full px-3.5 py-1 font-medium transition-colors ${
-              mobileView === "lyrics" ? "bg-white text-[#111113]" : "text-white/75"
+            onClick={() => setMobileShowCover(false)}
+            className={`rounded-full px-3 py-1 font-medium transition-colors ${
+              !mobileShowCover ? "bg-white text-[#111113]" : "text-white/75"
             }`}
           >
-            歌词
+            {rightPanel === "comments" ? "评论" : rightPanel === "queue" ? "队列" : "歌词"}
           </button>
         </div>
 
+        {/* Inline Right-Pane Switcher (stays inside FullscreenPlayer without kicking user back to main page) */}
         <div className="flex items-center gap-2">
           <span className="hidden md:inline-flex">
             <PlatformBadge platform={currentTrack.platform} subtle />
           </span>
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              setDrawerTab("comments");
-            }}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/80 backdrop-blur-md transition-colors hover:bg-white/20 hover:text-white [@media(max-height:500px)]:h-8 [@media(max-height:500px)]:w-8"
-            title="查看评论"
-            aria-label="查看评论"
-          >
-            <MessageSquare className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              setDrawerTab("queue");
-            }}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white/80 backdrop-blur-md transition-colors hover:bg-white/20 hover:text-white [@media(max-height:500px)]:h-8 [@media(max-height:500px)]:w-8"
-            title="查看队列"
-            aria-label="查看队列"
-          >
-            <ListMusic className="h-4 w-4" />
-          </button>
+
+          <div className="inline-flex items-center rounded-full bg-white/10 p-0.5 text-xs backdrop-blur-md">
+            <button
+              type="button"
+              aria-label="查看歌词"
+              aria-pressed={rightPanel === "lyrics" && !mobileShowCover}
+              onClick={() => selectPanel("lyrics")}
+              className={`inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 font-medium transition-colors [@media(max-height:500px)]:h-7 ${
+                rightPanel === "lyrics"
+                  ? "bg-white text-[#111113] shadow-xs"
+                  : "text-white/80 hover:bg-white/15 hover:text-white"
+              }`}
+              title="查看歌词"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">歌词</span>
+            </button>
+            <button
+              type="button"
+              aria-label="查看评论"
+              aria-pressed={rightPanel === "comments"}
+              onClick={() => selectPanel("comments")}
+              className={`inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 font-medium transition-colors [@media(max-height:500px)]:h-7 ${
+                rightPanel === "comments"
+                  ? "bg-white text-[#111113] shadow-xs"
+                  : "text-white/80 hover:bg-white/15 hover:text-white"
+              }`}
+              title="查看评论"
+            >
+              <MessageSquare className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">评论</span>
+            </button>
+            <button
+              type="button"
+              aria-label="查看队列"
+              aria-pressed={rightPanel === "queue"}
+              onClick={() => selectPanel("queue")}
+              className={`inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 font-medium transition-colors [@media(max-height:500px)]:h-7 ${
+                rightPanel === "queue"
+                  ? "bg-white text-[#111113] shadow-xs"
+                  : "text-white/80 hover:bg-white/15 hover:text-white"
+              }`}
+              title="查看队列"
+            >
+              <ListMusic className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">队列{queueLength > 0 ? ` · ${queueLength}` : ""}</span>
+            </button>
+          </div>
         </div>
       </header>
 
       {/* Main Content Area: single-mounted transport controls + height-safe responsive layout with scroll fallback */}
       <div className="tv-pb-safe relative mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col overflow-y-auto px-5 [--tv-safe-pb-base:1.25rem] md:grid md:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] md:grid-rows-[auto_auto] md:content-center md:items-center md:gap-x-10 md:gap-y-4 md:px-8 md:[--tv-safe-pb-base:2rem] [@media(max-height:500px)]:[--tv-safe-pb-base:0.5rem] [@media(max-height:500px)]:md:gap-x-6 [@media(max-height:500px)]:md:gap-y-2">
-        {/* Cover & Track Metadata (Col 1, Row 1 on md+; hidden on mobile lyrics tab) */}
+        {/* Cover & Track Metadata (Col 1, Row 1 on md+; hidden on mobile when viewing lyrics/comments/queue) */}
         <div
           className={`mx-auto w-full max-w-[340px] md:col-start-1 md:row-start-1 md:max-w-[360px] ${
-            mobileView === "lyrics"
-              ? "hidden md:block"
-              : "flex flex-1 flex-col justify-center md:block md:flex-none"
+            !mobileShowCover ? "hidden md:block" : "flex flex-1 flex-col justify-center md:block md:flex-none"
           }`}
         >
           <CoverArt
@@ -244,22 +284,38 @@ export function FullscreenPlayer() {
           </div>
         </div>
 
-        {/* Lyrics Column (Col 2, spanning Rows 1-2 on md+; fills mobile height when mobileView === "lyrics") */}
+        {/* Right Panel: Lyrics / Comments / Queue (Col 2, spanning Rows 1-2 on md+; fills mobile height when !mobileShowCover) */}
         <div
           className={`min-h-0 overflow-hidden md:col-start-2 md:row-start-1 md:row-span-2 md:h-[min(66dvh,calc(100dvh-96px))] ${
-            mobileView === "lyrics" ? "flex flex-1 flex-col" : "hidden md:block"
+            !mobileShowCover ? "flex flex-1 flex-col" : "hidden md:flex md:flex-col"
           }`}
         >
-          <LyricScroller
-            lines={lyricData?.lyrics.lines ?? []}
-            loading={lyricsLoading}
-            error={lyricIsError ? (lyricError instanceof Error ? lyricError.message : "歌词加载失败") : null}
-            onRetry={() => void refetchLyrics()}
-            large
-          />
+          {rightPanel === "lyrics" && (
+            <LyricScroller
+              lines={lyricData?.lyrics.lines ?? []}
+              loading={lyricsLoading}
+              error={
+                lyricIsError ? (lyricError instanceof Error ? lyricError.message : "歌词加载失败") : null
+              }
+              onRetry={() => void refetchLyrics()}
+              large
+            />
+          )}
+
+          {rightPanel === "comments" && (
+            <div className="flex-1 overflow-y-auto rounded-2xl border border-white/10 bg-black/25 backdrop-blur-md">
+              <TrackCommentsPanel active={Boolean(isActive && rightPanel === "comments")} onDarkBackdrop />
+            </div>
+          )}
+
+          {rightPanel === "queue" && (
+            <div className="flex-1 overflow-y-auto rounded-2xl border border-white/10 bg-black/25 backdrop-blur-md">
+              <PlayQueuePanel onDarkBackdrop />
+            </div>
+          )}
         </div>
 
-        {/* Single Mounted Transport Controls (Col 1, Row 2 on md+; pinned bottom on mobile for both views) */}
+        {/* Single Mounted Transport Controls (Col 1, Row 2 on md+; pinned bottom on mobile for all views) */}
         <div className="mx-auto mt-3 w-full max-w-[340px] shrink-0 space-y-3 md:col-start-1 md:row-start-2 md:mt-0 md:max-w-[360px] md:space-y-4 [@media(max-height:500px)]:mt-1.5 [@media(max-height:500px)]:space-y-1.5">
           {playerError && (
             <div

@@ -44,6 +44,7 @@ import type { CredentialRepository } from "../../infrastructure/db/repositories/
 import type { BackgroundJobManager } from "../jobs/background-job-manager.js";
 
 const MAX_TRANSFER_TRACKS = 1000;
+const MAX_SELECTED_SCAN_TRACKS = 10_000;
 const MAX_COMPARE_TRACKS = 1500;
 
 function songToTransferTrack(song: Song): TransferTrack {
@@ -208,6 +209,9 @@ export class TransferService {
     if (typeof adapter.resolveAudio !== "function") return null;
     try {
       const resolved = await adapter.resolveAudio(target, "standard", "playback", auth);
+      if (typeof resolved.url === "string" && resolved.url.trim().length === 0) {
+        return "copyright_unavailable";
+      }
       return resolved.trial ? "trial_only" : "playable";
     } catch (error) {
       if (isAppError(error)) {
@@ -234,14 +238,11 @@ export class TransferService {
     }
 
     const probedIds = new Set<string>();
-    while (matched.status === "matched" && matched.selectedCandidate) {
-      const targetId = matched.selectedCandidate.targetTrackId;
-      if (probedIds.has(targetId)) break;
+    const probeCandidateById = async (targetId: string): Promise<boolean> => {
+      if (probedIds.has(targetId)) return false;
       probedIds.add(targetId);
-
       const candidate = working.find((c) => c.id === targetId);
-      if (!candidate) break;
-
+      if (!candidate) return false;
       const probed = await this.#probeTrackAvailability(
         targetAdapter,
         {
@@ -252,11 +253,39 @@ export class TransferService {
         },
         targetAuth,
       );
-      if (!probed || probed === candidate.availability) {
+      if (probed && probed !== candidate.availability) {
+        candidate.availability = probed;
+        return true;
+      }
+      return false;
+    };
+
+    // 1. Verify statically playable selected candidates (downgrade if actually trial/unavailable)
+    while (matched.status === "matched" && matched.selectedCandidate) {
+      const targetId = matched.selectedCandidate.targetTrackId;
+      if (probedIds.has(targetId)) break;
+      const changed = await probeCandidateById(targetId);
+      if (!changed) break;
+      matched = matchTransferTrack(track, working);
+      if (matched.status === "matched" && matched.selectedCandidate?.targetTrackId === targetId) {
         break;
       }
-      candidate.availability = probed;
-      matched = matchTransferTrack(track, working);
+    }
+
+    // 2. T09: Also probe high-confidence (>= 85) statically locked/unavailable candidates when checkAvailability === true
+    if (matched.status !== "matched" && matched.selectedCandidate) {
+      const highConfidenceIds = matched.candidates
+        .filter((c) => c.confidenceScore >= 85)
+        .map((c) => c.targetTrackId);
+      for (const targetId of highConfidenceIds) {
+        const changed = await probeCandidateById(targetId);
+        if (changed) {
+          matched = matchTransferTrack(track, working);
+          if (matched.status === "matched") {
+            break;
+          }
+        }
+      }
     }
 
     return matched;
@@ -268,8 +297,29 @@ export class TransferService {
     signal?: AbortSignal,
   ): Promise<LoadedSourceBundle> {
     const sourceMetaByKey = new Map<string, { availability: TransferAvailability; mediaId?: string }>();
+    const requestedIds = input.selectedSourceTrackIds
+      ? [...new Set(input.selectedSourceTrackIds.map((id) => id.trim()).filter(Boolean))]
+      : [];
+    const selectedSet = requestedIds.length > 0 ? new Set(requestedIds) : null;
 
     if (input.sourceTracks && input.sourceTracks.length > 0) {
+      if (selectedSet) {
+        const seen = new Set<string>();
+        const filtered: TransferTrack[] = [];
+        for (const item of input.sourceTracks) {
+          const tid = item.sourceTrackId?.trim();
+          if (tid && selectedSet.has(tid) && !seen.has(tid) && filtered.length < MAX_TRANSFER_TRACKS) {
+            seen.add(tid);
+            filtered.push(item);
+          }
+        }
+        return {
+          tracks: filtered,
+          sourceTotal: selectedSet.size,
+          truncated: filtered.length < selectedSet.size,
+          sourceMetaByKey,
+        };
+      }
       const sourceTotal = input.sourceTracks.length;
       const tracks = input.sourceTracks.slice(0, MAX_TRANSFER_TRACKS);
       return { tracks, sourceTotal, truncated: sourceTotal > tracks.length, sourceMetaByKey };
@@ -289,31 +339,65 @@ export class TransferService {
     }
 
     const sourceAdapter = this.#providers.get(input.sourceProvider);
+    const sourceAuth = this.#buildAuth(actor, input.sourceProvider, signal);
     const loaded = await this.#fetchProviderPlaylistBounded(
       sourceAdapter,
       input.playlistId,
-      this.#buildAuth(actor, input.sourceProvider, signal),
+      sourceAuth,
       MAX_TRANSFER_TRACKS,
     );
 
-    const selectedSet =
-      input.selectedSourceTrackIds && input.selectedSourceTrackIds.length > 0
-        ? new Set(input.selectedSourceTrackIds)
-        : null;
+    if (selectedSet) {
+      // T11: Reconcile against the deduplicated requested selection set; scan further when >1,000 playlist had selected tracks past index 999
+      const collectSelected = (songs: readonly Song[]): Song[] => {
+        const seen = new Set<string>();
+        const picked: Song[] = [];
+        for (const song of songs) {
+          if (selectedSet.has(song.id) && !seen.has(song.id) && picked.length < MAX_TRANSFER_TRACKS) {
+            seen.add(song.id);
+            picked.push(song);
+          }
+        }
+        return picked;
+      };
 
-    const filteredSongs = loaded.songs.filter((song) => !selectedSet || selectedSet.has(song.id));
-    for (const song of filteredSongs) {
+      let filteredSongs = collectSelected(loaded.songs);
+      const targetCollectCount = Math.min(selectedSet.size, MAX_TRANSFER_TRACKS);
+      if (filteredSongs.length < targetCollectCount && loaded.truncated) {
+        const deepScanned = await sourceAdapter.getAllPlaylistTracks(
+          input.playlistId,
+          sourceAuth,
+          MAX_SELECTED_SCAN_TRACKS,
+        );
+        filteredSongs = collectSelected(deepScanned);
+      }
+
+      for (const song of filteredSongs) {
+        sourceMetaByKey.set(`${song.platform}:${song.id}`, {
+          availability: songToAvailability(song),
+          mediaId: song.mediaId,
+        });
+      }
+
+      return {
+        tracks: filteredSongs.map(songToTransferTrack),
+        sourceTotal: selectedSet.size,
+        truncated: filteredSongs.length < selectedSet.size,
+        sourceMetaByKey,
+      };
+    }
+
+    for (const song of loaded.songs) {
       sourceMetaByKey.set(`${song.platform}:${song.id}`, {
         availability: songToAvailability(song),
         mediaId: song.mediaId,
       });
     }
 
-    const effectiveTotal = selectedSet ? filteredSongs.length : loaded.sourceTotal;
     return {
-      tracks: filteredSongs.map(songToTransferTrack),
-      sourceTotal: effectiveTotal,
-      truncated: !selectedSet && loaded.truncated,
+      tracks: loaded.songs.map(songToTransferTrack),
+      sourceTotal: loaded.sourceTotal,
+      truncated: loaded.truncated,
       sourceMetaByKey,
     };
   }
@@ -538,18 +622,22 @@ export class TransferService {
           const locked = Boolean(song.availability?.playback.locked);
 
           // T04: VIP tracks with `locked === false` are playable for the current VIP account
-          let issueType: AuditIssueItem["issueType"] | null = null;
+          let staticIssueType: AuditIssueItem["issueType"] | null = null;
           let reason = song.availability?.playback.reason ?? "曲目当前不可直接完整播放";
 
           if (status === "copyright") {
-            issueType = "copyright_unavailable";
+            staticIssueType = "copyright_unavailable";
           } else if (locked) {
             // B27: Preserve distinct paid_album / restricted categories instead of collapsing all to vip_only
-            if (status === "paid_album") issueType = "paid_album";
-            else if (status === "restricted") issueType = "restricted";
-            else issueType = "vip_only";
-          } else if (shouldProbe) {
-            // T09: Actively probe stream availability when requested
+            if (status === "paid_album") staticIssueType = "paid_album";
+            else if (status === "restricted") staticIssueType = "restricted";
+            else staticIssueType = "vip_only";
+          }
+
+          let issueType: AuditIssueItem["issueType"] | null = staticIssueType;
+
+          // T09: When checkAvailability is explicitly enabled, probe real audio stream even for statically locked songs
+          if (shouldProbe) {
             const probed = await this.#probeTrackAvailability(
               netease,
               {
@@ -560,15 +648,22 @@ export class TransferService {
               },
               searchAuth,
             );
-            if (probed === "trial_only") {
+            if (probed === "playable") {
+              issueType = null;
+            } else if (probed === "trial_only") {
               issueType = "trial_only";
               reason = "实测音源仅提供试听片段";
             } else if (probed === "copyright_unavailable") {
               issueType = "copyright_unavailable";
               reason = "实测音源无可用版权";
             } else if (probed === "vip_only") {
-              issueType = "vip_only";
-              reason = "实测音源需要会员权限";
+              issueType =
+                staticIssueType === "paid_album" || staticIssueType === "restricted"
+                  ? staticIssueType
+                  : "vip_only";
+              if (!staticIssueType) {
+                reason = "实测音源需要会员权限";
+              }
             }
           }
 

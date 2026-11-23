@@ -231,3 +231,75 @@ test("LRC parser supports [offset:+/-ms], 4-digit fractions, interlude markers, 
   assert.equal(merged[1]?.translation, undefined);
   assert.equal(merged[2]?.translation, undefined);
 });
+
+test("injectMp3Metadata preserves ID3v1.1 track number & fallback tags and converts ID3v2.2 frames (Phase 7 J08)", () => {
+  const mp3 = makeMinimalMp3();
+
+  // 1. Build MP3 with trailing 128-byte ID3v1.1 tag (track = 7, year = "2005", comment = "V1Note")
+  const v1 = new Uint8Array(128);
+  v1.set(new TextEncoder().encode("TAG"), 0);
+  v1.set(new TextEncoder().encode("V1 Title"), 3);
+  v1.set(new TextEncoder().encode("V1 Artist"), 33);
+  v1.set(new TextEncoder().encode("V1 Album"), 63);
+  v1.set(new TextEncoder().encode("2005"), 93);
+  v1.set(new TextEncoder().encode("V1Note"), 97);
+  v1[125] = 0x00;
+  v1[126] = 7; // Track #7
+  v1[127] = 13; // Pop
+
+  const mp3WithV11 = concatBytes([mp3, v1]);
+  const injectedFromV11 = injectMp3Metadata(mp3WithV11, sampleMeta, "", null);
+  const v11Text = Buffer.from(injectedFromV11).toString("latin1");
+  assert.ok(v11Text.includes("TRCK"), "ID3v1.1 track number must be promoted to TRCK");
+  assert.ok(v11Text.includes("TYER"), "ID3v1.1 year must be preserved as TYER");
+  assert.ok(v11Text.includes("COMM"), "ID3v1.1 comment must be preserved as COMM");
+  // Trailing 128-byte ID3v1 block stripped cleanly, original MPEG frames intact at tail
+  assert.deepEqual(injectedFromV11.subarray(injectedFromV11.length - mp3.length), mp3);
+  // Decode UTF-16LE "7" inside TRCK frame
+  assert.ok(Buffer.from(injectedFromV11).includes(Buffer.from([0xff, 0xfe, 0x37, 0x00])));
+
+  // 2. Build MP3 with ID3v2.2 (major = 2, 6-byte frame headers: TRK="09", PIC=PNG)
+  const trkData = new Uint8Array([0x00, 0x30, 0x39]); // Latin-1 "09"
+  const trkV22 = concatBytes([
+    new TextEncoder().encode("TRK"),
+    new Uint8Array([0x00, 0x00, trkData.length]),
+    trkData,
+  ]);
+  const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0xaa, 0xbb]);
+  // ID3v2.2 PIC: [encoding=0x00, format="PNG", picType=0x03, desc="", 0x00, imageBytes]
+  const picData = concatBytes([
+    new Uint8Array([0x00]),
+    new TextEncoder().encode("PNG"),
+    new Uint8Array([0x03, 0x00]),
+    pngBytes,
+  ]);
+  const picV22 = concatBytes([
+    new TextEncoder().encode("PIC"),
+    new Uint8Array([0x00, 0x00, picData.length]),
+    picData,
+  ]);
+  const v22Body = concatBytes([trkV22, picV22]);
+  const v22Tag = concatBytes([
+    new Uint8Array([
+      0x49,
+      0x44,
+      0x33,
+      0x02,
+      0x00,
+      0x00,
+      (v22Body.length >>> 21) & 0x7f,
+      (v22Body.length >>> 14) & 0x7f,
+      (v22Body.length >>> 7) & 0x7f,
+      v22Body.length & 0x7f,
+    ]),
+    v22Body,
+  ]);
+  const mp3WithV22 = concatBytes([v22Tag, mp3]);
+  const injectedFromV22 = injectMp3Metadata(mp3WithV22, sampleMeta, "", null);
+  const v22OutLatin1 = Buffer.from(injectedFromV22).toString("latin1");
+  assert.equal(injectedFromV22[3], 0x03, "output upgraded to ID3v2.3");
+  assert.ok(v22OutLatin1.includes("TRCK"), "ID3v2.2 TRK mapped to ID3v2.3 TRCK");
+  assert.ok(v22OutLatin1.includes("APIC"), "ID3v2.2 PIC mapped to ID3v2.3 APIC");
+  assert.ok(v22OutLatin1.includes("image/png\0"), "ID3v2.2 3-char PNG converted to MIME image/png\\0");
+  assert.deepEqual(injectedFromV22.subarray(injectedFromV22.length - mp3.length), mp3);
+});

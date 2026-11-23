@@ -28,7 +28,7 @@ import { MiniProgressStripe, PlaybackProgressBar } from "./PlaybackProgressBar.j
 
 export function PlayerBar() {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
-  const hasQueue = usePlayerStore((s) => s.queue.length > 0);
+  const hasPlayableQueue = usePlayerStore((s) => s.queue.some((item) => !item.availability?.playback.locked));
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const isLoading = usePlayerStore((s) => s.isLoading);
   const volume = usePlayerStore((s) => s.volume);
@@ -62,7 +62,7 @@ export function PlayerBar() {
 
   const likeMutation = useToggleLikeMutation();
 
-  const canControl = Boolean(currentTrack) || hasQueue;
+  const canControl = Boolean(currentTrack) || hasPlayableQueue;
   const effectiveVolume = muted ? 0 : volume;
   const activeQuality = resolveEffectivePlaybackQuality(
     currentTrack,

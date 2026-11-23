@@ -100,6 +100,7 @@ export const CloudTracksPageSchema = z.object({
   songs: z.array(SongSchema),
   total: z.number().int().nonnegative(),
   offset: z.number().int().nonnegative(),
+  nextOffset: z.number().int().nonnegative().optional(),
   limit: z.number().int().positive(),
   hasMore: z.boolean(),
 });

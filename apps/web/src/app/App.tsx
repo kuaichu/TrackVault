@@ -18,6 +18,7 @@ import { TransferPage } from "../features/transfer/TransferPage.js";
 import { api } from "../shared/api/endpoints.js";
 import { ApiClientError, setUnauthorizedHandler } from "../shared/api/http-client.js";
 import { clearPendingDirectLinkJobs } from "../shared/hooks/use-job-events.js";
+import { useToastStore } from "../shared/store/toast-store.js";
 import { EmptyState, ToastContainer } from "../shared/ui/primitives.js";
 import { AppShell } from "./AppShell.js";
 
@@ -130,6 +131,8 @@ function AuthenticatedApp() {
   const clearAuthSession = useCallback(() => {
     audioEngine.stop();
     clearPendingDirectLinkJobs();
+    // F02: Clear global toasts (such as 8s direct-link notifications) across session boundaries
+    useToastStore.getState().clear();
     authQueryClient.setQueryData<AuthStatus>(["auth-status"], (prev) => ({
       initialized: prev?.initialized ?? true,
       authenticated: false,
@@ -155,6 +158,10 @@ function AuthenticatedApp() {
     const prev = prevUserIdRef.current;
     if (prev !== null && prev !== activeUserId) {
       audioEngine.stop();
+      clearPendingDirectLinkJobs();
+      if (activeUserId !== null) {
+        useToastStore.getState().clear();
+      }
     }
     prevUserIdRef.current = activeUserId;
   }, [activeUserId]);

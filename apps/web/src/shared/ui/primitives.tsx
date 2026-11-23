@@ -16,9 +16,17 @@ export function CoverArt({
   rounded?: string;
   darkBackdrop?: boolean;
 }) {
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const safeSrc = sanitizeExternalUrl(src);
-  const failed = Boolean(safeSrc && failedSrc === safeSrc);
+  const [prevSafeSrc, setPrevSafeSrc] = useState<string | null>(safeSrc);
+  const [failed, setFailed] = useState(false);
+
+  // U07: Clear failure state whenever safeSrc transitions (so A(fail) -> B(ok) -> A retries loading A)
+  if (safeSrc !== prevSafeSrc) {
+    setPrevSafeSrc(safeSrc);
+    if (failed) {
+      setFailed(false);
+    }
+  }
 
   const fallbackClass = darkBackdrop
     ? "bg-white/10 text-white/45"
@@ -42,7 +50,7 @@ export function CoverArt({
       alt={alt}
       loading="lazy"
       referrerPolicy="no-referrer"
-      onError={() => setFailedSrc(safeSrc)}
+      onError={() => setFailed(true)}
       className={`shrink-0 object-cover ${imgSurfaceClass} ${rounded} ${className}`}
     />
   );

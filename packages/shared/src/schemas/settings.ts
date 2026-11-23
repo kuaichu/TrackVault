@@ -27,6 +27,8 @@ export const PlayerStateSchema = z.object({
   playQueue: z.array(SongSchema).max(200),
   playbackSeconds: z.number().nonnegative().max(86_400),
   volume: z.number().min(0).max(1),
+  muted: z.boolean().optional(),
+  lastNonZeroVolume: z.number().min(0).max(1).optional(),
   playbackMode: PlaybackModeSchema,
 });
 export type PlayerState = z.infer<typeof PlayerStateSchema>;

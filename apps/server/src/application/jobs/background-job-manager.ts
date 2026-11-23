@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ErrorCode, JobEvent, JobKind, JobView } from "#shared";
@@ -8,6 +9,7 @@ import { AppError, isAppError } from "../../domain/errors.js";
 import {
   type JobRepository,
   type StoredJobRecord,
+  hasLocalDownloadArtifactExpectation,
   toJobView,
 } from "../../infrastructure/db/repositories/job-repository.js";
 
@@ -69,6 +71,10 @@ export class BackgroundJobManager {
     const recovered = this.#repo.recoverInterruptedJobs();
     for (const item of recovered) {
       void this.#deleteArtifactById(item.userId, item.id).catch(() => undefined);
+    }
+    // J04: Startup scan marks any completed local download whose temp file is already missing as expired
+    for (const completed of this.#repo.listActiveCompletedDownloads()) {
+      this.#reconcileArtifactRecord(completed, false);
     }
   }
 
@@ -161,15 +167,17 @@ export class BackgroundJobManager {
   }
 
   listForActor(actor: ActorContext, kind?: JobKind): JobView[] {
-    return this.#repo.listByUser(actor.userId, kind).map(toJobView);
+    return this.#repo
+      .listRawByUser(actor.userId, kind)
+      .map((record) => toJobView(this.#reconcileArtifactRecord(record, true)));
   }
 
   getOwnedJob(actor: ActorContext, jobId: string): StoredJobRecord {
-    const record = this.#repo.findOwned(actor.userId, jobId);
+    const record = this.#repo.findRawOwned(actor.userId, jobId);
     if (!record) {
       throw new AppError("NOT_FOUND", "任务不存在或无权访问。");
     }
-    return record;
+    return this.#reconcileArtifactRecord(record, true);
   }
 
   updateOwnedJobResult(
@@ -294,8 +302,25 @@ export class BackgroundJobManager {
     return { filePath: safeFilePath, downloadFilename: record.artifactFilename };
   }
 
-  #markArtifactExpired(record: StoredJobRecord): void {
-    if (record.metadata?.artifactExpired) return;
+  #reconcileArtifactRecord(record: StoredJobRecord, emitEvent: boolean): StoredJobRecord {
+    if (!hasLocalDownloadArtifactExpectation(record)) {
+      return record;
+    }
+    let exists = false;
+    try {
+      const safePath = this.#resolveSafeArtifactPath(record.userId, record.id);
+      exists = fsSync.statSync(safePath).isFile();
+    } catch {
+      exists = false;
+    }
+    if (exists) {
+      return record;
+    }
+    return this.#markArtifactExpired(record, emitEvent) ?? record;
+  }
+
+  #markArtifactExpired(record: StoredJobRecord, emitEvent = true): StoredJobRecord | null {
+    if (record.metadata?.artifactExpired) return record;
     const updated = this.#repo.update(record.id, {
       subtitle: "临时文件已过期，请重新下载",
       metadata: {
@@ -303,13 +328,14 @@ export class BackgroundJobManager {
         artifactExpired: true,
       },
     });
-    if (updated) {
+    if (updated && emitEvent) {
       this.#emit(record.userId, {
         type: "job_updated",
         job: toJobView(updated),
         timestamp: Date.now(),
       });
     }
+    return updated;
   }
 
   #resolveSafeArtifactPath(userId: string, jobId: string): string {
@@ -340,12 +366,16 @@ export class BackgroundJobManager {
           await fs.unlink(full).catch(() => undefined);
           // J04: Synchronize DB state and SSE event when expired artifact is purged
           const jobId = file.replace(/\.bin$/i, "");
-          const record = this.#repo.findById(jobId);
+          const record = this.#repo.findRawById(jobId);
           if (record) {
-            this.#markArtifactExpired(record);
+            this.#markArtifactExpired(record, true);
           }
         }
       }
+    }
+    // J04: Also reconcile any DB download records whose local temp file was already removed externally
+    for (const completed of this.#repo.listActiveCompletedDownloads()) {
+      this.#reconcileArtifactRecord(completed, true);
     }
   }
 

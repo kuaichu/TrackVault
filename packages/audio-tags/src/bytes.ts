@@ -41,10 +41,14 @@ export function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
 }
 
 /**
- * Safely returns the ID3v2 header + body (+ optional footer) length at startOffset, or 0 if invalid/out-of-bounds.
- * Supports 10-byte empty ID3v2 tags (tagSize === 0) as long as audio bytes follow.
+ * Safely parses an ID3v2 10-byte header at startOffset and returns the full tag byte length
+ * (header + body + optional v2.4 footer) when strictly smaller than `availableBytes`, or 0 otherwise.
  */
-export function getId3v2TagLength(bytes: Uint8Array, startOffset = 0): number {
+export function parseId3v2HeaderLength(
+  bytes: Uint8Array,
+  startOffset = 0,
+  availableBytes = bytes.length - startOffset,
+): number {
   if (bytes.length < startOffset + 10) return 0;
   const b0 = bytes[startOffset] ?? 0;
   const b1 = bytes[startOffset + 1] ?? 0;
@@ -66,11 +70,19 @@ export function getId3v2TagLength(bytes: Uint8Array, startOffset = 0): number {
   const hasFooter = major === 4 && Boolean(flags & 0x10);
   const total = 10 + tagSize + (hasFooter ? 10 : 0);
 
-  // Never exceed the file buffer (prevents malformed headers from stripping the entire audio stream).
-  if (total < 10 || startOffset + total >= bytes.length) {
+  // Never exceed available container size (prevents malformed headers from stripping the entire audio stream).
+  if (total < 10 || total >= availableBytes) {
     return 0;
   }
   return total;
+}
+
+/**
+ * Safely returns the ID3v2 header + body (+ optional footer) length at startOffset, or 0 if invalid/out-of-bounds.
+ * Supports 10-byte empty ID3v2 tags (tagSize === 0) as long as audio bytes follow.
+ */
+export function getId3v2TagLength(bytes: Uint8Array, startOffset = 0): number {
+  return parseId3v2HeaderLength(bytes, startOffset, bytes.length - startOffset);
 }
 
 /**

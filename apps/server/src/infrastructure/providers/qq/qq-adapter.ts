@@ -70,7 +70,13 @@ function levelToQqSpecs(level: QualityLevel): QqFileSpec[] {
       add(QQ_QUALITY_SPECS.flac);
     } else if (item === "lossless") {
       add(QQ_QUALITY_SPECS.flac);
-    } else if (item === "exhigh" || item === "jyeffect" || item === "sky") {
+    } else if (
+      item === "exhigh" ||
+      item === "jyeffect" ||
+      item === "sky" ||
+      item === "vivid" ||
+      item === "dolby"
+    ) {
       add(QQ_QUALITY_SPECS["320"]);
     } else {
       add(QQ_QUALITY_SPECS["128"]);
@@ -89,6 +95,12 @@ function decodeBase64IfNeeded(raw: unknown): string {
   } catch {
     return "";
   }
+}
+
+function isQqAuthInvalidCode(code: unknown): boolean {
+  if (code === undefined || code === null) return false;
+  const n = Number(code);
+  return n === 1000 || n === 301 || n === 401 || n === 403;
 }
 
 function sortAndFilterSongs(songs: Song[], keyword?: string, sort?: PlaylistSort): Song[] {
@@ -420,7 +432,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
           cookieMap,
           signal: auth.signal,
         });
-        if (res.code === 1000 || res.code === 301) {
+        if (isQqAuthInvalidCode(res.code)) {
           throw new AppError("CREDENTIAL_INVALID", "QQ 音乐登录态已失效，请重新绑定。");
         }
         if (res.code !== undefined && res.code !== 0) {
@@ -462,12 +474,16 @@ export class QqMusicAdapter implements MusicProviderAdapter {
       fetchCollectedPlaylists(),
     ]);
 
-    // A11: Never mask expired credentials (code 1000/301) as an empty playlist list
-    if (createdRes.status === "fulfilled") {
-      const code = createdRes.value.code;
-      if (code === 1000 || code === 301) {
-        throw new AppError("CREDENTIAL_INVALID", "QQ 音乐登录态已失效，请重新绑定。");
-      }
+    // A11: Never mask expired credentials (HTTP 401/403 or business code 1000/301) on EITHER sub-request as an empty list
+    if (
+      createdRes.status === "rejected" &&
+      createdRes.reason instanceof AppError &&
+      createdRes.reason.code === "CREDENTIAL_INVALID"
+    ) {
+      throw createdRes.reason;
+    }
+    if (createdRes.status === "fulfilled" && isQqAuthInvalidCode(createdRes.value.code)) {
+      throw new AppError("CREDENTIAL_INVALID", "QQ 音乐登录态已失效，请重新绑定。");
     }
     if (
       collectedRes.status === "rejected" &&
@@ -475,6 +491,9 @@ export class QqMusicAdapter implements MusicProviderAdapter {
       collectedRes.reason.code === "CREDENTIAL_INVALID"
     ) {
       throw collectedRes.reason;
+    }
+    if (collectedRes.status === "fulfilled" && isQqAuthInvalidCode(collectedRes.value.code)) {
+      throw new AppError("CREDENTIAL_INVALID", "QQ 音乐登录态已失效，请重新绑定。");
     }
 
     const createdFailed =
@@ -560,7 +579,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
     });
 
     // A11: Validate business code and payload BEFORE mapping or caching
-    if (data.code === 1000 || data.code === 301) {
+    if (isQqAuthInvalidCode(data.code)) {
       throw new AppError("CREDENTIAL_INVALID", "QQ 音乐登录态已失效，请重新绑定。");
     }
     if (data.code !== undefined && data.code !== 0) {
@@ -835,8 +854,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
     const specs = levelToQqSpecs(level);
     const guid = String(Math.floor(Math.random() * 10_000_000));
 
-    let gotValidUpstreamResponse = false;
-    let lastTransportError: AppError | null = null;
+    let lastUpstreamError: AppError | null = null;
     let firstTrialFallback: ResolvedAudio | null = null;
 
     for (const spec of specs) {
@@ -878,15 +896,27 @@ export class QqMusicAdapter implements MusicProviderAdapter {
           cookieMap,
           auth.signal,
         );
-        gotValidUpstreamResponse = true;
       } catch (error) {
-        if (error instanceof AppError && error.code === "UPSTREAM_TIMEOUT") {
-          lastTransportError = error;
-        } else if (error instanceof AppError) {
-          lastTransportError = error;
+        if (error instanceof AppError) {
+          lastUpstreamError = error;
         } else {
-          lastTransportError = new AppError("UPSTREAM_ERROR", "QQ 音乐音源解析请求失败。", { cause: error });
+          lastUpstreamError = new AppError("UPSTREAM_ERROR", "QQ 音乐音源解析请求失败。", { cause: error });
         }
+        continue;
+      }
+
+      // A12: Inspect inner JSON business codes (e.g. HTTP 200 with code=503) before treating empty purl as copyright
+      const topCode = res.code;
+      const innerCode = res.req_0?.code;
+      if (isQqAuthInvalidCode(topCode) || isQqAuthInvalidCode(innerCode)) {
+        lastUpstreamError = new AppError("CREDENTIAL_INVALID", "QQ 音乐登录态已失效，请重新绑定。");
+        continue;
+      }
+      if ((topCode !== undefined && topCode !== 0) || (innerCode !== undefined && innerCode !== 0)) {
+        lastUpstreamError = new AppError(
+          "UPSTREAM_ERROR",
+          `QQ 音乐音源服务返回异常状态 (code ${innerCode || topCode})。`,
+        );
         continue;
       }
 
@@ -936,9 +966,9 @@ export class QqMusicAdapter implements MusicProviderAdapter {
       return firstTrialFallback;
     }
 
-    // A12: Distinguish upstream transport failures (503/timeout) from genuine copyright unavailability
-    if (!gotValidUpstreamResponse && lastTransportError) {
-      throw lastTransportError;
+    // A12: Distinguish any upstream transport/service failure (even mixed with an empty higher tier) from copyright unavailability
+    if (lastUpstreamError) {
+      throw lastUpstreamError;
     }
 
     throw new AppError(

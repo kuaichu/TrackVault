@@ -1019,10 +1019,13 @@ export class NeteaseAdapter implements MusicProviderAdapter {
             ? safeOffset + rows.length < rawCount
             : Boolean(response.body.hasMore) || rows.length >= safeLimit;
 
+      const nextOffset = safeOffset + (rows.length > 0 ? rows.length : songs.length);
+
       return {
         songs,
         total,
         offset: safeOffset,
+        nextOffset,
         limit: safeLimit,
         hasMore,
       };
@@ -1038,11 +1041,14 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     this.#assertAuthed(auth);
     const allSongs: Song[] = [];
     const pageSize = 100;
+    let offset = 0;
 
     for (let page = 0; page < MAX_CLOUD_PAGES; page += 1) {
-      const result = await this.getCloudTracksPage(auth, { offset: page * pageSize, limit: pageSize });
+      const result = await this.getCloudTracksPage(auth, { offset, limit: pageSize });
       allSongs.push(...result.songs);
-      if (!result.hasMore || result.songs.length === 0) break;
+      const next = result.nextOffset ?? offset + pageSize;
+      if (!result.hasMore || next <= offset) break;
+      offset = next;
     }
     return allSongs;
   }
@@ -1265,6 +1271,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     const uniqueIds = [...new Set(trackIds.map((id) => id.trim()).filter(Boolean))];
     if (uniqueIds.length === 0) return { addedCount: 0 };
 
+    let completedCount = 0;
     try {
       const chunkSize = 50;
       for (let i = 0; i < uniqueIds.length; i += chunkSize) {
@@ -1277,13 +1284,29 @@ export class NeteaseAdapter implements MusicProviderAdapter {
           auth.signal,
         );
         this.#assertBusinessSuccess(response.body, "添加歌曲到歌单失败");
+        completedCount += chunk.length;
       }
 
-      this.#playlistDetailCache.invalidateScope(auth.scopeKey, `detail:${playlistId}`);
-      return { addedCount: uniqueIds.length };
+      return { addedCount: completedCount };
     } catch (error) {
-      if (error instanceof AppError) throw error;
-      throw new AppError("UPSTREAM_ERROR", extractApiError(error, "添加歌曲到歌单失败"), { cause: error });
+      const partialNote =
+        completedCount > 0 ? `（已成功添加前 ${completedCount}/${uniqueIds.length} 首）` : "";
+      if (error instanceof AppError) {
+        if (!partialNote) throw error;
+        throw new AppError(error.code, `${error.message}${partialNote}`, {
+          cause: error,
+          details: { ...(error.details ?? {}), completedCount, totalCount: uniqueIds.length },
+        });
+      }
+      throw new AppError("UPSTREAM_ERROR", `${extractApiError(error, "添加歌曲到歌单失败")}${partialNote}`, {
+        cause: error,
+        details: { completedCount, totalCount: uniqueIds.length },
+      });
+    } finally {
+      // A02: Invalidate playlist detail cache whenever at least one batch succeeded
+      if (completedCount > 0) {
+        this.#playlistDetailCache.invalidateScope(auth.scopeKey, `detail:${playlistId}`);
+      }
     }
   }
 
@@ -1296,6 +1319,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     const uniqueIds = [...new Set(trackIds.map((id) => id.trim()).filter(Boolean))];
     if (uniqueIds.length === 0) return { removedCount: 0 };
 
+    let completedCount = 0;
     try {
       const chunkSize = 50;
       for (let i = 0; i < uniqueIds.length; i += chunkSize) {
@@ -1308,13 +1332,29 @@ export class NeteaseAdapter implements MusicProviderAdapter {
           auth.signal,
         );
         this.#assertBusinessSuccess(response.body, "从歌单移除歌曲失败");
+        completedCount += chunk.length;
       }
 
-      this.#playlistDetailCache.invalidateScope(auth.scopeKey, `detail:${playlistId}`);
-      return { removedCount: uniqueIds.length };
+      return { removedCount: completedCount };
     } catch (error) {
-      if (error instanceof AppError) throw error;
-      throw new AppError("UPSTREAM_ERROR", extractApiError(error, "从歌单移除歌曲失败"), { cause: error });
+      const partialNote =
+        completedCount > 0 ? `（已成功移除前 ${completedCount}/${uniqueIds.length} 首）` : "";
+      if (error instanceof AppError) {
+        if (!partialNote) throw error;
+        throw new AppError(error.code, `${error.message}${partialNote}`, {
+          cause: error,
+          details: { ...(error.details ?? {}), completedCount, totalCount: uniqueIds.length },
+        });
+      }
+      throw new AppError("UPSTREAM_ERROR", `${extractApiError(error, "从歌单移除歌曲失败")}${partialNote}`, {
+        cause: error,
+        details: { completedCount, totalCount: uniqueIds.length },
+      });
+    } finally {
+      // A02: Invalidate playlist detail cache whenever at least one batch succeeded
+      if (completedCount > 0) {
+        this.#playlistDetailCache.invalidateScope(auth.scopeKey, `detail:${playlistId}`);
+      }
     }
   }
 
@@ -1329,13 +1369,14 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       throw new AppError("VALIDATION_ERROR", "请输入新歌单名称。");
     }
 
+    let createdId = "";
     try {
       const createRes = await this.#call(
         () => this.#api.playlist_create(this.#baseParams(auth, { name: playlistName })),
         auth.signal,
       );
       this.#assertBusinessSuccess(createRes.body, "创建网易云歌单失败");
-      const createdId = String(
+      createdId = String(
         createRes.body.id ?? (createRes.body.playlist as { id?: number } | undefined)?.id ?? "",
       );
       if (!createdId) {
@@ -1350,8 +1391,24 @@ export class NeteaseAdapter implements MusicProviderAdapter {
         addedCount,
       };
     } catch (error) {
-      if (error instanceof AppError) throw error;
+      if (error instanceof AppError) {
+        if (createdId) {
+          throw new AppError(
+            error.code,
+            `歌单「${playlistName}」已创建，但写入曲目未全部完成：${error.message}`,
+            {
+              cause: error,
+              details: { ...(error.details ?? {}), playlistId: createdId },
+            },
+          );
+        }
+        throw error;
+      }
       throw new AppError("UPSTREAM_ERROR", extractApiError(error, "创建网易云歌单失败"), { cause: error });
+    } finally {
+      if (createdId) {
+        this.#playlistDetailCache.invalidateScope(auth.scopeKey, `detail:${createdId}`);
+      }
     }
   }
 
@@ -1602,8 +1659,8 @@ export class NeteaseAdapter implements MusicProviderAdapter {
             item.time && Number(item.time) > 0 ? Math.round(Number(item.time) / 1000) : null;
           const hasTrialFlag = Boolean(item.freeTrialInfo && Number(item.freeTrialInfo.end ?? 0) > 0);
           const trial = isTrialDuration(target.durationSeconds, durationSeconds, hasTrialFlag);
-          // A14: Safely map upstream level (e.g. "higher") via QualityLevelSchema instead of blind cast
-          const actualLevel = normalizeQualityLevel(item.level, candidateLevel);
+          // A14: Safely map upstream level (including vivid/dolby or unknown bitrate-inferred tiers)
+          const actualLevel = normalizeQualityLevel(item.level, candidateLevel, { bitrate, format });
           const downgraded = isQualityDowngraded(level, { bitrate, format, level: actualLevel });
 
           const candidate: ResolvedAudio = {

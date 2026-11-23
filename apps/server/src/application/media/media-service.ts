@@ -7,6 +7,8 @@ import {
   injectMp3Metadata,
   isFlacBytes,
   isMp3Bytes,
+  isMpegAudioFrameSync,
+  parseId3v2HeaderLength,
 } from "#audio-tags";
 import {
   ALLOWED_COVER_HOST_SUFFIXES,
@@ -99,6 +101,15 @@ export function isAcceptableAudioContentType(rawContentType: string | null | und
   );
 }
 
+function isAacAdtsSync(bytes: Uint8Array, offset: number): boolean {
+  if (bytes.length < offset + 4) return false;
+  const b0 = bytes[offset] ?? 0;
+  const b1 = bytes[offset + 1] ?? 0;
+  const b2 = bytes[offset + 2] ?? 0;
+  // 12-bit syncword 0xFFF, layer == 00, sample frequency index != 0x0F (forbidden)
+  return b0 === 0xff && (b1 & 0xf6) === 0xf0 && ((b2 >>> 2) & 0x0f) !== 0x0f;
+}
+
 /**
  * J01: Magic-byte signature verification covering MP3, FLAC, M4A/MP4 (ftyp at offset 4), WAV, OGG, and AAC ADTS.
  */
@@ -131,13 +142,13 @@ export function hasValidAudioSignature(bytes: Uint8Array): boolean {
     return true;
   }
 
-  // AAC ADTS (optional leading ID3v2 followed by 0xFFF sync + layer == 00)
-  const id3Offset = getAllId3v2TagsLength(bytes);
-  if (
-    bytes.length >= id3Offset + 4 &&
-    bytes[id3Offset] === 0xff &&
-    ((bytes[id3Offset + 1] ?? 0) & 0xf6) === 0xf0
-  ) {
+  // AAC ADTS (optional leading ID3v2 + zero padding followed by 0xFFF sync + layer == 00)
+  let pos = getAllId3v2TagsLength(bytes);
+  const maxScan = Math.min(bytes.length - 4, pos + 4096);
+  while (pos <= maxScan && bytes[pos] === 0x00) {
+    pos += 1;
+  }
+  if (isAacAdtsSync(bytes, pos)) {
     return true;
   }
 
@@ -246,12 +257,49 @@ async function finishWriteStream(
   });
 }
 
-async function readLeadingBytes(filePath: string, maxBytes: number): Promise<Uint8Array> {
+/**
+ * J01: Bounded offset-aware audio file signature check.
+ * Skips up to 16 consecutive ID3v2 headers (requiring each declared length < remaining fileSize),
+ * then reads at most 4,096 bytes at the actual audio stream offset so valid MP3/AAC files with >4KB
+ * embedded cover art pass while plain text or audio-less files are rejected with constant ~4KB RAM.
+ */
+export async function verifyDownloadedAudioFile(filePath: string, knownFileSize?: number): Promise<boolean> {
+  const fileSize = knownFileSize ?? (await fsPromises.stat(filePath)).size;
+  if (fileSize < 4) return false;
+
   const handle = await fsPromises.open(filePath, "r");
   try {
-    const buf = Buffer.alloc(maxBytes);
-    const { bytesRead } = await handle.read(buf, 0, maxBytes, 0);
-    return new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
+    let audioOffset = 0;
+    const headerBuf = Buffer.alloc(10);
+    for (let i = 0; i < 16; i += 1) {
+      if (audioOffset + 10 >= fileSize) break;
+      const { bytesRead } = await handle.read(headerBuf, 0, 10, audioOffset);
+      if (bytesRead < 10) break;
+      const tagLen = parseId3v2HeaderLength(headerBuf, 0, fileSize - audioOffset);
+      if (tagLen <= 0) break;
+      audioOffset += tagLen;
+    }
+
+    const readLen = Math.min(4096, fileSize - audioOffset);
+    if (readLen < 4) return false;
+
+    const windowBuf = Buffer.alloc(readLen);
+    const { bytesRead } = await handle.read(windowBuf, 0, readLen, audioOffset);
+    if (bytesRead < 4) return false;
+    const windowBytes = new Uint8Array(windowBuf.buffer, windowBuf.byteOffset, bytesRead);
+
+    if (audioOffset === 0) {
+      return hasValidAudioSignature(windowBytes);
+    }
+
+    if (isFlacBytes(windowBytes)) return true;
+
+    let pos = 0;
+    const maxScan = windowBytes.length - 4;
+    while (pos <= maxScan && windowBytes[pos] === 0x00) {
+      pos += 1;
+    }
+    return isMpegAudioFrameSync(windowBytes, pos) || isAacAdtsSync(windowBytes, pos);
   } finally {
     await handle.close();
   }
@@ -545,13 +593,14 @@ export class MediaService {
 
         if (input.mode === "direct_link") {
           return {
-            subtitle: `${getQualityLabel(resolved.level)} 直链已就绪`,
+            subtitle: `${getQualityLabel(resolved.level, resolved.bitrate)} 直链已就绪`,
             artifactFilename: filename,
             directUrl: resolved.url,
             metadata: {
               songId: input.song.id,
               platform: input.song.platform,
               level: resolved.level,
+              bitrate: resolved.bitrate,
               mode: input.mode,
               downgraded: resolved.downgraded,
             },
@@ -647,11 +696,11 @@ export class MediaService {
           reader.releaseLock();
         }
 
-        // J01: Verify non-empty file & valid audio container magic bytes before completing or tagging
+        // J01: Verify non-empty file & valid audio container signature (bounded ID3v2 offset-aware)
         const downloadedStat = await fsPromises.stat(filePath);
-        const leadingBytes =
-          downloadedStat.size > 0 ? await readLeadingBytes(filePath, 4096) : new Uint8Array();
-        if (downloadedStat.size <= 0 || !hasValidAudioSignature(leadingBytes)) {
+        const isValidAudio =
+          downloadedStat.size > 0 && (await verifyDownloadedAudioFile(filePath, downloadedStat.size));
+        if (!isValidAudio) {
           await fsPromises.unlink(filePath).catch(() => undefined);
           throw new AppError("UPSTREAM_ERROR", "下载内容校验失败，上游未返回有效的音频文件。");
         }
@@ -708,12 +757,13 @@ export class MediaService {
 
         const finalStat = await fsPromises.stat(filePath);
         return {
-          subtitle: `${getQualityLabel(resolved.level)} · ${(finalStat.size / 1024 / 1024).toFixed(1)} MB`,
+          subtitle: `${getQualityLabel(resolved.level, resolved.bitrate)} · ${(finalStat.size / 1024 / 1024).toFixed(1)} MB`,
           artifactFilename: filename,
           metadata: {
             songId: input.song.id,
             platform: input.song.platform,
             level: resolved.level,
+            bitrate: resolved.bitrate,
             mode: input.mode,
             fileSizeBytes: finalStat.size,
             downgraded: resolved.downgraded,

@@ -18,7 +18,7 @@ import {
   TrendingUp,
   X,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import type { AuthStatus, UserSummary } from "#shared";
 import { FullscreenPlayer } from "../features/player/components/FullscreenPlayer.js";
@@ -27,14 +27,15 @@ import { RightDrawer } from "../features/player/components/RightDrawer.js";
 import { audioEngine } from "../features/player/engine/audio-engine.js";
 import { usePlayerStore } from "../features/player/store/player-store.js";
 import { api } from "../shared/api/endpoints.js";
-import { useJobEvents } from "../shared/hooks/use-job-events.js";
+import { clearPendingDirectLinkJobs, useJobEvents } from "../shared/hooks/use-job-events.js";
 import {
+  registerInertSynchronizer,
   setElementInert,
   useIsOverlayViewport,
   useModalFocusTrap,
 } from "../shared/hooks/use-modal-focus-trap.js";
 import { useThemeStore } from "../shared/store/theme-store.js";
-import { toast } from "../shared/store/toast-store.js";
+import { toast, useToastStore } from "../shared/store/toast-store.js";
 
 const EDITABLE_TARGET_SELECTOR = "input, textarea, select, [contenteditable='true']";
 const INTERACTIVE_SHORTCUT_SELECTOR =
@@ -97,19 +98,48 @@ export function AppShell({
   const toggleLightDark = useThemeStore((s) => s.toggleLightDark);
   const fullscreenOpen = usePlayerStore((s) => s.fullscreenOpen);
   const drawerOpen = usePlayerStore((s) => s.drawerOpen);
+  const isMobileViewport = useIsOverlayViewport(768);
   const isDrawerOverlay = useIsOverlayViewport(1280);
-  const hasModalOverlay = fullscreenOpen || mobileMenuOpen || (drawerOpen && isDrawerOverlay);
+  const prevMobileViewportRef = useRef(isMobileViewport);
 
-  // Trap focus inside mobile navigation drawer while open and restore on close
-  useModalFocusTrap(mobileDrawerRef, mobileMenuOpen && !fullscreenOpen, {
-    onClose: () => setMobileMenuOpen(false),
-  });
-
-  // Mark underlying app shell inert while any modal overlay (fullscreen player, mobile menu, or <xl drawer) is open
+  // U04: Auto-close mobile navigation drawer when viewport widens across the 768px (md:) breakpoint
   useEffect(() => {
+    const wasMobile = prevMobileViewportRef.current;
+    prevMobileViewportRef.current = isMobileViewport;
+    if (
+      mobileMenuOpen &&
+      !isMobileViewport &&
+      (wasMobile || (typeof window !== "undefined" && typeof window.matchMedia === "function"))
+    ) {
+      setMobileMenuOpen(false);
+    }
+  }, [isMobileViewport, mobileMenuOpen]);
+
+  const effectiveMobileMenuOpen =
+    mobileMenuOpen &&
+    (isMobileViewport || (typeof window !== "undefined" && typeof window.matchMedia !== "function"));
+  const hasModalOverlay = fullscreenOpen || effectiveMobileMenuOpen || (drawerOpen && isDrawerOverlay);
+  const hasModalOverlayRef = useRef(hasModalOverlay);
+  hasModalOverlayRef.current = hasModalOverlay;
+
+  // Mark underlying app shell inert while any modal overlay is open, and register sync hook so focus restore sees un-inert DOM immediately
+  useLayoutEffect(() => {
     setElementInert(workspaceShellRef.current, hasModalOverlay);
     setElementInert(bottomBarsRef.current, hasModalOverlay);
   }, [hasModalOverlay]);
+
+  useLayoutEffect(() => {
+    return registerInertSynchronizer(() => {
+      const inert = hasModalOverlayRef.current;
+      setElementInert(workspaceShellRef.current, inert);
+      setElementInert(bottomBarsRef.current, inert);
+    });
+  }, []);
+
+  // Trap focus inside mobile navigation drawer while open and restore on close
+  useModalFocusTrap(mobileDrawerRef, effectiveMobileMenuOpen && !fullscreenOpen, {
+    onClose: () => setMobileMenuOpen(false),
+  });
 
   // Close mobile drawer automatically when route changes (fallback in addition to same-route link click)
   const pathname = location.pathname;
@@ -203,12 +233,16 @@ export function AppShell({
   const logoutMutation = useMutation({
     mutationFn: () => api.logout(),
     onSuccess: () => {
-      toast.info("已退出登录");
+      // F02: Clear session-scoped toasts (e.g. 8s direct-link toast) BEFORE pushing generic logout message
       if (onSessionCleared) {
         onSessionCleared();
+        toast.info("已退出登录");
         return;
       }
       audioEngine.stop();
+      clearPendingDirectLinkJobs();
+      useToastStore.getState().clear();
+      toast.info("已退出登录");
       queryClient.setQueryData<AuthStatus>(["auth-status"], (prev) => ({
         initialized: prev?.initialized ?? true,
         authenticated: false,
@@ -236,9 +270,11 @@ export function AppShell({
     e.preventDefault();
     const clean = quickQuery.trim();
     if (!clean) return;
-    const preferredMode = settingsQuery.data?.settings.providerMode ?? "aggregate";
+    // F07: Only attach &mode= when settings have loaded; otherwise let SearchPage apply default mode once loaded
+    const loadedMode = settingsQuery.data?.settings.providerMode;
     addSearchHistoryMutation.mutate(clean);
-    navigate(`/search?q=${encodeURIComponent(clean)}&mode=${preferredMode}`);
+    const modeSuffix = loadedMode ? `&mode=${encodeURIComponent(loadedMode)}` : "";
+    navigate(`/search?q=${encodeURIComponent(clean)}${modeSuffix}`);
   };
 
   const renderSidebarContent = (showCloseButton = false) => {
@@ -420,7 +456,7 @@ export function AppShell({
           </div>
         </div>
 
-        <RightDrawer backgroundInert={fullscreenOpen || mobileMenuOpen} />
+        <RightDrawer backgroundInert={fullscreenOpen || effectiveMobileMenuOpen} />
       </div>
 
       {/* Persistent Player Bar + Mobile Bottom Tab Bar */}
@@ -467,7 +503,7 @@ export function AppShell({
       </div>
 
       {/* Mobile Slide-Over Navigation Drawer (mounted outside inert shell containers) */}
-      {mobileMenuOpen && (
+      {effectiveMobileMenuOpen && (
         <div className="fixed inset-0 flex md:hidden" style={{ zIndex: "var(--tv-z-modal)" }}>
           <button
             type="button"

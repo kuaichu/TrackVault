@@ -1,5 +1,5 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, Play, Plus, Search } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Loader2, Play, Plus, Search } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
@@ -411,6 +411,17 @@ export function PlaylistDetailPage() {
         />
       ) : (
         <>
+          {detailQuery.data?.truncated && (
+            <output className="flex items-start gap-2 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-500">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                该歌单超过单次检索上限（共 {(playlist?.trackCount ?? total).toLocaleString("zh-CN")}{" "}
+                首），当前搜索或排序仅扫描前{" "}
+                {(detailQuery.data.scannedTotal ?? 10_000).toLocaleString("zh-CN")}{" "}
+                首曲目。清空筛选词并切回「默认排序」可翻页浏览全部曲目。
+              </span>
+            </output>
+          )}
           <SongTable
             songs={songs}
             indexOffset={(page - 1) * PAGE_SIZE}

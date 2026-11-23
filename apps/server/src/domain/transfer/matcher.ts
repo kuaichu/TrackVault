@@ -416,15 +416,45 @@ interface PreNormalizedTrack {
   readonly track: TransferTrack;
   readonly title: string;
   readonly rawArtists: readonly string[];
+  readonly canonicalArtistKey: string;
   readonly versionTags: Set<VersionTag>;
+  readonly versionKey: string;
+  readonly canonicalTrackKey: string;
+}
+
+function buildCanonicalArtistKey(rawArtists: readonly string[]): string {
+  const set = new Set<string>();
+  for (const raw of rawArtists) {
+    for (const alias of expandArtistAliases(raw)) {
+      set.add(alias);
+    }
+  }
+  return [...set].sort().join("|");
 }
 
 function preNormalize(track: TransferTrack): PreNormalizedTrack {
+  const title = normalizeMatchText(track.title);
+  const versionTags = extractVersionTags(track.title);
+  const versionKey = [...versionTags].sort().join(",");
+  const canonicalArtistKey = buildCanonicalArtistKey(track.artists);
+  const canonicalTrackKey = [
+    canonicalArtistKey,
+    versionKey,
+    normalizeVersionPreservingText(track.title),
+    normalizeMatchText(track.album),
+    track.source,
+    track.sourceTrackId ?? "",
+    String(track.durationSeconds ?? ""),
+  ].join("\0");
+
   return {
     track,
-    title: normalizeMatchText(track.title),
+    title,
     rawArtists: track.artists,
-    versionTags: extractVersionTags(track.title),
+    canonicalArtistKey,
+    versionTags,
+    versionKey,
+    canonicalTrackKey,
   };
 }
 
@@ -432,9 +462,81 @@ function hasCompatibleVersion(a: PreNormalizedTrack, b: PreNormalizedTrack): boo
   return a.versionTags.has("instrumental") === b.versionTags.has("instrumental");
 }
 
+function hasIdenticalVersionTags(a: PreNormalizedTrack, b: PreNormalizedTrack): boolean {
+  return a.versionKey === b.versionKey;
+}
+
 /**
- * Cooperative 3-pass async playlist comparator:
- * - Pass 1: all exact matches (exact title + artist overlap + compatible version)
+ * Deterministic, left-order-invariant maximum bipartite matching (Kuhn's augmenting paths).
+ * - Orders left nodes by ascending candidate degree, descending best edge tier, then canonical track key
+ *   (never relying on original left-playlist position except for byte-identical duplicate rows).
+ * - Orders each node's candidate edges by descending tier (exact artist set > partial artist overlap),
+ *   then right index, maximizing cardinality while preferring exact solo matches over duet steals.
+ */
+function solveDeterministicBipartiteMatching(
+  leftIndices: readonly number[],
+  leftNorm: readonly PreNormalizedTrack[],
+  buildEdges: (leftIdx: number, leftItem: PreNormalizedTrack) => Array<{ rIdx: number; tier: number }>,
+): Array<{ lIdx: number; rIdx: number }> {
+  const adjByLeft = new Map<number, number[]>();
+  const bestTierByLeft = new Map<number, number>();
+
+  for (const lIdx of leftIndices) {
+    const leftItem = leftNorm[lIdx];
+    if (!leftItem) continue;
+    const rawEdges = buildEdges(lIdx, leftItem);
+    if (rawEdges.length === 0) continue;
+    rawEdges.sort((a, b) => b.tier - a.tier || a.rIdx - b.rIdx);
+    adjByLeft.set(
+      lIdx,
+      rawEdges.map((e) => e.rIdx),
+    );
+    bestTierByLeft.set(lIdx, rawEdges[0]?.tier ?? 0);
+  }
+
+  const orderedLeft = [...adjByLeft.keys()].sort((a, b) => {
+    const degDiff = (adjByLeft.get(a)?.length ?? 0) - (adjByLeft.get(b)?.length ?? 0);
+    if (degDiff !== 0) return degDiff;
+    const tierDiff = (bestTierByLeft.get(b) ?? 0) - (bestTierByLeft.get(a) ?? 0);
+    if (tierDiff !== 0) return tierDiff;
+    const keyA = leftNorm[a]?.canonicalTrackKey ?? "";
+    const keyB = leftNorm[b]?.canonicalTrackKey ?? "";
+    if (keyA !== keyB) return keyA < keyB ? -1 : 1;
+    return a - b;
+  });
+
+  const matchRightToLeft = new Map<number, number>();
+
+  const tryAugment = (lIdx: number, visitedRight: Set<number>): boolean => {
+    const neighbors = adjByLeft.get(lIdx);
+    if (!neighbors) return false;
+    for (const rIdx of neighbors) {
+      if (visitedRight.has(rIdx)) continue;
+      visitedRight.add(rIdx);
+      const existingLeft = matchRightToLeft.get(rIdx);
+      if (existingLeft === undefined || tryAugment(existingLeft, visitedRight)) {
+        matchRightToLeft.set(rIdx, lIdx);
+        return true;
+      }
+    }
+    return false;
+  };
+
+  for (const lIdx of orderedLeft) {
+    tryAugment(lIdx, new Set<number>());
+  }
+
+  const pairs: Array<{ lIdx: number; rIdx: number }> = [];
+  for (const [rIdx, lIdx] of matchRightToLeft.entries()) {
+    pairs.push({ lIdx, rIdx });
+  }
+  return pairs;
+}
+
+/**
+ * Cooperative multi-pass async playlist comparator:
+ * - Pass 1: exact matches (exact normalized title + identical version tags + artist overlap, order-independent bipartite matching)
+ * - Pass 1b: same normalized title + artist overlap + different non-instrumental version (e.g. Studio vs Live -> similar_title)
  * - Pass 2: exact title with different artist (prevents short substring matches from stealing exact titles)
  * - Pass 3: similar title with artist overlap (substring ratio >= 0.5)
  * Order-independent across left-playlist rearrangements and yields cooperatively to the event loop.
@@ -464,6 +566,14 @@ export async function comparePlaylistsAsync(input: {
   const leftNorm = input.left.tracks.map(preNormalize);
   const rightNorm = input.right.tracks.map(preNormalize);
 
+  const leftByTitle = new Map<string, number[]>();
+  leftNorm.forEach((item, idx) => {
+    if (!item.title) return;
+    const bucket = leftByTitle.get(item.title);
+    if (bucket) bucket.push(idx);
+    else leftByTitle.set(item.title, [idx]);
+  });
+
   const rightByTitle = new Map<string, number[]>();
   rightNorm.forEach((item, idx) => {
     if (!item.title) return;
@@ -486,22 +596,109 @@ export async function comparePlaylistsAsync(input: {
     }
   };
 
-  // Pass 1: Exact matches (exact title + artist overlap + compatible instrumental tag)
-  for (let i = 0; i < leftNorm.length; i += 1) {
-    await yieldIfNeeded(i, 0, 35, leftNorm.length);
-    const left = leftNorm[i];
-    if (!left || !left.title) continue;
+  const titleGroups = [...leftByTitle.entries()];
 
-    const bucket = rightByTitle.get(left.title) ?? [];
-    for (const rIdx of bucket) {
-      if (matchedRightIndexes.has(rIdx)) continue;
+  // Pass 1: Exact matches (exact title + identical version tags + artist overlap, bipartite max matching)
+  for (let g = 0; g < titleGroups.length; g += 1) {
+    await yieldIfNeeded(g, 0, 30, titleGroups.length);
+    const [title, leftBucket] = titleGroups[g] ?? ["", []];
+    const rightBucket = rightByTitle.get(title);
+    if (!rightBucket || rightBucket.length === 0) continue;
+
+    const pairs = solveDeterministicBipartiteMatching(leftBucket, leftNorm, (_lIdx, left) => {
+      const edges: Array<{ rIdx: number; tier: number }> = [];
+      for (const rIdx of rightBucket) {
+        if (matchedRightIndexes.has(rIdx)) continue;
+        const right = rightNorm[rIdx];
+        if (!right) continue;
+        if (!hasIdenticalVersionTags(left, right)) continue;
+        if (!hasArtistOverlap(left.rawArtists, right.rawArtists)) continue;
+        const exactArtistSet =
+          left.canonicalArtistKey.length > 0 && left.canonicalArtistKey === right.canonicalArtistKey;
+        edges.push({ rIdx, tier: exactArtistSet ? 2 : 1 });
+      }
+      return edges;
+    });
+
+    for (const { lIdx, rIdx } of pairs) {
+      const left = leftNorm[lIdx];
       const right = rightNorm[rIdx];
-      if (!right) continue;
-      if (hasArtistOverlap(left.rawArtists, right.rawArtists) && hasCompatibleVersion(left, right)) {
+      if (!left || !right) continue;
+      matchedRightIndexes.add(rIdx);
+      leftAssignments[lIdx] = {
+        status: "exact",
+        score: 100,
+        left: left.track,
+        right: right.track,
+      };
+    }
+  }
+
+  // Pass 1b: Same normalized title + same artist + different non-instrumental version (e.g. Studio vs Live -> similar_title)
+  for (let g = 0; g < titleGroups.length; g += 1) {
+    await yieldIfNeeded(g, 30, 15, titleGroups.length);
+    const [title, leftBucket] = titleGroups[g] ?? ["", []];
+    const unmatchedLeft = leftBucket.filter((idx) => !leftAssignments[idx]);
+    if (unmatchedLeft.length === 0) continue;
+    const rightBucket = rightByTitle.get(title);
+    if (!rightBucket || rightBucket.length === 0) continue;
+
+    const pairs = solveDeterministicBipartiteMatching(unmatchedLeft, leftNorm, (_lIdx, left) => {
+      const edges: Array<{ rIdx: number; tier: number }> = [];
+      for (const rIdx of rightBucket) {
+        if (matchedRightIndexes.has(rIdx)) continue;
+        const right = rightNorm[rIdx];
+        if (!right) continue;
+        if (!hasCompatibleVersion(left, right)) continue;
+        if (!hasArtistOverlap(left.rawArtists, right.rawArtists)) continue;
+        const exactArtistSet =
+          left.canonicalArtistKey.length > 0 && left.canonicalArtistKey === right.canonicalArtistKey;
+        edges.push({ rIdx, tier: exactArtistSet ? 2 : 1 });
+      }
+      return edges;
+    });
+
+    for (const { lIdx, rIdx } of pairs) {
+      const left = leftNorm[lIdx];
+      const right = rightNorm[rIdx];
+      if (!left || !right) continue;
+      matchedRightIndexes.add(rIdx);
+      leftAssignments[lIdx] = {
+        status: "similar_title",
+        score: 80,
+        left: left.track,
+        right: right.track,
+        reason: "同名同歌手不同版本",
+      };
+    }
+  }
+
+  // Pass 2: Same exact title with different artist (or incompatible instrumental version), sorted canonically
+  for (let g = 0; g < titleGroups.length; g += 1) {
+    await yieldIfNeeded(g, 45, 20, titleGroups.length);
+    const [title, leftBucket] = titleGroups[g] ?? ["", []];
+    const unmatchedLeft = leftBucket
+      .filter((idx) => !leftAssignments[idx])
+      .sort((a, b) => {
+        const keyA = leftNorm[a]?.canonicalTrackKey ?? "";
+        const keyB = leftNorm[b]?.canonicalTrackKey ?? "";
+        if (keyA !== keyB) return keyA < keyB ? -1 : 1;
+        return a - b;
+      });
+    if (unmatchedLeft.length === 0) continue;
+
+    const rightBucket = rightByTitle.get(title) ?? [];
+    for (const lIdx of unmatchedLeft) {
+      const left = leftNorm[lIdx];
+      if (!left) continue;
+      for (const rIdx of rightBucket) {
+        if (matchedRightIndexes.has(rIdx)) continue;
+        const right = rightNorm[rIdx];
+        if (!right) continue;
         matchedRightIndexes.add(rIdx);
-        leftAssignments[i] = {
-          status: "exact",
-          score: 100,
+        leftAssignments[lIdx] = {
+          status: "same_title_different_artist",
+          score: 60,
           left: left.track,
           right: right.track,
         };
@@ -510,33 +707,21 @@ export async function comparePlaylistsAsync(input: {
     }
   }
 
-  // Pass 2: Same exact title with different artist (or incompatible version)
-  for (let i = 0; i < leftNorm.length; i += 1) {
-    if (leftAssignments[i]) continue;
-    await yieldIfNeeded(i, 35, 25, leftNorm.length);
-    const left = leftNorm[i];
-    if (!left || !left.title) continue;
+  // Pass 3: Similar title with artist overlap on remaining unmatched tracks (canonically ordered)
+  const remainingPass3 = leftNorm
+    .map((_, idx) => idx)
+    .filter((idx) => !leftAssignments[idx] && (leftNorm[idx]?.title.length ?? 0) >= 2)
+    .sort((a, b) => {
+      const keyA = leftNorm[a]?.canonicalTrackKey ?? "";
+      const keyB = leftNorm[b]?.canonicalTrackKey ?? "";
+      if (keyA !== keyB) return keyA < keyB ? -1 : 1;
+      return a - b;
+    });
 
-    const bucket = rightByTitle.get(left.title) ?? [];
-    for (const rIdx of bucket) {
-      if (matchedRightIndexes.has(rIdx)) continue;
-      const right = rightNorm[rIdx];
-      if (!right) continue;
-      matchedRightIndexes.add(rIdx);
-      leftAssignments[i] = {
-        status: "same_title_different_artist",
-        score: 60,
-        left: left.track,
-        right: right.track,
-      };
-      break;
-    }
-  }
-
-  // Pass 3: Similar title with artist overlap on remaining unmatched tracks
-  for (let i = 0; i < leftNorm.length; i += 1) {
-    if (leftAssignments[i]) continue;
-    await yieldIfNeeded(i, 60, 35, leftNorm.length);
+  for (let step = 0; step < remainingPass3.length; step += 1) {
+    await yieldIfNeeded(step, 65, 30, remainingPass3.length);
+    const i = remainingPass3[step];
+    if (i === undefined || leftAssignments[i]) continue;
     const left = leftNorm[i];
     if (!left || left.title.length < 2) continue;
 

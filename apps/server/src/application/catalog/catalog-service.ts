@@ -341,6 +341,7 @@ export class CatalogService {
       songs: slice,
       total: all.length,
       offset: safeOffset,
+      nextOffset: safeOffset + slice.length,
       limit: safeLimit,
       hasMore: safeOffset + slice.length < all.length,
     };

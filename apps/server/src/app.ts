@@ -69,7 +69,7 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
   const userRepo = new UserRepository(sqlite);
   const credentialRepo = new CredentialRepository(sqlite, vault);
   const userStateRepo = new UserStateRepository(sqlite);
-  const jobRepo = new JobRepository(sqlite);
+  const jobRepo = new JobRepository(sqlite, { tmpDownloadsDir: config.tmpDownloadsDir });
 
   let providers: ProviderRegistry;
   if (options.providersOverride) {

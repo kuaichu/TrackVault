@@ -71,16 +71,31 @@ export class QqMusicHttpClient {
       headers.Cookie = serializeQqCookie(input.cookieMap);
     }
 
-    const { bytes } = await this.#http.fetchBoundedBytes(parsedUrl.toString(), {
-      method: input.method ?? "GET",
-      headers,
-      body: input.body,
-      allowedHostSuffixes: QQ_ALLOWED_HOST_SUFFIXES,
-      allowHttp: false,
-      maxRedirects: 2,
-      maxBytes: MAX_QQ_JSON_BYTES,
-      signal: input.signal,
-    });
+    let bytes: Uint8Array;
+    try {
+      const fetched = await this.#http.fetchBoundedBytes(parsedUrl.toString(), {
+        method: input.method ?? "GET",
+        headers,
+        body: input.body,
+        allowedHostSuffixes: QQ_ALLOWED_HOST_SUFFIXES,
+        allowHttp: false,
+        maxRedirects: 2,
+        maxBytes: MAX_QQ_JSON_BYTES,
+        signal: input.signal,
+      });
+      bytes = fetched.bytes;
+    } catch (error) {
+      if (error instanceof AppError) {
+        const status = (error.details as { status?: unknown } | undefined)?.status;
+        if (status === 401 || status === 403 || /\b(?:401|403)\b/.test(error.message)) {
+          throw new AppError("CREDENTIAL_INVALID", "QQ 音乐登录态已失效或无权访问，请重新绑定。", {
+            cause: error,
+            details: error.details,
+          });
+        }
+      }
+      throw error;
+    }
 
     const text = textDecoder.decode(bytes);
     return parseJsonpOrJson<T>(text);

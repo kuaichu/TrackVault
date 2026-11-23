@@ -9,6 +9,7 @@ import {
   sanitizeDownloadFilename,
   sanitizeExternalUrl,
 } from "./sanitize.js";
+import { PlayerStateSchema } from "./schemas/settings.js";
 
 test("sanitizeExternalUrl rejects javascript:, data:, file: and embedded credentials", () => {
   assert.equal(sanitizeExternalUrl("javascript:alert(1)"), null);
@@ -97,4 +98,36 @@ test("quality helpers include higher 192K and never crash on unknown levels (A14
   assert.equal(getQualityLabel("unknown_future_tier"), "UNKNOWN_FUTURE_TIER");
   assert.equal(normalizeQualityLevel("HIGHER", "standard"), "higher");
   assert.equal(normalizeQualityLevel("nonexistent", "exhigh"), "exhigh");
+  // Phase 7 A14: vivid (384 kbps) & unknown tier bitrate inference never misreport 320K
+  assert.equal(QualityLevelSchema.safeParse("vivid").success, true);
+  assert.equal(normalizeQualityLevel("vivid", "exhigh", { bitrate: 384_000, format: "mp4" }), "vivid");
+  assert.equal(getQualityLabel("vivid", 384_000), "臻音 384K");
+  assert.equal(
+    normalizeQualityLevel("spatial_future", "exhigh", { bitrate: 384_000, format: "mp3" }),
+    "vivid",
+  );
+});
+
+test("PlayerStateSchema backwards-compatibly accepts optional muted & lastNonZeroVolume (U09)", () => {
+  const legacy = PlayerStateSchema.parse({
+    currentTrack: null,
+    playQueue: [],
+    playbackSeconds: 12,
+    volume: 0,
+    playbackMode: "sequential",
+  });
+  assert.equal(legacy.muted, undefined);
+  assert.equal(legacy.lastNonZeroVolume, undefined);
+
+  const extended = PlayerStateSchema.parse({
+    currentTrack: null,
+    playQueue: [],
+    playbackSeconds: 12,
+    volume: 0,
+    muted: true,
+    lastNonZeroVolume: 0.1,
+    playbackMode: "shuffle",
+  });
+  assert.equal(extended.muted, true);
+  assert.equal(extended.lastNonZeroVolume, 0.1);
 });

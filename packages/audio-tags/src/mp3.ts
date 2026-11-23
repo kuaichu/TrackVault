@@ -9,9 +9,53 @@ import type { AudioCoverData, AudioTagMetadata } from "./flac.js";
 
 const textEncoder = new TextEncoder();
 const textDecoderUtf8 = new TextDecoder("utf-8", { fatal: false });
+const textDecoderUtf8Strict = new TextDecoder("utf-8", { fatal: true });
 const textDecoderUtf16Le = new TextDecoder("utf-16le", { fatal: false });
 const textDecoderUtf16Be = new TextDecoder("utf-16be", { fatal: false });
 const textDecoderLatin1 = new TextDecoder("latin1", { fatal: false });
+
+const ID3V22_TO_V23_FRAME_MAP: Record<string, string> = {
+  TT1: "TIT1",
+  TT2: "TIT2",
+  TT3: "TIT3",
+  TP1: "TPE1",
+  TP2: "TPE2",
+  TP3: "TPE3",
+  TP4: "TPE4",
+  TAL: "TALB",
+  TRK: "TRCK",
+  TPA: "TPOS",
+  TYE: "TYER",
+  TDA: "TDAT",
+  TIM: "TIME",
+  TCO: "TCON",
+  TCM: "TCOM",
+  TEN: "TENC",
+  TBP: "TBPM",
+  TCP: "TCMP",
+  TRC: "TSRC",
+  TLE: "TLEN",
+  TLA: "TLAN",
+  TFT: "TFLT",
+  TKE: "TKEY",
+  TOA: "TOPE",
+  TOL: "TOLY",
+  TOR: "TORY",
+  TOT: "TOAL",
+  TPB: "TPUB",
+  TRD: "TRDA",
+  TSI: "TSIZ",
+  TSS: "TSSE",
+  TXX: "TXXX",
+  ULT: "USLT",
+  COM: "COMM",
+  WAF: "WOAF",
+  WAR: "WOAR",
+  WAS: "WOAS",
+  WCM: "WCOM",
+  WCP: "WCOP",
+  WPB: "WPUB",
+};
 
 function writeSyncsafeUint32(value: number): Uint8Array {
   return new Uint8Array([(value >>> 21) & 0x7f, (value >>> 14) & 0x7f, (value >>> 7) & 0x7f, value & 0x7f]);
@@ -26,7 +70,7 @@ function readSyncsafeUint32(bytes: Uint8Array, offset: number): number | null {
   return (b0 << 21) | (b1 << 14) | (b2 << 7) | b3;
 }
 
-function isMpegAudioFrameSync(bytes: Uint8Array, offset: number): boolean {
+export function isMpegAudioFrameSync(bytes: Uint8Array, offset: number): boolean {
   if (bytes.length < offset + 4) return false;
   const b0 = bytes[offset] ?? 0;
   const b1 = bytes[offset + 1] ?? 0;
@@ -116,6 +160,72 @@ interface ParsedId3Frame {
   data: Uint8Array;
 }
 
+interface ParsedId3v1Tag {
+  title?: string;
+  artist?: string;
+  album?: string;
+  year?: string;
+  comment?: string;
+  track?: string;
+}
+
+function decodeId3v1Field(slice: Uint8Array): string | undefined {
+  let end = slice.length;
+  while (end > 0 && slice[end - 1] === 0x00) {
+    end -= 1;
+  }
+  const nulIndex = slice.subarray(0, end).indexOf(0x00);
+  const clean = nulIndex >= 0 ? slice.subarray(0, nulIndex) : slice.subarray(0, end);
+  if (clean.length === 0) return undefined;
+  let decoded: string;
+  try {
+    decoded = textDecoderUtf8Strict.decode(clean);
+  } catch {
+    decoded = textDecoderLatin1.decode(clean);
+  }
+  const trimmed = decoded.trim();
+  return trimmed || undefined;
+}
+
+function parseExistingId3v1Tag(bytes: Uint8Array): ParsedId3v1Tag | null {
+  const id3v2Length = getAllId3v2TagsLength(bytes);
+  if (bytes.length < id3v2Length + 128) return null;
+  const v1 = bytes.subarray(bytes.length - 128);
+  if (v1[0] !== 0x54 || v1[1] !== 0x41 || v1[2] !== 0x47) return null;
+
+  const isV11Track = v1[125] === 0x00 && (v1[126] ?? 0) > 0;
+  return {
+    title: decodeId3v1Field(v1.subarray(3, 33)),
+    artist: decodeId3v1Field(v1.subarray(33, 63)),
+    album: decodeId3v1Field(v1.subarray(63, 93)),
+    year: decodeId3v1Field(v1.subarray(93, 97)),
+    comment: decodeId3v1Field(v1.subarray(97, isV11Track ? 125 : 127)),
+    track: isV11Track ? String(v1[126]) : undefined,
+  };
+}
+
+function convertId3v22PicToApic(data: Uint8Array): Uint8Array | null {
+  if (data.length < 6) return null;
+  const encoding = data[0] ?? 0;
+  const fmt = textDecoderLatin1.decode(data.subarray(1, 4)).toUpperCase();
+  const mime =
+    fmt === "PNG"
+      ? "image/png"
+      : fmt === "GIF"
+        ? "image/gif"
+        : fmt === "WEBP" || fmt === "WBP"
+          ? "image/webp"
+          : fmt === "-->"
+            ? "-->"
+            : "image/jpeg";
+  return concatBytes([
+    new Uint8Array([encoding]),
+    textEncoder.encode(mime),
+    new Uint8Array([0x00]),
+    data.subarray(4),
+  ]);
+}
+
 function parseExistingId3v2Frames(bytes: Uint8Array): ParsedId3Frame[] {
   const frames: ParsedId3Frame[] = [];
   let tagStart = 0;
@@ -129,7 +239,46 @@ function parseExistingId3v2Frames(bytes: Uint8Array): ParsedId3Frame[] {
     const hasFooter = major === 4 && Boolean(flags & 0x10);
     const bodyEnd = tagStart + totalLen - (hasFooter ? 10 : 0);
 
-    if (major === 3 || major === 4) {
+    if (major === 2) {
+      // ID3v2.2: bit 6 (0x40) indicates undefined tag-level compression -> skip body safely
+      if ((flags & 0x40) === 0) {
+        let body = bytes.subarray(tagStart + 10, bodyEnd);
+        if (flags & 0x80) {
+          body = deunsynchronize(body);
+        }
+
+        let offset = 0;
+        while (offset + 6 <= body.length) {
+          const b0 = body[offset] ?? 0;
+          if (b0 === 0x00) break; // Padding
+          const rawId = textDecoderLatin1.decode(body.subarray(offset, offset + 3));
+          if (!/^[A-Z0-9]{3}$/.test(rawId)) break;
+
+          const rawSize =
+            (((body[offset + 3] ?? 0) << 16) | ((body[offset + 4] ?? 0) << 8) | (body[offset + 5] ?? 0)) >>>
+            0;
+          if (rawSize <= 0) break;
+          offset += 6;
+          if (offset + rawSize > body.length) break;
+
+          const rawData = body.subarray(offset, offset + rawSize);
+          offset += rawSize;
+
+          if (rawId === "PIC") {
+            const convertedApic = convertId3v22PicToApic(rawData);
+            if (convertedApic) {
+              frames.push({ id: "APIC", data: convertedApic });
+            }
+            continue;
+          }
+
+          const mappedId = ID3V22_TO_V23_FRAME_MAP[rawId];
+          if (!mappedId) continue;
+          const txxxDesc = mappedId === "TXXX" ? decodeTxxxDescription(rawData).toUpperCase() : undefined;
+          frames.push({ id: mappedId, txxxDesc, data: rawData });
+        }
+      }
+    } else if (major === 3 || major === 4) {
       let body = bytes.subarray(tagStart + 10, bodyEnd);
       if (major === 3 && Boolean(flags & 0x80)) {
         body = deunsynchronize(body);
@@ -258,6 +407,21 @@ function buildPictureFrame(cover: AudioCoverData | null): Uint8Array | null {
   );
 }
 
+function buildCommentFrame(commentText: string | null | undefined): Uint8Array | null {
+  const normalized = commentText?.trim();
+  if (!normalized) return null;
+  return buildFrame(
+    "COMM",
+    concatBytes([
+      new Uint8Array([0x01]),
+      textEncoder.encode("XXX"),
+      encodeUtf16Le("", true),
+      new Uint8Array([0x00, 0x00]),
+      encodeUtf16Le(normalized, true),
+    ]),
+  );
+}
+
 export function injectMp3Metadata(
   input: Uint8Array,
   meta: AudioTagMetadata,
@@ -290,15 +454,50 @@ export function injectMp3Metadata(
   if (hasSource) replacedTxxx.add("TRACKVAULT_SOURCE");
   if (hasLyrics) replacedTxxx.add("LYRICS");
 
-  // Preserve existing frames that are not being replaced (original cover, lyrics, track number, etc.)
-  const existingFrames = parseExistingId3v2Frames(input)
-    .filter((frame) => {
-      if (frame.id === "TXXX") {
-        return !frame.txxxDesc || !replacedTxxx.has(frame.txxxDesc);
-      }
-      return !replacedIds.has(frame.id);
-    })
-    .map((frame) => buildFrame(frame.id, frame.data));
+  // Preserve existing ID3v2 (v2.2 / v2.3 / v2.4) frames that are not being replaced
+  const parsedExistingV2 = parseExistingId3v2Frames(input).filter((frame) => {
+    if (frame.id === "TXXX") {
+      return !frame.txxxDesc || !replacedTxxx.has(frame.txxxDesc);
+    }
+    return !replacedIds.has(frame.id);
+  });
+
+  const presentIds = new Set<string>(replacedIds);
+  for (const frame of parsedExistingV2) {
+    presentIds.add(frame.id);
+  }
+
+  // J08: Preserve ID3v1 / ID3v1.1 fields (especially track number TRCK) before stripping trailing 128-byte tag
+  const existingV1 = parseExistingId3v1Tag(input);
+  const fallbackV1Frames: Uint8Array[] = [];
+  if (existingV1) {
+    if (existingV1.track && !presentIds.has("TRCK")) {
+      const f = buildTextFrame("TRCK", existingV1.track);
+      if (f) fallbackV1Frames.push(f);
+    }
+    if (existingV1.title && !presentIds.has("TIT2")) {
+      const f = buildTextFrame("TIT2", existingV1.title);
+      if (f) fallbackV1Frames.push(f);
+    }
+    if (existingV1.artist && !presentIds.has("TPE1")) {
+      const f = buildTextFrame("TPE1", existingV1.artist);
+      if (f) fallbackV1Frames.push(f);
+    }
+    if (existingV1.album && !presentIds.has("TALB")) {
+      const f = buildTextFrame("TALB", existingV1.album);
+      if (f) fallbackV1Frames.push(f);
+    }
+    if (existingV1.year && !presentIds.has("TYER") && !presentIds.has("TDRC")) {
+      const f = buildTextFrame("TYER", existingV1.year);
+      if (f) fallbackV1Frames.push(f);
+    }
+    if (existingV1.comment && !presentIds.has("COMM")) {
+      const f = buildCommentFrame(existingV1.comment);
+      if (f) fallbackV1Frames.push(f);
+    }
+  }
+
+  const existingFrames = parsedExistingV2.map((frame) => buildFrame(frame.id, frame.data));
 
   const newFrames = [
     buildTextFrame("TIT2", meta.title),
@@ -311,7 +510,7 @@ export function injectMp3Metadata(
     buildPictureFrame(cover),
   ].filter((frame): frame is Uint8Array => frame !== null);
 
-  const frames = [...newFrames, ...existingFrames];
+  const frames = [...newFrames, ...existingFrames, ...fallbackV1Frames];
   const body = concatBytes(frames);
   if (body.length > 0x0fffffff) {
     throw new Error("ID3 tag body exceeds syncsafe limit");

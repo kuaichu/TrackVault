@@ -1,7 +1,35 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { ErrorCode, JobKind, JobStatus, JobView } from "#shared";
 import type { SqliteClient } from "../client.js";
 
 const MAX_JOBS_PER_USER_AND_KIND = 50;
+
+export function resolveJobArtifactPath(
+  tmpDownloadsDir: string,
+  userId: string,
+  jobId: string,
+): string | null {
+  const root = path.resolve(tmpDownloadsDir);
+  const safeUser = userId.replace(/[^a-zA-Z0-9_-]/g, "");
+  const safeJob = jobId.replace(/[^a-zA-Z0-9_-]/g, "");
+  if (!safeUser || !safeJob) return null;
+  const target = path.resolve(root, safeUser, `${safeJob}.bin`);
+  if (!target.startsWith(root + path.sep)) return null;
+  return target;
+}
+
+export function hasLocalDownloadArtifactExpectation(record: StoredJobRecord): boolean {
+  const isDirectLink = Boolean(record.directUrl) || record.metadata?.mode === "direct_link";
+  const artifactExpired = Boolean(record.metadata?.artifactExpired);
+  return (
+    record.kind === "download" &&
+    record.status === "completed" &&
+    Boolean(record.artifactFilename) &&
+    !isDirectLink &&
+    !artifactExpired
+  );
+}
 
 export interface StoredJobRecord {
   id: string;
@@ -100,9 +128,91 @@ export function toJobView(record: StoredJobRecord): JobView {
 
 export class JobRepository {
   readonly #sqlite: SqliteClient;
+  readonly #tmpDownloadsDir: string | null;
 
-  constructor(sqlite: SqliteClient) {
+  constructor(sqlite: SqliteClient, options?: { tmpDownloadsDir?: string }) {
     this.#sqlite = sqlite;
+    this.#tmpDownloadsDir = options?.tmpDownloadsDir ? path.resolve(options.tmpDownloadsDir) : null;
+  }
+
+  findRawById(id: string): StoredJobRecord | null {
+    const row = this.#sqlite.db.prepare("SELECT * FROM background_jobs WHERE id = ?").get(id) as
+      | RawJobRow
+      | undefined;
+    return row ? mapRow(row) : null;
+  }
+
+  findRawOwned(userId: string, id: string): StoredJobRecord | null {
+    const row = this.#sqlite.db
+      .prepare("SELECT * FROM background_jobs WHERE id = ? AND user_id = ?")
+      .get(id, userId) as RawJobRow | undefined;
+    return row ? mapRow(row) : null;
+  }
+
+  listRawByUser(userId: string, kind?: JobKind): StoredJobRecord[] {
+    const rows = kind
+      ? (this.#sqlite.db
+          .prepare(
+            "SELECT * FROM background_jobs WHERE user_id = ? AND kind = ? ORDER BY created_at DESC LIMIT ?",
+          )
+          .all(userId, kind, MAX_JOBS_PER_USER_AND_KIND) as unknown as RawJobRow[])
+      : (this.#sqlite.db
+          .prepare("SELECT * FROM background_jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT 100")
+          .all(userId) as unknown as RawJobRow[]);
+
+    return rows.map(mapRow);
+  }
+
+  #reconcileMissingArtifact(record: StoredJobRecord): StoredJobRecord {
+    if (!this.#tmpDownloadsDir || !hasLocalDownloadArtifactExpectation(record)) {
+      return record;
+    }
+    const artifactPath = resolveJobArtifactPath(this.#tmpDownloadsDir, record.userId, record.id);
+    let exists = false;
+    if (artifactPath) {
+      try {
+        exists = fs.statSync(artifactPath).isFile();
+      } catch {
+        exists = false;
+      }
+    }
+    if (exists) {
+      return record;
+    }
+
+    const updatedAt = Date.now();
+    const nextMetadata: Record<string, unknown> = {
+      ...(record.metadata ?? {}),
+      artifactExpired: true,
+    };
+    const nextSubtitle = "临时文件已过期，请重新下载";
+    this.#sqlite.db
+      .prepare(
+        `UPDATE background_jobs
+         SET subtitle = ?, metadata_json = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(nextSubtitle, JSON.stringify(nextMetadata), updatedAt, record.id);
+
+    return {
+      ...record,
+      subtitle: nextSubtitle,
+      metadata: nextMetadata,
+      updatedAt,
+    };
+  }
+
+  listActiveCompletedDownloads(): StoredJobRecord[] {
+    const rows = this.#sqlite.db
+      .prepare(
+        `SELECT * FROM background_jobs
+         WHERE kind = 'download'
+           AND status = 'completed'
+           AND artifact_filename IS NOT NULL
+           AND direct_url IS NULL`,
+      )
+      .all() as unknown as RawJobRow[];
+    return rows.map(mapRow).filter(hasLocalDownloadArtifactExpectation);
   }
 
   /**
@@ -208,7 +318,7 @@ export class JobRepository {
       >
     >,
   ): StoredJobRecord | null {
-    const current = this.findById(id);
+    const current = this.findRawById(id);
     if (!current) return null;
 
     const next: StoredJobRecord = {
@@ -250,31 +360,17 @@ export class JobRepository {
   }
 
   findById(id: string): StoredJobRecord | null {
-    const row = this.#sqlite.db.prepare("SELECT * FROM background_jobs WHERE id = ?").get(id) as
-      | RawJobRow
-      | undefined;
-    return row ? mapRow(row) : null;
+    const record = this.findRawById(id);
+    return record ? this.#reconcileMissingArtifact(record) : null;
   }
 
   findOwned(userId: string, id: string): StoredJobRecord | null {
-    const row = this.#sqlite.db
-      .prepare("SELECT * FROM background_jobs WHERE id = ? AND user_id = ?")
-      .get(id, userId) as RawJobRow | undefined;
-    return row ? mapRow(row) : null;
+    const record = this.findRawOwned(userId, id);
+    return record ? this.#reconcileMissingArtifact(record) : null;
   }
 
   listByUser(userId: string, kind?: JobKind): StoredJobRecord[] {
-    const rows = kind
-      ? (this.#sqlite.db
-          .prepare(
-            "SELECT * FROM background_jobs WHERE user_id = ? AND kind = ? ORDER BY created_at DESC LIMIT ?",
-          )
-          .all(userId, kind, MAX_JOBS_PER_USER_AND_KIND) as unknown as RawJobRow[])
-      : (this.#sqlite.db
-          .prepare("SELECT * FROM background_jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT 100")
-          .all(userId) as unknown as RawJobRow[]);
-
-    return rows.map(mapRow);
+    return this.listRawByUser(userId, kind).map((record) => this.#reconcileMissingArtifact(record));
   }
 
   clearFinished(userId: string, kind?: JobKind): string[] {
