@@ -22,7 +22,7 @@ import { type QualityLevel, getQualityLabel, sanitizeCssUrl } from "#shared";
 import { AlbumLink, ArtistLinks } from "../../../entities/music/EntityLinks.js";
 import { api } from "../../../shared/api/endpoints.js";
 import { useCapabilities } from "../../../shared/hooks/use-capabilities.js";
-import { useModalFocusTrap } from "../../../shared/hooks/use-modal-focus-trap.js";
+import { useIsOverlayViewport, useModalFocusTrap } from "../../../shared/hooks/use-modal-focus-trap.js";
 import { useToggleLikeMutation } from "../../../shared/hooks/use-toggle-like.js";
 import { CoverArt, PlatformBadge } from "../../../shared/ui/primitives.js";
 import { audioEngine, resolveEffectivePlaybackQuality } from "../engine/audio-engine.js";
@@ -49,6 +49,8 @@ export function FullscreenPlayer() {
 
   const [mobileShowCover, setMobileShowCover] = useState(true);
   const [rightPanel, setRightPanel] = useState<FullscreenRightPanel>("lyrics");
+  const isMobileViewport = useIsOverlayViewport(768);
+  const isRightPaneVisible = !isMobileViewport || !mobileShowCover;
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const isActive = Boolean(open && currentTrack);
 
@@ -172,10 +174,10 @@ export function FullscreenPlayer() {
             <button
               type="button"
               aria-label="查看歌词"
-              aria-pressed={rightPanel === "lyrics" && !mobileShowCover}
+              aria-pressed={isRightPaneVisible && rightPanel === "lyrics"}
               onClick={() => selectPanel("lyrics")}
               className={`inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 font-medium transition-colors [@media(max-height:500px)]:h-7 ${
-                rightPanel === "lyrics"
+                isRightPaneVisible && rightPanel === "lyrics"
                   ? "bg-white text-[#111113] shadow-xs"
                   : "text-white/80 hover:bg-white/15 hover:text-white"
               }`}
@@ -187,10 +189,10 @@ export function FullscreenPlayer() {
             <button
               type="button"
               aria-label="查看评论"
-              aria-pressed={rightPanel === "comments"}
+              aria-pressed={isRightPaneVisible && rightPanel === "comments"}
               onClick={() => selectPanel("comments")}
               className={`inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 font-medium transition-colors [@media(max-height:500px)]:h-7 ${
-                rightPanel === "comments"
+                isRightPaneVisible && rightPanel === "comments"
                   ? "bg-white text-[#111113] shadow-xs"
                   : "text-white/80 hover:bg-white/15 hover:text-white"
               }`}
@@ -202,10 +204,10 @@ export function FullscreenPlayer() {
             <button
               type="button"
               aria-label="查看队列"
-              aria-pressed={rightPanel === "queue"}
+              aria-pressed={isRightPaneVisible && rightPanel === "queue"}
               onClick={() => selectPanel("queue")}
               className={`inline-flex h-8 items-center gap-1.5 rounded-full px-2.5 font-medium transition-colors [@media(max-height:500px)]:h-7 ${
-                rightPanel === "queue"
+                isRightPaneVisible && rightPanel === "queue"
                   ? "bg-white text-[#111113] shadow-xs"
                   : "text-white/80 hover:bg-white/15 hover:text-white"
               }`}

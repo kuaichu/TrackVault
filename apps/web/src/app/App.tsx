@@ -129,6 +129,7 @@ function AuthenticatedApp() {
   const prevUserIdRef = useRef<string | null>(null);
 
   const clearAuthSession = useCallback(() => {
+    prevUserIdRef.current = null;
     audioEngine.stop();
     clearPendingDirectLinkJobs();
     // F02: Clear global toasts (such as 8s direct-link notifications) across session boundaries
@@ -159,9 +160,7 @@ function AuthenticatedApp() {
     if (prev !== null && prev !== activeUserId) {
       audioEngine.stop();
       clearPendingDirectLinkJobs();
-      if (activeUserId !== null) {
-        useToastStore.getState().clear();
-      }
+      useToastStore.getState().clear();
     }
     prevUserIdRef.current = activeUserId;
   }, [activeUserId]);

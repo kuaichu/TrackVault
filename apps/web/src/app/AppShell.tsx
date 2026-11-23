@@ -34,6 +34,7 @@ import {
   useIsOverlayViewport,
   useModalFocusTrap,
 } from "../shared/hooks/use-modal-focus-trap.js";
+import { applyRecordedPlayHistory } from "../shared/hooks/use-play-history-sync.js";
 import { useThemeStore } from "../shared/store/theme-store.js";
 import { toast, useToastStore } from "../shared/store/toast-store.js";
 
@@ -155,7 +156,7 @@ export function AppShell({
   // Bind play-history listener strictly to the active per-user QueryClient lifecycle
   useEffect(() => {
     audioEngine.setPlayHistoryListener((res) => {
-      queryClient.setQueryData(["play-history"], res);
+      applyRecordedPlayHistory(queryClient, res);
     });
     return () => {
       audioEngine.setPlayHistoryListener(null);

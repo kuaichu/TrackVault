@@ -70,6 +70,32 @@ function readSyncsafeUint32(bytes: Uint8Array, offset: number): number | null {
   return (b0 << 21) | (b1 << 14) | (b2 << 7) | b3;
 }
 
+const MPEG_V1_BITRATES_KBPS: Record<number, readonly number[]> = {
+  // Layer I (layerBits = 3)
+  3: [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+  // Layer II (layerBits = 2)
+  2: [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+  // Layer III (layerBits = 1)
+  1: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+};
+
+const MPEG_V2_BITRATES_KBPS: Record<number, readonly number[]> = {
+  // Layer I (layerBits = 3)
+  3: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+  // Layer II & III (layerBits = 2 or 1)
+  2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+  1: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+};
+
+const MPEG_SAMPLE_RATES_HZ: Record<number, readonly number[]> = {
+  // MPEG 2.5 (versionBits = 0)
+  0: [11025, 12000, 8000],
+  // MPEG 2 (versionBits = 2)
+  2: [22050, 24000, 16000],
+  // MPEG 1 (versionBits = 3)
+  3: [44100, 48000, 32000],
+};
+
 export function isMpegAudioFrameSync(bytes: Uint8Array, offset: number): boolean {
   if (bytes.length < offset + 4) return false;
   const b0 = bytes[offset] ?? 0;
@@ -89,6 +115,38 @@ export function isMpegAudioFrameSync(bytes: Uint8Array, offset: number): boolean
     (b2 & 0xf0) !== 0xf0 &&
     (b2 & 0x0c) !== 0x0c
   );
+}
+
+/**
+ * Computes the exact byte length of an MPEG audio frame starting at `offset` per ISO/IEC 11172-3 & 13818-3.
+ * Returns `null` when the 4-byte header is invalid, `0` for free-format bitrate (`bitrateIndex === 0`),
+ * or the exact positive frame byte count (e.g. `417` for 128 kbps 44.1 kHz MPEG-1 Layer III).
+ */
+export function getMpegFrameByteLength(bytes: Uint8Array, offset: number): number | null {
+  if (!isMpegAudioFrameSync(bytes, offset)) return null;
+  const b1 = bytes[offset + 1] ?? 0;
+  const b2 = bytes[offset + 2] ?? 0;
+
+  const versionBits = (b1 >>> 3) & 0x03;
+  const layerBits = (b1 >>> 1) & 0x03;
+  const bitrateIdx = (b2 >>> 4) & 0x0f;
+  const sampleRateIdx = (b2 >>> 2) & 0x03;
+  const padding = (b2 >>> 1) & 0x01;
+
+  const sampleRate = MPEG_SAMPLE_RATES_HZ[versionBits]?.[sampleRateIdx];
+  if (!sampleRate) return null;
+  if (bitrateIdx === 0) return 0;
+
+  const table = versionBits === 3 ? MPEG_V1_BITRATES_KBPS[layerBits] : MPEG_V2_BITRATES_KBPS[layerBits];
+  const bitrateKbps = table?.[bitrateIdx];
+  if (!bitrateKbps) return null;
+
+  const bitrateBps = bitrateKbps * 1000;
+  if (layerBits === 3) {
+    return (Math.floor((12 * bitrateBps) / sampleRate) + padding) * 4;
+  }
+  const coeff = layerBits === 1 && versionBits !== 3 ? 72 : 144;
+  return Math.floor((coeff * bitrateBps) / sampleRate) + padding;
 }
 
 export function isMp3Bytes(input: Uint8Array): boolean {
@@ -160,6 +218,202 @@ interface ParsedId3Frame {
   data: Uint8Array;
 }
 
+// Standard ID3v1 (0..79) + Winamp extended (80..191) genre table; 255 / out-of-range = unset
+const ID3V1_GENRES: readonly string[] = [
+  "Blues",
+  "Classic Rock",
+  "Country",
+  "Dance",
+  "Disco",
+  "Funk",
+  "Grunge",
+  "Hip-Hop",
+  "Jazz",
+  "Metal",
+  "New Age",
+  "Oldies",
+  "Other",
+  "Pop",
+  "R&B",
+  "Rap",
+  "Reggae",
+  "Rock",
+  "Techno",
+  "Industrial",
+  "Alternative",
+  "Ska",
+  "Death Metal",
+  "Pranks",
+  "Soundtrack",
+  "Euro-Techno",
+  "Ambient",
+  "Trip-Hop",
+  "Vocal",
+  "Jazz+Funk",
+  "Fusion",
+  "Trance",
+  "Classical",
+  "Instrumental",
+  "Acid",
+  "House",
+  "Game",
+  "Sound Clip",
+  "Gospel",
+  "Noise",
+  "AlternRock",
+  "Bass",
+  "Soul",
+  "Punk",
+  "Space",
+  "Meditative",
+  "Instrumental Pop",
+  "Instrumental Rock",
+  "Ethnic",
+  "Gothic",
+  "Darkwave",
+  "Techno-Industrial",
+  "Electronic",
+  "Pop-Folk",
+  "Eurodance",
+  "Dream",
+  "Southern Rock",
+  "Comedy",
+  "Cult",
+  "Gangsta",
+  "Top 40",
+  "Christian Rap",
+  "Pop/Funk",
+  "Jungle",
+  "Native American",
+  "Cabaret",
+  "New Wave",
+  "Psychedelic",
+  "Rave",
+  "Showtunes",
+  "Trailer",
+  "Lo-Fi",
+  "Tribal",
+  "Acid Punk",
+  "Acid Jazz",
+  "Polka",
+  "Retro",
+  "Musical",
+  "Rock & Roll",
+  "Hard Rock",
+  "Folk",
+  "Folk-Rock",
+  "National Folk",
+  "Swing",
+  "Fast Fusion",
+  "Bebop",
+  "Latin",
+  "Revival",
+  "Celtic",
+  "Bluegrass",
+  "Avantgarde",
+  "Gothic Rock",
+  "Progressive Rock",
+  "Psychedelic Rock",
+  "Symphonic Rock",
+  "Slow Rock",
+  "Big Band",
+  "Chorus",
+  "Easy Listening",
+  "Acoustic",
+  "Humour",
+  "Speech",
+  "Chanson",
+  "Opera",
+  "Chamber Music",
+  "Sonata",
+  "Symphony",
+  "Booty Bass",
+  "Primus",
+  "Porn Groove",
+  "Satire",
+  "Slow Jam",
+  "Club",
+  "Tango",
+  "Samba",
+  "Folklore",
+  "Ballad",
+  "Power Ballad",
+  "Rhythmic Soul",
+  "Freestyle",
+  "Duet",
+  "Punk Rock",
+  "Drum Solo",
+  "A Cappella",
+  "Euro-House",
+  "Dance Hall",
+  "Goa",
+  "Drum & Bass",
+  "Club-House",
+  "Hardcore",
+  "Terror",
+  "Indie",
+  "BritPop",
+  "Negerpunk",
+  "Polsk Punk",
+  "Beat",
+  "Christian Gangsta Rap",
+  "Heavy Metal",
+  "Black Metal",
+  "Crossover",
+  "Contemporary Christian",
+  "Christian Rock",
+  "Merengue",
+  "Salsa",
+  "Thrash Metal",
+  "Anime",
+  "Jpop",
+  "Synthpop",
+  "Abstract",
+  "Art Rock",
+  "Baroque",
+  "Bhangra",
+  "Big Beat",
+  "Breakbeat",
+  "Chillout",
+  "Downtempo",
+  "Dub",
+  "EBM",
+  "Eclectic",
+  "Electro",
+  "Electroclash",
+  "Emo",
+  "Experimental",
+  "Garage",
+  "Global",
+  "IDM",
+  "Illbient",
+  "Industro-Goth",
+  "Jam Band",
+  "Krautrock",
+  "Leftfield",
+  "Lounge",
+  "Math Rock",
+  "New Romantic",
+  "Nu-Breakz",
+  "Post-Punk",
+  "Post-Rock",
+  "Psytrance",
+  "Shoegaze",
+  "Space Rock",
+  "Trop Rock",
+  "World Music",
+  "Neoclassical",
+  "Audiobook",
+  "Audio Theatre",
+  "Neue Deutsche Welle",
+  "Podcast",
+  "Indie-Rock",
+  "G-Funk",
+  "Dubstep",
+  "Garage Rock",
+  "Psybient",
+];
+
 interface ParsedId3v1Tag {
   title?: string;
   artist?: string;
@@ -167,6 +421,7 @@ interface ParsedId3v1Tag {
   year?: string;
   comment?: string;
   track?: string;
+  genre?: string;
 }
 
 function decodeId3v1Field(slice: Uint8Array): string | undefined {
@@ -194,6 +449,8 @@ function parseExistingId3v1Tag(bytes: Uint8Array): ParsedId3v1Tag | null {
   if (v1[0] !== 0x54 || v1[1] !== 0x41 || v1[2] !== 0x47) return null;
 
   const isV11Track = v1[125] === 0x00 && (v1[126] ?? 0) > 0;
+  const genreByte = v1[127] ?? 255;
+  const genre = genreByte < ID3V1_GENRES.length ? ID3V1_GENRES[genreByte] : undefined;
   return {
     title: decodeId3v1Field(v1.subarray(3, 33)),
     artist: decodeId3v1Field(v1.subarray(33, 63)),
@@ -201,7 +458,30 @@ function parseExistingId3v1Tag(bytes: Uint8Array): ParsedId3v1Tag | null {
     year: decodeId3v1Field(v1.subarray(93, 97)),
     comment: decodeId3v1Field(v1.subarray(97, isV11Track ? 125 : 127)),
     track: isV11Track ? String(v1[126]) : undefined,
+    genre,
   };
+}
+
+function convertId3v22CntToPcnt(data: Uint8Array): Uint8Array | null {
+  if (data.length === 0) return null;
+  if (data.length >= 4) return data;
+  return concatBytes([new Uint8Array(4 - data.length), data]);
+}
+
+function convertId3v22PopToPopm(data: Uint8Array): Uint8Array | null {
+  const nulIdx = data.indexOf(0x00);
+  // Must contain at least Latin-1 email + 0x00 + 1-byte rating (>= 2 bytes)
+  if (nulIdx < 0 || data.length < nulIdx + 2) return null;
+  const counterStart = nulIdx + 2;
+  const counterLen = data.length - counterStart;
+  if (counterLen === 0 || counterLen >= 4) {
+    return data;
+  }
+  return concatBytes([
+    data.subarray(0, counterStart),
+    new Uint8Array(4 - counterLen),
+    data.subarray(counterStart),
+  ]);
 }
 
 function convertId3v22PicToApic(data: Uint8Array): Uint8Array | null {
@@ -268,6 +548,22 @@ function parseExistingId3v2Frames(bytes: Uint8Array): ParsedId3Frame[] {
             const convertedApic = convertId3v22PicToApic(rawData);
             if (convertedApic) {
               frames.push({ id: "APIC", data: convertedApic });
+            }
+            continue;
+          }
+
+          if (rawId === "CNT") {
+            const convertedPcnt = convertId3v22CntToPcnt(rawData);
+            if (convertedPcnt) {
+              frames.push({ id: "PCNT", data: convertedPcnt });
+            }
+            continue;
+          }
+
+          if (rawId === "POP") {
+            const convertedPopm = convertId3v22PopToPopm(rawData);
+            if (convertedPopm) {
+              frames.push({ id: "POPM", data: convertedPopm });
             }
             continue;
           }
@@ -493,6 +789,10 @@ export function injectMp3Metadata(
     }
     if (existingV1.comment && !presentIds.has("COMM")) {
       const f = buildCommentFrame(existingV1.comment);
+      if (f) fallbackV1Frames.push(f);
+    }
+    if (existingV1.genre && !presentIds.has("TCON")) {
+      const f = buildTextFrame("TCON", existingV1.genre);
       if (f) fallbackV1Frames.push(f);
     }
   }

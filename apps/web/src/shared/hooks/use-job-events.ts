@@ -2,10 +2,13 @@ import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { JobEventSchema, type JobKind, type JobStatus, type JobView, sanitizeExternalUrl } from "#shared";
 import { api } from "../api/endpoints.js";
+import { ApiClientError } from "../api/http-client.js";
 import { toast } from "../store/toast-store.js";
 
 const MAX_PENDING_DIRECT_LINK_JOBS = 50;
 const MAX_NOTIFIED_DIRECT_LINK_JOBS = 100;
+const MAX_REMOVED_JOB_TOMBSTONES = 500;
+const MAX_KNOWN_JOBS_PER_CLIENT = 300;
 const MAX_JOBS_PER_KIND_SNAPSHOT = 50;
 const MAX_JOBS_UNFILTERED_SNAPSHOT = 100;
 
@@ -18,17 +21,64 @@ const JOB_STAGE_RANK: Record<JobStatus, number> = {
   cancelled: 3,
 };
 
-const pendingDirectLinkJobIds = new Set<string>();
+const pendingDirectLinkJobs = new Map<string, string | undefined>();
 const notifiedDirectLinkJobIds = new Set<string>();
-const knownJobsByClient = new WeakMap<QueryClient, Map<string, JobView>>();
+const inFlightDirectLinkProbes = new Set<string>();
 
-function getKnownJobsMap(queryClient: QueryClient): Map<string, JobView> {
-  let map = knownJobsByClient.get(queryClient);
-  if (!map) {
-    map = new Map();
-    knownJobsByClient.set(queryClient, map);
+interface ClientJobEventState {
+  seq: number;
+  knownJobs: Map<string, JobView>;
+  sseUpdatedSeq: Map<string, number>;
+  removedJobIds: Map<string, number>;
+  queryFetchStartSeq: Map<string, number>;
+}
+
+const clientStateByQueryClient = new WeakMap<QueryClient, ClientJobEventState>();
+
+function getClientJobState(queryClient: QueryClient): ClientJobEventState {
+  let state = clientStateByQueryClient.get(queryClient);
+  if (!state) {
+    state = {
+      seq: 0,
+      knownJobs: new Map(),
+      sseUpdatedSeq: new Map(),
+      removedJobIds: new Map(),
+      queryFetchStartSeq: new Map(),
+    };
+    clientStateByQueryClient.set(queryClient, state);
   }
-  return map;
+  return state;
+}
+
+function setBoundedKnownJob(state: ClientJobEventState, job: JobView): void {
+  if (state.knownJobs.has(job.id)) {
+    state.knownJobs.delete(job.id);
+  }
+  state.knownJobs.set(job.id, job);
+  while (state.knownJobs.size > MAX_KNOWN_JOBS_PER_CLIENT) {
+    const oldestId = state.knownJobs.keys().next().value;
+    if (!oldestId) break;
+    state.knownJobs.delete(oldestId);
+    state.sseUpdatedSeq.delete(oldestId);
+  }
+}
+
+function recordRemovedTombstone(state: ClientJobEventState, jobId: string, seq: number): void {
+  state.removedJobIds.delete(jobId);
+  state.removedJobIds.set(jobId, seq);
+  while (state.removedJobIds.size > MAX_REMOVED_JOB_TOMBSTONES) {
+    const oldestId = state.removedJobIds.keys().next().value;
+    if (!oldestId) break;
+    state.removedJobIds.delete(oldestId);
+  }
+}
+
+function getMinActiveListFetchSeq(state: ClientJobEventState): number {
+  let minSeq = Number.POSITIVE_INFINITY;
+  for (const seq of state.queryFetchStartSeq.values()) {
+    if (seq < minSeq) minSeq = seq;
+  }
+  return minSeq;
 }
 
 function recordNotifiedDirectLink(jobId: string): void {
@@ -39,9 +89,10 @@ function recordNotifiedDirectLink(jobId: string): void {
   }
 }
 
-function notifyDirectLinkIfReady(job: JobView, fallbackTitle?: string): boolean {
+function notifyDirectLinkIfReady(job: JobView, explicitFallbackTitle?: string): boolean {
+  const fallbackTitle = explicitFallbackTitle ?? pendingDirectLinkJobs.get(job.id);
   if (job.status === "completed") {
-    pendingDirectLinkJobIds.delete(job.id);
+    pendingDirectLinkJobs.delete(job.id);
     if (notifiedDirectLinkJobIds.has(job.id)) {
       return true;
     }
@@ -55,7 +106,7 @@ function notifyDirectLinkIfReady(job: JobView, fallbackTitle?: string): boolean 
     return true;
   }
   if (job.status === "failed" || job.status === "cancelled") {
-    pendingDirectLinkJobIds.delete(job.id);
+    pendingDirectLinkJobs.delete(job.id);
     return true;
   }
   return false;
@@ -150,6 +201,18 @@ function isSameJobSnapshot(a: JobView, b: JobView): boolean {
   );
 }
 
+function isJobNotFoundError(err: unknown): boolean {
+  if (err instanceof ApiClientError) {
+    return err.status === 404 || err.code === "NOT_FOUND";
+  }
+  if (err && typeof err === "object") {
+    const status = (err as { status?: unknown }).status;
+    const code = (err as { code?: unknown }).code;
+    return status === 404 || code === "NOT_FOUND";
+  }
+  return false;
+}
+
 export function trackPendingDirectLinkJob(
   jobId: string,
   options?: { queryClient?: QueryClient; fallbackTitle?: string },
@@ -159,8 +222,12 @@ export function trackPendingDirectLinkJob(
   // F17: If SSE already delivered completion before the POST /api/downloads HTTP response resolved,
   // fire the clickable direct-link toast immediately instead of stranding the job in pending set.
   if (options?.queryClient) {
+    const state = getClientJobState(options.queryClient);
+    if (state.removedJobIds.has(jobId)) {
+      return true;
+    }
     const known =
-      getKnownJobsMap(options.queryClient).get(jobId) ??
+      state.knownJobs.get(jobId) ??
       options.queryClient.getQueryData<{ job: JobView }>(["job", jobId])?.job ??
       options.queryClient
         .getQueryData<{ jobs: JobView[] }>(["jobs", "download"])
@@ -171,17 +238,22 @@ export function trackPendingDirectLinkJob(
     }
   }
 
-  pendingDirectLinkJobIds.add(jobId);
-  if (pendingDirectLinkJobIds.size > MAX_PENDING_DIRECT_LINK_JOBS) {
-    const oldest = pendingDirectLinkJobIds.values().next().value;
-    if (oldest) pendingDirectLinkJobIds.delete(oldest);
+  if (pendingDirectLinkJobs.has(jobId)) {
+    pendingDirectLinkJobs.delete(jobId);
+  }
+  pendingDirectLinkJobs.set(jobId, options?.fallbackTitle);
+  while (pendingDirectLinkJobs.size > MAX_PENDING_DIRECT_LINK_JOBS) {
+    const oldest = pendingDirectLinkJobs.keys().next().value;
+    if (!oldest) break;
+    pendingDirectLinkJobs.delete(oldest);
   }
   return false;
 }
 
 export function clearPendingDirectLinkJobs(): void {
-  pendingDirectLinkJobIds.clear();
+  pendingDirectLinkJobs.clear();
   notifiedDirectLinkJobIds.clear();
+  inFlightDirectLinkProbes.clear();
 }
 
 function matchesJobListQuery(queryKey: readonly unknown[], kind: JobKind): boolean {
@@ -202,37 +274,102 @@ export function useJobEvents(enabled: boolean): void {
       return;
     }
 
-    const knownJobs = getKnownJobsMap(queryClient);
+    const clientState = getClientJobState(queryClient);
     let reconcilingCache = false;
+    let disposed = false;
 
-    // F04 + F17: Reconcile any incoming ["jobs", ...] or ["job", id] query snapshot monotonically
-    // and check if any pending direct-link job completed during an SSE outage/reconnect.
+    // Seed in-flight list/job queries that may have started before subscription
+    for (const q of queryClient.getQueryCache().getAll()) {
+      const qKey = q.queryKey;
+      if ((qKey[0] === "jobs" || qKey[0] === "job") && q.state.fetchStatus === "fetching") {
+        if (!clientState.queryFetchStartSeq.has(q.queryHash)) {
+          clientState.queryFetchStartSeq.set(q.queryHash, clientState.seq);
+        }
+      }
+    }
+
+    // F04 + F17: Track query fetch start sequence and reconcile incoming ["jobs", ...] or ["job", id] snapshots
+    // monotonically against in-flight SSE job_updated / job_removed events.
     const unsubscribeCache = queryClient.getQueryCache().subscribe((cacheEvent) => {
-      if (reconcilingCache || cacheEvent.type !== "updated" || cacheEvent.action.type !== "success") {
+      if (reconcilingCache || cacheEvent.type !== "updated") {
         return;
       }
+
       const qKey = cacheEvent.query.queryKey;
+      if (cacheEvent.action.type === "fetch") {
+        if (qKey[0] === "jobs" || qKey[0] === "job") {
+          clientState.queryFetchStartSeq.set(cacheEvent.query.queryHash, ++clientState.seq);
+        }
+        return;
+      }
+
+      if (cacheEvent.action.type === "error") {
+        clientState.queryFetchStartSeq.delete(cacheEvent.query.queryHash);
+        return;
+      }
+
+      if (cacheEvent.action.type !== "success") {
+        return;
+      }
+
       if (qKey[0] === "jobs") {
+        const fetchStartSeq = clientState.queryFetchStartSeq.get(cacheEvent.query.queryHash) ?? 0;
+        clientState.queryFetchStartSeq.delete(cacheEvent.query.queryHash);
+
         const data = cacheEvent.query.state.data as { jobs?: JobView[] } | undefined;
         if (!data || !Array.isArray(data.jobs)) return;
         const maxLimit = getMaxListLimitForQueryKey(qKey);
+        const kindFilter = typeof qKey[1] === "string" ? (qKey[1] as JobKind) : undefined;
         let changed = false;
 
-        const mergedList = data.jobs.map((incoming) => {
+        const rawSnapshotIds = new Set(data.jobs.map((j) => j.id));
+        const byId = new Map<string, JobView>();
+
+        // 1) Filter out removed tombstones and 2) monotonically merge remaining items with knownJobs / ["job", id]
+        for (const incoming of data.jobs) {
+          if (clientState.removedJobIds.has(incoming.id)) {
+            changed = true;
+            continue;
+          }
           const singleCached = queryClient.getQueryData<{ job: JobView }>(["job", incoming.id])?.job;
-          const baseline = mergeJobView(knownJobs.get(incoming.id), singleCached ?? incoming);
+          const baseline = mergeJobView(clientState.knownJobs.get(incoming.id), singleCached ?? incoming);
           const merged = mergeJobView(baseline, incoming);
-          knownJobs.set(merged.id, merged);
+          setBoundedKnownJob(clientState, merged);
           if (!isSameJobSnapshot(incoming, merged)) {
             changed = true;
           }
-          if (pendingDirectLinkJobIds.has(merged.id)) {
+          if (pendingDirectLinkJobs.has(merged.id)) {
             notifyDirectLinkIfReady(merged);
           }
-          return merged;
-        });
+          byId.set(merged.id, merged);
+        }
 
-        const sorted = [...mergedList].sort((a, b) => b.createdAt - a.createdAt).slice(0, maxLimit);
+        // 3) Merge in any knownJobs matching kindFilter (and not removed) that arrived/updated via SSE
+        // while this query was in-flight (lastSseSeq > fetchStartSeq) and were missed by the stale snapshot.
+        for (const [knownId, knownJob] of clientState.knownJobs) {
+          if (byId.has(knownId) || clientState.removedJobIds.has(knownId)) continue;
+          if (kindFilter && knownJob.kind !== kindFilter) continue;
+          const lastSseSeq = clientState.sseUpdatedSeq.get(knownId) ?? 0;
+          if (lastSseSeq > fetchStartSeq) {
+            byId.set(knownId, knownJob);
+            changed = true;
+          }
+        }
+
+        // Bounded cleanup: prune old tombstones that a post-removal snapshot has already confirmed absent,
+        // provided no older list query is still in flight.
+        const minActiveFetchSeq = getMinActiveListFetchSeq(clientState);
+        for (const [removedId, removedSeq] of clientState.removedJobIds) {
+          if (
+            fetchStartSeq > removedSeq &&
+            removedSeq < minActiveFetchSeq &&
+            !rawSnapshotIds.has(removedId)
+          ) {
+            clientState.removedJobIds.delete(removedId);
+          }
+        }
+
+        const sorted = [...byId.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, maxLimit);
         if (
           sorted.length !== data.jobs.length ||
           sorted.some((item, idx) => item.id !== data.jobs?.[idx]?.id)
@@ -249,11 +386,26 @@ export function useJobEvents(enabled: boolean): void {
           }
         }
       } else if (qKey[0] === "job" && typeof qKey[1] === "string") {
+        const fetchStartSeq = clientState.queryFetchStartSeq.get(cacheEvent.query.queryHash) ?? 0;
+        clientState.queryFetchStartSeq.delete(cacheEvent.query.queryHash);
+
         const data = cacheEvent.query.state.data as { job?: JobView } | undefined;
         if (!data?.job) return;
-        const merged = mergeJobView(knownJobs.get(data.job.id), data.job);
-        knownJobs.set(merged.id, merged);
-        if (pendingDirectLinkJobIds.has(merged.id)) {
+
+        const removedSeq = clientState.removedJobIds.get(data.job.id);
+        if (removedSeq !== undefined && removedSeq > fetchStartSeq) {
+          reconcilingCache = true;
+          try {
+            queryClient.removeQueries({ queryKey: qKey, exact: true });
+          } finally {
+            reconcilingCache = false;
+          }
+          return;
+        }
+
+        const merged = mergeJobView(clientState.knownJobs.get(data.job.id), data.job);
+        setBoundedKnownJob(clientState, merged);
+        if (pendingDirectLinkJobs.has(merged.id)) {
           notifyDirectLinkIfReady(merged);
         }
         if (!isSameJobSnapshot(data.job, merged)) {
@@ -267,29 +419,75 @@ export function useJobEvents(enabled: boolean): void {
       }
     });
 
-    const catchUpSnapshots = () => {
-      void queryClient.invalidateQueries({ queryKey: ["jobs"] });
-      // F17: If pending direct-link jobs exist and no active ["jobs"] observer is mounted to refetch on invalidate,
-      // fetch download jobs directly so missed SSE completions during disconnect still trigger the direct-link toast.
-      if (pendingDirectLinkJobIds.size > 0) {
-        const hasActiveObserver = queryClient
-          .getQueryCache()
-          .findAll({ queryKey: ["jobs"] })
-          .some((q) => matchesJobListQuery(q.queryKey, "download") && q.getObserversCount() > 0);
-        if (!hasActiveObserver) {
-          void api
-            .listJobs("download")
-            .then((res) => {
-              for (const job of res.jobs) {
-                const merged = mergeJobView(knownJobs.get(job.id), job);
-                knownJobs.set(merged.id, merged);
-                if (pendingDirectLinkJobIds.has(merged.id)) {
-                  notifyDirectLinkIfReady(merged);
-                }
-              }
-            })
-            .catch(() => undefined);
+    const verifyRemainingPendingDirectLinks = () => {
+      if (disposed || pendingDirectLinkJobs.size === 0) return;
+      for (const jobId of [...pendingDirectLinkJobs.keys()]) {
+        if (clientState.removedJobIds.has(jobId)) {
+          pendingDirectLinkJobs.delete(jobId);
+          continue;
         }
+        if (inFlightDirectLinkProbes.has(jobId)) {
+          continue;
+        }
+        inFlightDirectLinkProbes.add(jobId);
+        void api
+          .getJob(jobId)
+          .then((res) => {
+            if (disposed) return;
+            if (!res?.job || clientState.removedJobIds.has(jobId)) {
+              pendingDirectLinkJobs.delete(jobId);
+              return;
+            }
+            const merged = mergeJobView(clientState.knownJobs.get(res.job.id), res.job);
+            setBoundedKnownJob(clientState, merged);
+            notifyDirectLinkIfReady(merged);
+          })
+          .catch((err) => {
+            if (isJobNotFoundError(err)) {
+              pendingDirectLinkJobs.delete(jobId);
+            }
+          })
+          .finally(() => {
+            inFlightDirectLinkProbes.delete(jobId);
+          });
+      }
+    };
+
+    const catchUpSnapshots = () => {
+      const invalidatePromise = queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      if (pendingDirectLinkJobs.size === 0) {
+        return;
+      }
+
+      const hasActiveDownloadObserver = queryClient
+        .getQueryCache()
+        .findAll({ queryKey: ["jobs"] })
+        .some((q) => matchesJobListQuery(q.queryKey, "download") && q.getObserversCount() > 0);
+
+      if (hasActiveDownloadObserver) {
+        // Wait for the active list refetch to settle recent items first, then individually probe any
+        // older pending direct-link jobs pushed beyond the 50-item list cap (F17).
+        void invalidatePromise.finally(() => {
+          verifyRemainingPendingDirectLinks();
+        });
+      } else {
+        void api
+          .listJobs("download")
+          .then((res) => {
+            if (disposed) return;
+            for (const job of res.jobs) {
+              if (clientState.removedJobIds.has(job.id)) continue;
+              const merged = mergeJobView(clientState.knownJobs.get(job.id), job);
+              setBoundedKnownJob(clientState, merged);
+              if (pendingDirectLinkJobs.has(merged.id)) {
+                notifyDirectLinkIfReady(merged);
+              }
+            }
+          })
+          .catch(() => undefined)
+          .finally(() => {
+            verifyRemainingPendingDirectLinks();
+          });
       }
     };
 
@@ -300,6 +498,7 @@ export function useJobEvents(enabled: boolean): void {
 
     if (typeof EventSource === "undefined") {
       return () => {
+        disposed = true;
         unsubscribeCache();
         window.removeEventListener("online", handleOnline);
         clearPendingDirectLinkJobs();
@@ -330,10 +529,17 @@ export function useJobEvents(enabled: boolean): void {
         const payload = parsed.data;
 
         if (payload.type === "job_updated" && payload.job) {
+          const seq = ++clientState.seq;
+          clientState.removedJobIds.delete(payload.job.id);
+          clientState.sseUpdatedSeq.set(payload.job.id, seq);
+
           const singleCached = queryClient.getQueryData<{ job: JobView }>(["job", payload.job.id])?.job;
-          const baseline = mergeJobView(knownJobs.get(payload.job.id), singleCached ?? payload.job);
+          const baseline = mergeJobView(
+            clientState.knownJobs.get(payload.job.id),
+            singleCached ?? payload.job,
+          );
           const mergedJob = mergeJobView(baseline, payload.job);
-          knownJobs.set(mergedJob.id, mergedJob);
+          setBoundedKnownJob(clientState, mergedJob);
 
           const matchingQueries = queryClient.getQueryCache().findAll({
             queryKey: ["jobs"],
@@ -346,7 +552,7 @@ export function useJobEvents(enabled: boolean): void {
               const maxLimit = getMaxListLimitForQueryKey(query.queryKey);
               queryClient.setQueryData<{ jobs: JobView[] }>(query.queryKey, (prev) => {
                 if (!prev) return prev;
-                return { jobs: upsertJobIntoList(prev.jobs, mergedJob, maxLimit, knownJobs) };
+                return { jobs: upsertJobIntoList(prev.jobs, mergedJob, maxLimit, clientState.knownJobs) };
               });
             }
             queryClient.setQueryData<{ job: JobView }>(["job", mergedJob.id], { job: mergedJob });
@@ -354,13 +560,16 @@ export function useJobEvents(enabled: boolean): void {
             reconcilingCache = false;
           }
 
-          if (pendingDirectLinkJobIds.has(mergedJob.id)) {
+          if (pendingDirectLinkJobs.has(mergedJob.id)) {
             notifyDirectLinkIfReady(mergedJob);
           }
         } else if (payload.type === "job_removed" && payload.jobId) {
           const removedId = payload.jobId;
-          pendingDirectLinkJobIds.delete(removedId);
-          knownJobs.delete(removedId);
+          const seq = ++clientState.seq;
+          recordRemovedTombstone(clientState, removedId, seq);
+          pendingDirectLinkJobs.delete(removedId);
+          clientState.knownJobs.delete(removedId);
+          clientState.sseUpdatedSeq.delete(removedId);
           reconcilingCache = true;
           try {
             queryClient.setQueriesData<{ jobs: JobView[] }>({ queryKey: ["jobs"] }, (prev) => {
@@ -378,6 +587,7 @@ export function useJobEvents(enabled: boolean): void {
     };
 
     return () => {
+      disposed = true;
       es.close();
       unsubscribeCache();
       window.removeEventListener("online", handleOnline);

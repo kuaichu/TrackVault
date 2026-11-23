@@ -101,10 +101,10 @@ export function PlayQueuePanel({ onDarkBackdrop = false }: { onDarkBackdrop?: bo
                 <button
                   type="button"
                   onClick={() => audioEngine.removeFromQueue(key)}
-                  className={`rounded p-1.5 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 ${
+                  className={`rounded p-1.5 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:group-focus-within:transition-none md:focus:opacity-100 md:focus:transition-none md:focus-visible:opacity-100 focus-visible:opacity-100 focus-visible:transition-none focus-visible:outline-none focus-visible:ring-2 ${
                     onDarkBackdrop
-                      ? "text-white/50 hover:text-red-300"
-                      : "text-[var(--tv-text-subtle)] hover:text-[var(--tv-danger)]"
+                      ? "text-white/50 hover:text-red-300 focus-visible:text-red-300 focus-visible:ring-white/70"
+                      : "text-[var(--tv-text-subtle)] hover:text-[var(--tv-danger)] focus-visible:text-[var(--tv-danger)] focus-visible:ring-[var(--tv-accent)]"
                   }`}
                   aria-label="移出队列"
                 >
@@ -257,10 +257,16 @@ export function TrackCommentsPanel({
             重试
           </button>
         </div>
-      ) : hotComments.length === 0 && latestComments.length === 0 ? (
+      ) : hotComments.length === 0 &&
+        latestComments.length === 0 &&
+        !commentsQuery.hasNextPage &&
+        !commentsQuery.isFetchNextPageError ? (
         <div className={`py-16 text-center text-xs ${bodyTextClass}`}>暂无评论</div>
       ) : (
         <div className="space-y-4">
+          {hotComments.length === 0 && latestComments.length === 0 && (
+            <div className={`py-8 text-center text-xs ${bodyTextClass}`}>当前页暂无可展示的评论</div>
+          )}
           {hotComments.length > 0 && (
             <section>
               <h3 className={`pb-1 text-[11px] font-semibold ${subtleTextClass}`}>精彩评论</h3>

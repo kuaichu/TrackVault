@@ -12,32 +12,39 @@ export interface ToggleLikeVariables {
 
 interface LikeOverrideEntry {
   liked: boolean;
-  completedAt: number;
+  completedSeq: number;
+}
+
+interface ClientLikeSyncState {
+  seq: number;
+  byPlatform: Map<MusicPlatform, Map<string, LikeOverrideEntry>>;
 }
 
 /**
- * Per-QueryClient map of recently confirmed heart mutations so an earlier in-flight
+ * Per-QueryClient state of recently confirmed heart mutations so an earlier in-flight
  * GET /api/likes/:platform resolving late can never overwrite a newer heart toggle (P06),
  * while remaining strictly scoped to the active QueryClient session.
  */
-const recentLikeOverridesByClient = new WeakMap<
-  QueryClient,
-  Map<MusicPlatform, Map<string, LikeOverrideEntry>>
->();
+const likeStateByClient = new WeakMap<QueryClient, ClientLikeSyncState>();
+
+function getClientLikeState(queryClient: QueryClient): ClientLikeSyncState {
+  let state = likeStateByClient.get(queryClient);
+  if (!state) {
+    state = { seq: 0, byPlatform: new Map() };
+    likeStateByClient.set(queryClient, state);
+  }
+  return state;
+}
 
 function getPlatformOverrides(
   queryClient: QueryClient,
   platform: MusicPlatform,
 ): Map<string, LikeOverrideEntry> {
-  let byPlatform = recentLikeOverridesByClient.get(queryClient);
-  if (!byPlatform) {
-    byPlatform = new Map();
-    recentLikeOverridesByClient.set(queryClient, byPlatform);
-  }
-  let map = byPlatform.get(platform);
+  const state = getClientLikeState(queryClient);
+  let map = state.byPlatform.get(platform);
   if (!map) {
     map = new Map();
-    byPlatform.set(platform, map);
+    state.byPlatform.set(platform, map);
   }
   return map;
 }
@@ -49,14 +56,15 @@ export function useLikedIdsQuery(platform: MusicPlatform | undefined, enabled = 
     queryKey: ["liked-ids", platform],
     queryFn: async () => {
       if (!platform) return { ids: [] as string[] };
-      const startedAt = Date.now();
+      const state = getClientLikeState(queryClient);
+      const startedSeq = ++state.seq;
       const res = await api.getLikedSongIds(platform);
       const overrides = getPlatformOverrides(queryClient, platform);
       if (overrides.size === 0) return res;
 
       const set = new Set(res.ids);
       for (const [songId, entry] of overrides.entries()) {
-        if (entry.completedAt >= startedAt) {
+        if (entry.completedSeq > startedSeq) {
           if (entry.liked) set.add(songId);
           else set.delete(songId);
         } else {
@@ -78,12 +86,15 @@ export function useToggleLikeMutation() {
     mutationFn: ({ platform, songId, nextLiked }: ToggleLikeVariables) =>
       api.toggleSongLike(platform, songId, nextLiked),
     onMutate: async (vars) => {
+      const hadFetchingQuery = queryClient.isFetching({ queryKey: ["liked-ids", vars.platform] }) > 0;
       // P06: Cancel any older in-flight liked-ids GET so it cannot race and overwrite the new heart state
       await queryClient.cancelQueries({ queryKey: ["liked-ids", vars.platform] });
+      return { hadFetchingQuery };
     },
     onSuccess: (res, vars) => {
+      const state = getClientLikeState(queryClient);
       const overrides = getPlatformOverrides(queryClient, vars.platform);
-      overrides.set(vars.songId, { liked: res.liked, completedAt: Date.now() });
+      overrides.set(vars.songId, { liked: res.liked, completedSeq: ++state.seq });
 
       // Always key by captured mutation variables so track switches in flight never corrupt another song's cache
       queryClient.setQueryData(["song-like", vars.platform, vars.songId], res);
@@ -105,7 +116,13 @@ export function useToggleLikeMutation() {
         toast.success(res.liked ? "已喜欢" : "已取消喜欢");
       }
     },
-    onError: (err) => {
+    onError: (err, vars, context) => {
+      // P06: If onMutate cancelled the initial ["liked-ids", platform] fetch and toggleSongLike failed,
+      // recover the liked-ids query immediately so other songs' heart states do not stay unloaded forever.
+      const existingList = queryClient.getQueryData<{ ids: string[] }>(["liked-ids", vars.platform]);
+      if (existingList === undefined || context?.hadFetchingQuery) {
+        void queryClient.invalidateQueries({ queryKey: ["liked-ids", vars.platform] });
+      }
       toast.error(err instanceof Error ? err.message : "操作失败");
     },
   });

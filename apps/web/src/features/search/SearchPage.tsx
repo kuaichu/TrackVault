@@ -23,7 +23,8 @@ export function SearchPage() {
   const urlQ = searchParams.get("q") ?? "";
   const rawMode = searchParams.get("mode");
   const hasExplicitMode = rawMode === "netease" || rawMode === "qq" || rawMode === "aggregate";
-  const defaultMode: ProviderMode = settingsQuery.data?.settings.providerMode ?? "aggregate";
+  const loadedDefaultMode = settingsQuery.data?.settings.providerMode;
+  const defaultMode: ProviderMode = loadedDefaultMode ?? "aggregate";
   const mode: ProviderMode = hasExplicitMode ? rawMode : defaultMode;
 
   const rawType = searchParams.get("type");
@@ -81,10 +82,20 @@ export function SearchPage() {
     setSearchParams(next);
   };
 
-  const triggerSearch = (keyword: string, nextMode = mode, nextTab = tab) => {
+  const triggerSearch = (keyword: string, explicitMode?: ProviderMode, nextTab = tab) => {
     const clean = keyword.trim();
     if (!clean) return;
-    setSearchParams({ q: clean, mode: nextMode, type: nextTab });
+    const nextParams: Record<string, string> = { q: clean };
+    // F07: Only persist `mode` when explicitly chosen or after user settings have loaded,
+    // preventing premature fallback to "aggregate" while settingsQuery is still loading.
+    const resolvedMode = explicitMode ?? (hasExplicitMode ? rawMode : loadedDefaultMode);
+    if (resolvedMode) {
+      nextParams.mode = resolvedMode;
+    }
+    if (nextTab !== "song" || searchParams.has("type")) {
+      nextParams.type = nextTab;
+    }
+    setSearchParams(nextParams);
     addHistoryMutation.mutate(clean);
   };
 

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Song } from "#shared";
 import { SongTable } from "../../entities/song/SongTable.js";
 import { api } from "../../shared/api/endpoints.js";
+import { applyClearedPlayHistory, fetchSyncedPlayHistory } from "../../shared/hooks/use-play-history-sync.js";
 import { toast } from "../../shared/store/toast-store.js";
 import { EmptyState } from "../../shared/ui/primitives.js";
 import { audioEngine } from "../player/engine/audio-engine.js";
@@ -52,16 +53,19 @@ export function CloudPage() {
   const handlePlayAll = async () => {
     if (isLoadingAllForPlay || songs.length === 0) return;
 
-    if (!cloudQuery.hasNextPage) {
+    if (!cloudQuery.hasNextPage && !cloudQuery.isFetchNextPageError) {
       const first = songs[0];
-      if (first) void audioEngine.playTrack(first, { queue: songs });
+      if (first) {
+        void audioEngine.playTrack(first, { queue: songs });
+        toast.info(`已将全部 ${songs.length} 首云盘歌曲加入播放队列`);
+      }
       return;
     }
 
     setIsLoadingAllForPlay(true);
     try {
       let latestPages = pages;
-      let canFetchMore = Boolean(cloudQuery.hasNextPage);
+      let canFetchMore = Boolean(cloudQuery.hasNextPage || cloudQuery.isFetchNextPageError);
       let fetchedCount = 0;
 
       while (canFetchMore && fetchedCount < MAX_CLOUD_PLAY_ALL_PAGES && mountedRef.current) {
@@ -70,7 +74,14 @@ export function CloudPage() {
         if (nextRes.data?.pages) {
           latestPages = nextRes.data.pages;
         }
-        if (nextRes.isError || !nextRes.hasNextPage) {
+        if (nextRes.isError) {
+          if (!mountedRef.current) return;
+          const partialCount = dedupCloudSongs(latestPages.flatMap((page) => page.songs)).length;
+          const errMsg = nextRes.error instanceof Error ? nextRes.error.message : "后续分页请求失败";
+          toast.error(`云盘后续分页加载失败（当前已加载 ${partialCount} 首）：${errMsg}，请重试`);
+          return;
+        }
+        if (!nextRes.hasNextPage) {
           canFetchMore = false;
           break;
         }
@@ -86,6 +97,8 @@ export function CloudPage() {
       }
       if (canFetchMore) {
         toast.info(`已加载前 ${fullSongs.length} 首云盘歌曲加入播放队列`);
+      } else {
+        toast.info(`已将全部 ${fullSongs.length} 首云盘歌曲加入播放队列`);
       }
     } finally {
       if (mountedRef.current) {
@@ -122,13 +135,13 @@ export function CloudPage() {
         )}
       </div>
 
-      {cloudQuery.isLoading ? (
+      {cloudQuery.isLoading && pages.length === 0 ? (
         <div className="space-y-2">
           {["c1", "c2", "c3", "c4", "c5"].map((id) => (
             <div key={id} className="h-12 animate-pulse rounded-lg bg-[var(--tv-surface)]" />
           ))}
         </div>
-      ) : cloudQuery.isError ? (
+      ) : cloudQuery.isError && pages.length === 0 ? (
         <EmptyState
           title="未能加载网易云盘"
           description={cloudQuery.error instanceof Error ? cloudQuery.error.message : "请先绑定网易云账号"}
@@ -145,8 +158,11 @@ export function CloudPage() {
       ) : (
         <>
           <SongTable songs={songs} emptyText="云盘暂无歌曲" />
-          {cloudQuery.hasNextPage && (
-            <div className="flex justify-center pt-2">
+          {cloudQuery.isFetchNextPageError ? (
+            <div className="flex flex-col items-center gap-2 pt-2 text-center">
+              <p className="text-xs text-[var(--tv-danger)]">
+                {cloudQuery.error instanceof Error ? cloudQuery.error.message : "加载更多云盘歌曲失败"}
+              </p>
               <button
                 type="button"
                 disabled={cloudQuery.isFetchingNextPage}
@@ -154,9 +170,23 @@ export function CloudPage() {
                 className="inline-flex items-center gap-2 rounded-full bg-[var(--tv-surface)] px-5 py-2 text-xs font-medium text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)] disabled:opacity-50"
               >
                 {cloudQuery.isFetchingNextPage && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                {cloudQuery.isFetchingNextPage ? "正在加载更多..." : "加载更多"}
+                {cloudQuery.isFetchingNextPage ? "正在重试..." : "重试加载更多"}
               </button>
             </div>
+          ) : (
+            cloudQuery.hasNextPage && (
+              <div className="flex justify-center pt-2">
+                <button
+                  type="button"
+                  disabled={cloudQuery.isFetchingNextPage}
+                  onClick={() => void cloudQuery.fetchNextPage()}
+                  className="inline-flex items-center gap-2 rounded-full bg-[var(--tv-surface)] px-5 py-2 text-xs font-medium text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)] disabled:opacity-50"
+                >
+                  {cloudQuery.isFetchingNextPage && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  {cloudQuery.isFetchingNextPage ? "正在加载更多..." : "加载更多"}
+                </button>
+              </div>
+            )
           )}
         </>
       )}
@@ -168,13 +198,16 @@ export function HistoryPage() {
   const queryClient = useQueryClient();
   const historyQuery = useQuery({
     queryKey: ["play-history"],
-    queryFn: () => api.getPlayHistory(),
+    queryFn: () => fetchSyncedPlayHistory(queryClient),
   });
 
   const clearMutation = useMutation({
     mutationFn: () => api.clearPlayHistory(),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["play-history"] });
+    },
     onSuccess: (res) => {
-      queryClient.setQueryData(["play-history"], res);
+      applyClearedPlayHistory(queryClient, res);
       toast.info("已清空播放记录");
     },
     onError: (err) => {

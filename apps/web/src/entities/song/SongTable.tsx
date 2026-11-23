@@ -13,7 +13,7 @@ import {
   Trash2,
   User,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   type DownloadMode,
@@ -33,7 +33,7 @@ import { toast } from "../../shared/store/toast-store.js";
 import { CoverArt, EmptyState, EqualizerBars, PlatformBadge } from "../../shared/ui/primitives.js";
 import { AlbumLink, ArtistLinks } from "../music/EntityLinks.js";
 
-const PLAY_TRIGGER_DEDUP_MS = 550;
+const BUTTON_DBLCLICK_GUARD_MS = 1000;
 
 interface SongTableProps {
   songs: Song[];
@@ -75,16 +75,25 @@ export function SongTable({
   const [menuPanel, setMenuPanel] = useState<"main" | "playlists" | "quality">("main");
   const [menuUpward, setMenuUpward] = useState(false);
 
-  const lastPlayTriggerRef = useRef<{ key: string; at: number } | null>(null);
+  const lastButtonPlayRef = useRef<{ key: string; at: number } | null>(null);
+  const lastZeroDetailPlayRef = useRef<{ key: string; at: number } | null>(null);
 
-  const triggerPlayTrack = (song: Song) => {
-    const songKey = getSongKey(song);
-    const now = Date.now();
-    const last = lastPlayTriggerRef.current;
-    if (last && last.key === songKey && now - last.at < PLAY_TRIGGER_DEDUP_MS) {
+  // P15: Honor UIEvent.detail semantics so OS double-clicks at ANY speed (e.g. 650ms, detail=2) never play twice,
+  // while independent single pointer clicks (detail === 1) ALWAYS respond even when 420ms apart.
+  const handlePlayButtonClick = (e: MouseEvent<HTMLButtonElement>, song: Song) => {
+    if (e.detail > 1) {
       return;
     }
-    lastPlayTriggerRef.current = { key: songKey, at: now };
+    const songKey = getSongKey(song);
+    const now = Date.now();
+    if (e.detail === 0) {
+      const prevZero = lastZeroDetailPlayRef.current;
+      if (prevZero && prevZero.key === songKey && now - prevZero.at < 550) {
+        return;
+      }
+      lastZeroDetailPlayRef.current = { key: songKey, at: now };
+    }
+    lastButtonPlayRef.current = { key: songKey, at: now };
     void audioEngine.playTrack(song, { queue: songs });
   };
 
@@ -261,7 +270,12 @@ export function SongTable({
               onDoubleClick={(e) => {
                 const target = e.target as HTMLElement | null;
                 if (target?.closest("button, a, input, select")) return;
-                triggerPlayTrack(song);
+                const lastBtn = lastButtonPlayRef.current;
+                if (lastBtn && lastBtn.key === key && Date.now() - lastBtn.at < BUTTON_DBLCLICK_GUARD_MS) {
+                  lastButtonPlayRef.current = null;
+                  return;
+                }
+                void audioEngine.playTrack(song, { queue: songs });
               }}
               className={`group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 rounded-lg px-2 py-2 transition-colors @lg:grid-cols-[32px_minmax(0,1fr)_48px_96px] @lg:gap-3 @lg:px-3 @3xl:grid-cols-[36px_minmax(0,1.65fr)_minmax(0,1fr)_52px_104px] ${
                 active ? "bg-[var(--tv-accent-soft)]" : "hover:bg-[var(--tv-surface-hover)]"
@@ -271,7 +285,7 @@ export function SongTable({
               <div className="hidden items-center justify-center @lg:flex">
                 <button
                   type="button"
-                  onClick={() => triggerPlayTrack(song)}
+                  onClick={(e) => handlePlayButtonClick(e, song)}
                   className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--tv-text-subtle)] transition-colors hover:text-[var(--tv-text)]"
                   title={locked ? song.availability?.playback.reason : "播放"}
                   aria-label={`播放 ${song.title}`}
@@ -303,7 +317,7 @@ export function SongTable({
               <div className="flex min-w-0 items-center gap-2.5 @lg:gap-3">
                 <button
                   type="button"
-                  onClick={() => triggerPlayTrack(song)}
+                  onClick={(e) => handlePlayButtonClick(e, song)}
                   className="relative shrink-0"
                   aria-label={`播放 ${song.title}`}
                 >
@@ -318,7 +332,7 @@ export function SongTable({
                     )}
                     <button
                       type="button"
-                      onClick={() => triggerPlayTrack(song)}
+                      onClick={(e) => handlePlayButtonClick(e, song)}
                       className={`truncate text-left text-[13.5px] font-semibold transition-colors ${
                         active
                           ? "text-[var(--tv-accent)]"

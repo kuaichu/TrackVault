@@ -106,6 +106,9 @@ function buildTransferSubtitle(
   sourceTotal?: number,
   truncated?: boolean,
 ): string {
+  if (summary.total === 0 && truncated && sourceTotal && sourceTotal > 0) {
+    return `所选 ${sourceTotal} 首超出前 ${MAX_SELECTED_SCAN_TRACKS} 首扫描范围（未处理 ${sourceTotal} 首）`;
+  }
   const base = `共 ${summary.total} 首 · 匹配 ${summary.matched} · 待确认 ${summary.manualReview}`;
   if (truncated && sourceTotal && sourceTotal > summary.total) {
     return `${base}（已截取前 ${summary.total}/${sourceTotal} 首）`;
@@ -199,27 +202,42 @@ export class TransferService {
 
   /**
    * T09: Actively probes real stream availability via adapter.resolveAudio when checkAvailability === true.
-   * Returns null when probing is unsupported or fails due to transient/auth errors so metadata fallback holds.
+   * Distinguishes unsupported adapters, verified business states, and transient/upstream probe failures
+   * so failed probes are never conflated with verified playable streams.
    */
   async #probeTrackAvailability(
     adapter: MusicProviderAdapter,
     target: AudioResolveTarget,
     auth: ProviderAuthContext,
-  ): Promise<TransferAvailability | null> {
-    if (typeof adapter.resolveAudio !== "function") return null;
+  ): Promise<
+    | { kind: "unsupported" }
+    | { kind: "resolved"; availability: TransferAvailability }
+    | { kind: "error"; message: string }
+  > {
+    if (typeof adapter.resolveAudio !== "function") return { kind: "unsupported" };
     try {
       const resolved = await adapter.resolveAudio(target, "standard", "playback", auth);
       if (typeof resolved.url === "string" && resolved.url.trim().length === 0) {
-        return "copyright_unavailable";
+        return { kind: "resolved", availability: "copyright_unavailable" };
       }
-      return resolved.trial ? "trial_only" : "playable";
+      return { kind: "resolved", availability: resolved.trial ? "trial_only" : "playable" };
     } catch (error) {
       if (isAppError(error)) {
-        if (error.code === "COPYRIGHT_UNAVAILABLE") return "copyright_unavailable";
-        if (error.code === "TRIAL_ONLY") return "trial_only";
-        if (error.code === "VIP_REQUIRED") return "vip_only";
+        if (error.code === "COPYRIGHT_UNAVAILABLE") {
+          return { kind: "resolved", availability: "copyright_unavailable" };
+        }
+        if (error.code === "TRIAL_ONLY") {
+          return { kind: "resolved", availability: "trial_only" };
+        }
+        if (error.code === "VIP_REQUIRED") {
+          return { kind: "resolved", availability: "vip_only" };
+        }
+        return { kind: "error", message: error.message || "音源探测请求异常" };
       }
-      return null;
+      return {
+        kind: "error",
+        message: error instanceof Error && error.message ? error.message : "音源探测请求失败",
+      };
     }
   }
 
@@ -238,12 +256,14 @@ export class TransferService {
     }
 
     const probedIds = new Set<string>();
+    const probeErrorsById = new Map<string, string>();
+
     const probeCandidateById = async (targetId: string): Promise<boolean> => {
       if (probedIds.has(targetId)) return false;
       probedIds.add(targetId);
       const candidate = working.find((c) => c.id === targetId);
       if (!candidate) return false;
-      const probed = await this.#probeTrackAvailability(
+      const outcome = await this.#probeTrackAvailability(
         targetAdapter,
         {
           id: candidate.id,
@@ -253,14 +273,24 @@ export class TransferService {
         },
         targetAuth,
       );
-      if (probed && probed !== candidate.availability) {
-        candidate.availability = probed;
-        return true;
+      if (outcome.kind === "resolved") {
+        if (outcome.availability !== candidate.availability) {
+          candidate.availability = outcome.availability;
+          return true;
+        }
+        return false;
+      }
+      if (outcome.kind === "error") {
+        probeErrorsById.set(targetId, outcome.message);
+        if (candidate.availability === "playable" || candidate.availability === undefined) {
+          candidate.availability = "unknown";
+          return true;
+        }
       }
       return false;
     };
 
-    // 1. Verify statically playable selected candidates (downgrade if actually trial/unavailable)
+    // 1. Verify statically playable selected candidates (downgrade if actually trial/unavailable or unverified on probe error)
     while (matched.status === "matched" && matched.selectedCandidate) {
       const targetId = matched.selectedCandidate.targetTrackId;
       if (probedIds.has(targetId)) break;
@@ -281,10 +311,28 @@ export class TransferService {
         const changed = await probeCandidateById(targetId);
         if (changed) {
           matched = matchTransferTrack(track, working);
-          if (matched.status === "matched") {
+          if (
+            matched.status === "matched" &&
+            matched.selectedCandidate &&
+            !probeErrorsById.has(matched.selectedCandidate.targetTrackId)
+          ) {
             break;
           }
         }
+      }
+    }
+
+    // 3. T09: If the chosen candidate's stream probe threw a transient/timeout error (and no alternative candidate
+    // was verified playable), surface manual_review with explicit probe failure reason instead of claiming verified match.
+    if (matched.status === "matched" && matched.selectedCandidate) {
+      const probeErr = probeErrorsById.get(matched.selectedCandidate.targetTrackId);
+      if (probeErr) {
+        return {
+          sourceTrack: track,
+          status: "manual_review",
+          candidates: matched.candidates,
+          reason: `音源实测未完成（${probeErr}），请人工确认可用性`,
+        };
       }
     }
 
@@ -363,6 +411,7 @@ export class TransferService {
 
       let filteredSongs = collectSelected(loaded.songs);
       const targetCollectCount = Math.min(selectedSet.size, MAX_TRANSFER_TRACKS);
+      let scanExhaustedPlaylist = !loaded.truncated;
       if (filteredSongs.length < targetCollectCount && loaded.truncated) {
         const deepScanned = await sourceAdapter.getAllPlaylistTracks(
           input.playlistId,
@@ -370,6 +419,7 @@ export class TransferService {
           MAX_SELECTED_SCAN_TRACKS,
         );
         filteredSongs = collectSelected(deepScanned);
+        scanExhaustedPlaylist = loaded.sourceTotal <= deepScanned.length;
       }
 
       for (const song of filteredSongs) {
@@ -382,7 +432,7 @@ export class TransferService {
       return {
         tracks: filteredSongs.map(songToTransferTrack),
         sourceTotal: selectedSet.size,
-        truncated: filteredSongs.length < selectedSet.size,
+        truncated: filteredSongs.length < selectedSet.size && !scanExhaustedPlaylist,
         sourceMetaByKey,
       };
     }
@@ -421,6 +471,26 @@ export class TransferService {
         } = await this.#loadSourceTracks(actor, input, handle.signal);
 
         if (sourceTracks.length === 0) {
+          // T11: If the user explicitly selected track IDs beyond the 10,000 scan ceiling, disclose truncation
+          // accurately instead of falsely claiming the playlist contained no valid tracks.
+          if (truncated && sourceTotal > 0) {
+            const emptySummary = summarizeTransferResults([]);
+            const truncatedResult: TransferResult = {
+              sourceProvider: input.sourceProvider,
+              targetProvider: input.targetProvider,
+              playlistName,
+              summary: emptySummary,
+              results: [],
+              sourceTotal,
+              processedCount: 0,
+              unprocessedCount: sourceTotal,
+              truncated: true,
+            };
+            return {
+              result: truncatedResult,
+              subtitle: buildTransferSubtitle(emptySummary, sourceTotal, true),
+            };
+          }
           throw new AppError("VALIDATION_ERROR", "源歌单或文本中没有解析到有效歌曲。");
         }
 
@@ -638,7 +708,7 @@ export class TransferService {
 
           // T09: When checkAvailability is explicitly enabled, probe real audio stream even for statically locked songs
           if (shouldProbe) {
-            const probed = await this.#probeTrackAvailability(
+            const outcome = await this.#probeTrackAvailability(
               netease,
               {
                 id: song.id,
@@ -648,21 +718,32 @@ export class TransferService {
               },
               searchAuth,
             );
-            if (probed === "playable") {
-              issueType = null;
-            } else if (probed === "trial_only") {
-              issueType = "trial_only";
-              reason = "实测音源仅提供试听片段";
-            } else if (probed === "copyright_unavailable") {
-              issueType = "copyright_unavailable";
-              reason = "实测音源无可用版权";
-            } else if (probed === "vip_only") {
-              issueType =
-                staticIssueType === "paid_album" || staticIssueType === "restricted"
-                  ? staticIssueType
-                  : "vip_only";
-              if (!staticIssueType) {
-                reason = "实测音源需要会员权限";
+            if (outcome.kind === "resolved") {
+              const probed = outcome.availability;
+              if (probed === "playable") {
+                issueType = null;
+              } else if (probed === "trial_only") {
+                issueType = "trial_only";
+                reason = "实测音源仅提供试听片段";
+              } else if (probed === "copyright_unavailable") {
+                issueType = "copyright_unavailable";
+                reason = "实测音源无可用版权";
+              } else if (probed === "vip_only") {
+                issueType =
+                  staticIssueType === "paid_album" || staticIssueType === "restricted"
+                    ? staticIssueType
+                    : "vip_only";
+                if (!staticIssueType) {
+                  reason = "实测音源需要会员权限";
+                }
+              }
+            } else if (outcome.kind === "error") {
+              if (staticIssueType) {
+                issueType = staticIssueType;
+                reason = `音源实测未完成（${outcome.message}）：${reason}`;
+              } else {
+                issueType = "restricted";
+                reason = `音源实测未完成（${outcome.message}），暂未确认为可直接播放`;
               }
             }
           }

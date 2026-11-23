@@ -144,8 +144,9 @@ test("TrackVault v2 end-to-end security, isolation, encryption, download tagging
   providers.register(createMockAdapter("netease"));
   providers.register(createMockAdapter("qq"));
 
-  // Fake valid MPEG1 Layer3 bytes + JPEG cover
-  const fakeMp3 = new Uint8Array([0xff, 0xfb, 0x90, 0x64, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+  // Complete 417-byte MPEG1 Layer3 (128 kbps, 44.1 kHz) frame + JPEG cover
+  const fakeMp3 = new Uint8Array(417);
+  fakeMp3.set([0xff, 0xfb, 0x90, 0x64, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
   const fakeJpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0xff, 0xd9]);
 
   const mockHttp = new SafeHttpClient({

@@ -82,13 +82,16 @@ export function PersonalFmPage() {
   };
 
   const handleNext = () => {
-    if (isCurrentActive && fmMode) {
-      void audioEngine.nextFmTrack();
+    // P11: Always route through unified audioEngine.playNext() when FM mode is active (or priorityQueue has items)
+    // so user-queued "下一首播放" tracks are honored identically from both the FM page and global transport controls.
+    const { priorityQueue } = usePlayerStore.getState();
+    if (fmMode || priorityQueue.length > 0) {
+      void audioEngine.playNext();
       return;
     }
-    const nextCandidate = fmQueue[1];
+    const nextCandidate = fmQueue.slice(1).find((song) => !song.availability?.playback.locked);
     if (nextCandidate) {
-      void audioEngine.playFmTrack(nextCandidate, { queue: fmQueue });
+      void audioEngine.playFmTrack(nextCandidate, { queue: fmQueue, preservePriorityQueue: true });
       return;
     }
     void handleRefreshBatch(true);

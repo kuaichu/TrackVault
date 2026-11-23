@@ -98,14 +98,16 @@ test("quality helpers include higher 192K and never crash on unknown levels (A14
   assert.equal(getQualityLabel("unknown_future_tier"), "UNKNOWN_FUTURE_TIER");
   assert.equal(normalizeQualityLevel("HIGHER", "standard"), "higher");
   assert.equal(normalizeQualityLevel("nonexistent", "exhigh"), "exhigh");
-  // Phase 7 A14: vivid (384 kbps) & unknown tier bitrate inference never misreport 320K
+  // Phase 8 A14: explicit vivid shows "臻音 384K", while unknown tiers with >=384 kbps infer exhigh ("384K") without faking spatial audio
   assert.equal(QualityLevelSchema.safeParse("vivid").success, true);
   assert.equal(normalizeQualityLevel("vivid", "exhigh", { bitrate: 384_000, format: "mp4" }), "vivid");
   assert.equal(getQualityLabel("vivid", 384_000), "臻音 384K");
-  assert.equal(
-    normalizeQualityLevel("spatial_future", "exhigh", { bitrate: 384_000, format: "mp3" }),
-    "vivid",
-  );
+  const inferred384 = normalizeQualityLevel("spatial_future", "standard", {
+    bitrate: 384_000,
+    format: "mp3",
+  });
+  assert.equal(inferred384, "exhigh");
+  assert.equal(getQualityLabel(inferred384, 384_000), "384K");
 });
 
 test("PlayerStateSchema backwards-compatibly accepts optional muted & lastNonZeroVolume (U09)", () => {

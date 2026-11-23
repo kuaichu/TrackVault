@@ -259,6 +259,11 @@ export class NeteaseAdapter implements MusicProviderAdapter {
   });
   readonly #lyricCache = new ScopedLruCache<SongLyrics>({ maxEntries: 300, defaultTtlMs: 30 * 60 * 1000 });
   readonly #likeSetCache = new ScopedLruCache<Set<string>>({ maxEntries: 50, defaultTtlMs: 2 * 60 * 1000 });
+  readonly #recentLikeMutations = new ScopedLruCache<Map<string, { liked: boolean; epoch: number }>>({
+    maxEntries: 50,
+    defaultTtlMs: 5 * 60 * 1000,
+  });
+  #likeMutationEpoch = 0;
   readonly #uidCache = new ScopedLruCache<string>({ maxEntries: 50, defaultTtlMs: 10 * 60 * 1000 });
 
   constructor(options?: { realIp?: string; timeoutMs?: number; apiOverride?: Partial<NeteaseApiModule> }) {
@@ -1184,7 +1189,8 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     auth: ProviderAuthContext,
     maxTracks = MAX_PLAYLIST_TRACKS_FETCH,
   ): Promise<Song[]> {
-    const cappedMax = Math.min(MAX_PLAYLIST_TRACKS_FETCH, Math.max(1, maxTracks));
+    // T11: Default calls remain capped at 2,000, while explicit deep-scan callers (e.g. selectedSourceTrackIds) may scan up to 10,000
+    const cappedMax = Math.min(MAX_PLAYLIST_SEARCH_TRACKS, Math.max(1, Math.floor(maxTracks)));
     const detail = await this.#getPlaylistDetail(playlistId, auth);
     const targetIds = detail.trackIds.slice(0, cappedMax);
 
@@ -1258,7 +1264,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       limit: safeLimit,
       hasMore: offset + pageSongs.length < filtered.length,
       truncated,
-      scannedTotal: allSongs.length,
+      scannedTotal: targetIds.length,
     };
   }
 
@@ -1545,6 +1551,7 @@ export class NeteaseAdapter implements MusicProviderAdapter {
   }
 
   async #getLikeSet(auth: ProviderAuthContext): Promise<Set<string>> {
+    const startEpoch = this.#likeMutationEpoch;
     const uid = await this.#resolveUid(auth);
     const cacheKey = `likes:${uid}`;
     const cached = this.#likeSetCache.get(auth.scopeKey, cacheKey);
@@ -1558,6 +1565,21 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       this.#assertBusinessSuccess(response.body, "获取网易云红心列表失败");
       const ids = ((response.body.ids as Array<number | string> | undefined) ?? []).map(String);
       const set = new Set(ids);
+
+      // P06: Reconcile any toggleSongLike mutations that completed while #resolveUid / likelist was in flight
+      // so a slow stale likelist response can NEVER clobber a newer like/unlike in the 2-minute cache.
+      const recentMutations = this.#recentLikeMutations.get(auth.scopeKey, "mutations");
+      if (recentMutations) {
+        for (const [mutSongId, entry] of recentMutations.entries()) {
+          if (entry.epoch > startEpoch) {
+            if (entry.liked) set.add(mutSongId);
+            else set.delete(mutSongId);
+          } else {
+            recentMutations.delete(mutSongId);
+          }
+        }
+      }
+
       this.#likeSetCache.set(auth.scopeKey, cacheKey, set);
       return set;
     } catch (error) {
@@ -1595,12 +1617,31 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       );
       this.#assertBusinessSuccess(response.body, "红心操作失败");
 
+      const mutationEpoch = ++this.#likeMutationEpoch;
+      let scopeMutations = this.#recentLikeMutations.get(auth.scopeKey, "mutations");
+      if (!scopeMutations) {
+        scopeMutations = new Map();
+      }
+      if (scopeMutations.has(songId)) {
+        scopeMutations.delete(songId);
+      }
+      scopeMutations.set(songId, { liked, epoch: mutationEpoch });
+      while (scopeMutations.size > 200) {
+        const oldestKey = scopeMutations.keys().next().value;
+        if (!oldestKey) break;
+        scopeMutations.delete(oldestKey);
+      }
+      this.#recentLikeMutations.set(auth.scopeKey, "mutations", scopeMutations);
+
       const uid = auth.accountUid?.trim() || this.#uidCache.get(auth.scopeKey, this.#cookieCacheKey(cookie));
       if (uid) {
-        const existing = this.#likeSetCache.get(auth.scopeKey, `likes:${uid}`);
+        const cacheKey = `likes:${uid}`;
+        const existing = this.#likeSetCache.get(auth.scopeKey, cacheKey);
         if (existing) {
-          if (liked) existing.add(songId);
-          else existing.delete(songId);
+          const next = new Set(existing);
+          if (liked) next.add(songId);
+          else next.delete(songId);
+          this.#likeSetCache.set(auth.scopeKey, cacheKey, next);
         }
       } else {
         this.#likeSetCache.invalidateScope(auth.scopeKey);

@@ -920,14 +920,24 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         continue;
       }
 
-      const info = res.req_0?.data?.midurlinfo?.[0];
+      const vkeyData = res.req_0?.data;
+      if (!vkeyData || !Array.isArray(vkeyData.midurlinfo) || vkeyData.midurlinfo.length === 0) {
+        lastUpstreamError = new AppError("UPSTREAM_ERROR", "QQ 音乐音源服务返回结构缺失。");
+        continue;
+      }
+
+      const info = vkeyData.midurlinfo[0];
       const rawPurl = info?.purl?.trim() ?? "";
       const rawTrialUrl = info?.opi30surl?.trim() ?? "";
-      const sipList = res.req_0?.data?.sip ?? [];
+      const sipList = vkeyData.sip ?? [];
       const sip = sipList.find((s) => s.startsWith("https://")) ?? sipList[0];
 
       const effectivePurl = rawPurl || rawTrialUrl;
-      if (!effectivePurl || !sip) continue;
+      if (!effectivePurl) continue;
+      if (!sip) {
+        lastUpstreamError = new AppError("UPSTREAM_ERROR", "QQ 音乐音源服务未返回流媒体节点地址。");
+        continue;
+      }
 
       const isTrialUrl =
         !rawPurl ||

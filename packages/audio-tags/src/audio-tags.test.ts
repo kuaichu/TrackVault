@@ -3,7 +3,7 @@ import test from "node:test";
 import { concatBytes, getAllId3v2TagsLength, getId3v2TagLength, writeUint32BigEndian } from "./bytes.js";
 import { injectFlacMetadata, isFlacBytes } from "./flac.js";
 import { formatLyricsAsLrc, mergeLyricTranslations, parseLrc, parseYrc } from "./lrc.js";
-import { injectMp3Metadata, isMp3Bytes } from "./mp3.js";
+import { getMpegFrameByteLength, injectMp3Metadata, isMp3Bytes } from "./mp3.js";
 
 const sampleMeta = {
   title: "夜曲",
@@ -302,4 +302,71 @@ test("injectMp3Metadata preserves ID3v1.1 track number & fallback tags and conve
   assert.ok(v22OutLatin1.includes("APIC"), "ID3v2.2 PIC mapped to ID3v2.3 APIC");
   assert.ok(v22OutLatin1.includes("image/png\0"), "ID3v2.2 3-char PNG converted to MIME image/png\\0");
   assert.deepEqual(injectedFromV22.subarray(injectedFromV22.length - mp3.length), mp3);
+});
+
+test("Phase 8 · J01 + J08: getMpegFrameByteLength, ID3v1 genre (e.g. 17 -> Rock, 255 -> unset), and ID3v2.2 CNT/POP migration", () => {
+  // 1. Exact MPEG frame byte length calculation (MPEG1 L3 128kbps 44.1kHz = 417B, with padding = 418B)
+  assert.equal(getMpegFrameByteLength(new Uint8Array([0xff, 0xfb, 0x90, 0x00]), 0), 417);
+  assert.equal(getMpegFrameByteLength(new Uint8Array([0xff, 0xfb, 0x92, 0x00]), 0), 418);
+  assert.equal(getMpegFrameByteLength(new Uint8Array([0xff, 0xfb, 0xf0, 0x00]), 0), null);
+
+  const mp3 = makeMinimalMp3();
+
+  // 2. ID3v1 genre 17 ("Rock") promoted to ID3v2.3 TCON when TCON is absent; 255 is ignored
+  const v1Rock = new Uint8Array(128);
+  v1Rock.set(new TextEncoder().encode("TAG"), 0);
+  v1Rock[127] = 17; // Rock
+  const withRock = injectMp3Metadata(concatBytes([mp3, v1Rock]), sampleMeta, "", null);
+  const rockLatin1 = Buffer.from(withRock).toString("latin1");
+  assert.ok(rockLatin1.includes("TCON"), "ID3v1 genre 17 must produce TCON");
+  // UTF-16LE BOM + "Rock"
+  assert.ok(
+    Buffer.from(withRock).includes(Buffer.from([0xff, 0xfe, 0x52, 0x00, 0x6f, 0x00, 0x63, 0x00, 0x6b, 0x00])),
+    "TCON frame must contain 'Rock'",
+  );
+
+  const v1Unset = new Uint8Array(128);
+  v1Unset.set(new TextEncoder().encode("TAG"), 0);
+  v1Unset[127] = 255; // Unset
+  const withUnset = injectMp3Metadata(concatBytes([mp3, v1Unset]), sampleMeta, "", null);
+  assert.equal(Buffer.from(withUnset).toString("latin1").includes("TCON"), false);
+
+  // 3. ID3v2.2 CNT -> PCNT and POP -> POPM
+  const cntPayload = new Uint8Array([0x00, 0x00, 0x01, 0x2c]); // 300 plays
+  const cntV22 = concatBytes([
+    new TextEncoder().encode("CNT"),
+    new Uint8Array([0x00, 0x00, cntPayload.length]),
+    cntPayload,
+  ]);
+  const popPayload = concatBytes([
+    new TextEncoder().encode("user@example.com"),
+    new Uint8Array([0x00, 0xc4, 0x00, 0x00, 0x00, 0x2a]), // rating 196, count 42
+  ]);
+  const popV22 = concatBytes([
+    new TextEncoder().encode("POP"),
+    new Uint8Array([0x00, 0x00, popPayload.length]),
+    popPayload,
+  ]);
+  const v22Body = concatBytes([cntV22, popV22]);
+  const v22Header = new Uint8Array([
+    0x49,
+    0x44,
+    0x33,
+    0x02,
+    0x00,
+    0x00,
+    (v22Body.length >>> 21) & 0x7f,
+    (v22Body.length >>> 14) & 0x7f,
+    (v22Body.length >>> 7) & 0x7f,
+    v22Body.length & 0x7f,
+  ]);
+  const upgraded = injectMp3Metadata(concatBytes([v22Header, v22Body, mp3]), sampleMeta, "", null);
+  const upgradedLatin1 = Buffer.from(upgraded).toString("latin1");
+  assert.ok(upgradedLatin1.includes("PCNT"), "ID3v2.2 CNT must migrate to ID3v2.3 PCNT");
+  assert.ok(upgradedLatin1.includes("POPM"), "ID3v2.2 POP must migrate to ID3v2.3 POPM");
+  assert.ok(Buffer.from(upgraded).includes(Buffer.from(cntPayload)), "PCNT counter bytes preserved");
+  assert.ok(
+    Buffer.from(upgraded).includes(Buffer.from(popPayload)),
+    "POPM email + rating + counter preserved",
+  );
 });

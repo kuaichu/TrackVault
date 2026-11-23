@@ -220,9 +220,10 @@ test("J01 + BUG-25 + J07 + B35 + C017: MediaService rejects fake MP3, allows val
     const badMagicDone = await waitJob(badMagicJob.id);
     assert.equal(badMagicDone.status, "failed");
 
-    // 4. J01: valid M4A (offset 4 'ftyp', QQ C400) passes signature validation
+    // 4. J01: valid M4A (offset 4 'ftyp', 24-byte complete ftyp box, QQ C400) passes signature validation
     nextFormat = "m4a";
-    const validM4a = new Uint8Array([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20]);
+    const validM4a = new Uint8Array(24);
+    validM4a.set([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20]);
     nextResponseFactory = () =>
       new Response(validM4a, {
         status: 200,

@@ -83,7 +83,7 @@ export function inferQualityLevelFromBitrate(
   if (br <= 0) return null;
   if (br >= 900_000) return "hires";
   if (br >= 700_000) return "lossless";
-  if (br >= 350_000) return "vivid";
+  // A14: High lossy bitrates (e.g. 384 kbps) without an explicit spatial/vivid tier map to exhigh (labelled with real kbps)
   if (br >= 256_000) return "exhigh";
   if (br >= 160_000) return "higher";
   return "standard";
