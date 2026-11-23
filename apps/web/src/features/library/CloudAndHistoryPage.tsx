@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cloud, History, Trash2 } from "lucide-react";
+import { Play, Trash2 } from "lucide-react";
 import { SongTable } from "../../entities/song/SongTable.js";
 import { api } from "../../shared/api/endpoints.js";
 import { toast } from "../../shared/store/toast-store.js";
+import { EmptyState } from "../../shared/ui/primitives.js";
+import { audioEngine } from "../player/engine/audio-engine.js";
 
 export function CloudPage() {
   const cloudQuery = useQuery({
@@ -10,24 +12,40 @@ export function CloudPage() {
     queryFn: () => api.getCloudSongs(),
   });
 
+  const songs = cloudQuery.data?.songs ?? [];
+
   return (
-    <div className="space-y-5">
-      <div className="flex items-center gap-2.5">
-        <Cloud className="h-5 w-5 text-sky-400" />
-        <div>
-          <h1 className="text-xl font-semibold text-white">网易云盘</h1>
-          <p className="text-xs text-[var(--tv-text-muted)]">云盘个人文件自动绕过曲库版权锁</p>
-        </div>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-[28px] font-bold tracking-tight text-[var(--tv-text)]">云盘</h1>
+        {songs.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              const first = songs[0];
+              if (first) void audioEngine.playTrack(first, { queue: songs });
+            }}
+            className="inline-flex items-center gap-1.5 rounded-full bg-[var(--tv-accent)] px-4 py-2 text-xs font-semibold text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+          >
+            <Play className="h-3.5 w-3.5 fill-current" />
+            播放全部
+          </button>
+        )}
       </div>
 
       {cloudQuery.isLoading ? (
-        <div className="py-16 text-center text-sm text-[var(--tv-text-muted)]">加载云盘歌曲中...</div>
-      ) : cloudQuery.isError ? (
-        <div className="rounded-2xl border border-rose-500/30 bg-rose-950/30 p-5 text-sm text-rose-200">
-          {cloudQuery.error instanceof Error ? cloudQuery.error.message : "加载云盘失败"}
+        <div className="space-y-2">
+          {["c1", "c2", "c3", "c4", "c5"].map((id) => (
+            <div key={id} className="h-12 animate-pulse rounded-lg bg-[var(--tv-surface)]" />
+          ))}
         </div>
+      ) : cloudQuery.isError ? (
+        <EmptyState
+          title="未能加载网易云盘"
+          description={cloudQuery.error instanceof Error ? cloudQuery.error.message : "请先绑定网易云账号"}
+        />
       ) : (
-        <SongTable songs={cloudQuery.data?.songs ?? []} emptyText="云盘中暂无歌曲" />
+        <SongTable songs={songs} emptyText="云盘暂无歌曲" />
       )}
     </div>
   );
@@ -44,36 +62,55 @@ export function HistoryPage() {
     mutationFn: () => api.clearPlayHistory(),
     onSuccess: (res) => {
       queryClient.setQueryData(["play-history"], res);
-      toast.info("已清空播放历史");
+      toast.info("已清空播放记录");
     },
   });
 
+  const songs = historyQuery.data?.items ?? [];
+
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          <History className="h-5 w-5 text-amber-400" />
-          <div>
-            <h1 className="text-xl font-semibold text-white">播放历史</h1>
-            <p className="text-xs text-[var(--tv-text-muted)]">按当前登录成员隔离，最多保留最近 100 首</p>
-          </div>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-[28px] font-bold tracking-tight text-[var(--tv-text)]">最近播放</h1>
+        <div className="flex items-center gap-2">
+          {songs.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  const first = songs[0];
+                  if (first) void audioEngine.playTrack(first, { queue: songs });
+                }}
+                className="inline-flex items-center gap-1.5 rounded-full bg-[var(--tv-accent)] px-4 py-1.5 text-xs font-semibold text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
+              >
+                <Play className="h-3.5 w-3.5 fill-current" />
+                全部播放
+              </button>
+              <button
+                type="button"
+                onClick={() => clearMutation.mutate()}
+                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-danger)]"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                清空
+              </button>
+            </>
+          )}
         </div>
-        {(historyQuery.data?.items.length ?? 0) > 0 && (
-          <button
-            type="button"
-            onClick={() => clearMutation.mutate()}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-rose-500/30 px-3 py-1.5 text-xs text-rose-300 hover:bg-rose-500/10"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            清空历史
-          </button>
-        )}
       </div>
 
       {historyQuery.isLoading ? (
-        <div className="py-16 text-center text-sm text-[var(--tv-text-muted)]">加载中...</div>
+        <div className="space-y-2">
+          {["h1", "h2", "h3", "h4", "h5"].map((id) => (
+            <div key={id} className="h-12 animate-pulse rounded-lg bg-[var(--tv-surface)]" />
+          ))}
+        </div>
       ) : (
-        <SongTable songs={historyQuery.data?.items ?? []} emptyText="暂无播放记录" />
+        <SongTable
+          songs={songs}
+          emptyText="还没有播放记录"
+          emptyDescription="播放过的曲目会自动保存在这里。"
+        />
       )}
     </div>
   );

@@ -1,5 +1,12 @@
 import { mergeLyricTranslations, parseLrc } from "#audio-tags";
 import {
+  type AlbumDetail,
+  type AlbumSummary,
+  type ArtistDetail,
+  type ArtistSummary,
+  type ChartDetail,
+  type ChartSummary,
+  type EntitySearchType,
   type PlaylistSort,
   type PlaylistSummary,
   type PlaylistTracksPage,
@@ -131,6 +138,26 @@ export class QqMusicAdapter implements MusicProviderAdapter {
   readonly #client: QqMusicHttpClient;
   readonly #qrAuth: QqQrAuthManager;
   readonly #discoverCache = new ScopedLruCache<Song[]>({ maxEntries: 20, defaultTtlMs: 5 * 60 * 1000 });
+  readonly #recommendedPlaylistsCache = new ScopedLruCache<PlaylistSummary[]>({
+    maxEntries: 10,
+    defaultTtlMs: 5 * 60 * 1000,
+  });
+  readonly #chartsCache = new ScopedLruCache<ChartSummary[]>({
+    maxEntries: 10,
+    defaultTtlMs: 15 * 60 * 1000,
+  });
+  readonly #chartDetailCache = new ScopedLruCache<ChartDetail>({
+    maxEntries: 30,
+    defaultTtlMs: 5 * 60 * 1000,
+  });
+  readonly #artistCache = new ScopedLruCache<ArtistDetail>({
+    maxEntries: 60,
+    defaultTtlMs: 10 * 60 * 1000,
+  });
+  readonly #albumCache = new ScopedLruCache<AlbumDetail>({
+    maxEntries: 60,
+    defaultTtlMs: 10 * 60 * 1000,
+  });
   readonly #playlistCache = new ScopedLruCache<{ playlist: PlaylistSummary; songs: Song[] }>({
     maxEntries: 80,
     defaultTtlMs: 2 * 60 * 1000,
@@ -767,6 +794,462 @@ export class QqMusicAdapter implements MusicProviderAdapter {
       "COPYRIGHT_UNAVAILABLE",
       "QQ 音乐未返回可用音频链接，请检查 QQ 音乐账号绑定、绿钻权限或该曲目版权状态。",
     );
+  }
+
+  async getRecommendedPlaylists(auth: ProviderAuthContext, limit = 10): Promise<PlaylistSummary[]> {
+    const safeLimit = Math.min(30, Math.max(1, limit));
+    const cacheKey = `rec:${safeLimit}`;
+    const cached = this.#recommendedPlaylistsCache.get("public", cacheKey);
+    if (cached) return cached;
+
+    const cookieMap = this.#parseCookie(auth);
+    const res = await this.#client.musicu<{
+      rec?: {
+        data?: {
+          grids?: Array<{
+            id?: number | string;
+            title?: string;
+            picurl?: string;
+            creator?: { nick?: string };
+          }>;
+        };
+      };
+    }>(
+      {
+        rec: {
+          module: "playlist.HotRecommendServer",
+          method: "get_new_hot_recommend",
+          param: { cmd: 0, page: 0, daily_page: 0, size: safeLimit },
+        },
+      },
+      cookieMap,
+    );
+
+    const playlists: PlaylistSummary[] = (res.rec?.data?.grids ?? [])
+      .filter((item) => item.id !== undefined && Boolean(item.title?.trim()))
+      .slice(0, safeLimit)
+      .map((item) => ({
+        id: String(item.id),
+        platform: "qq",
+        name: item.title?.trim() ?? "",
+        coverUrl: normalizeCoverUrl(item.picurl, 400),
+        trackCount: 0,
+        creatorName: item.creator?.nick?.trim() || "QQ 音乐推荐",
+        owned: false,
+      }));
+
+    this.#recommendedPlaylistsCache.set("public", cacheKey, playlists);
+    return playlists;
+  }
+
+  async getCharts(auth: ProviderAuthContext): Promise<ChartSummary[]> {
+    const cached = this.#chartsCache.get("public", "charts");
+    if (cached) return cached;
+
+    const cookieMap = this.#parseCookie(auth);
+    const res = await this.#client.musicu<{
+      charts?: {
+        data?: {
+          group?: Array<{
+            toplist?: Array<{
+              topId?: number;
+              title?: string;
+              headPicUrl?: string;
+              frontPicUrl?: string;
+              musichallPicUrl?: string;
+              updateTime?: string;
+              totalNum?: number;
+              song?: Array<{ title?: string; singerName?: string }>;
+            }>;
+          }>;
+        };
+      };
+    }>(
+      {
+        charts: {
+          module: "musicToplist.ToplistInfoServer",
+          method: "GetAll",
+          param: {},
+        },
+      },
+      cookieMap,
+    );
+
+    const seen = new Set<string>();
+    const list: ChartSummary[] = [];
+    for (const group of res.charts?.data?.group ?? []) {
+      for (const item of group.toplist ?? []) {
+        if (!item.topId || !item.title?.trim()) continue;
+        const id = String(item.topId);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        list.push({
+          id,
+          platform: "qq",
+          name: item.title.trim(),
+          coverUrl: normalizeCoverUrl(item.headPicUrl || item.frontPicUrl || item.musichallPicUrl, 400),
+          updateFrequency: item.updateTime ? `更新于 ${item.updateTime}` : undefined,
+          trackCount: Math.max(0, Number(item.totalNum ?? 0) || 0),
+          previewTracks: (item.song ?? [])
+            .slice(0, 3)
+            .map((s) => [s.title, s.singerName].filter(Boolean).join(" - "))
+            .filter(Boolean),
+        });
+      }
+    }
+
+    const capped = list.slice(0, 36);
+    this.#chartsCache.set("public", "charts", capped);
+    return capped;
+  }
+
+  async getChartDetail(chartId: string, auth: ProviderAuthContext): Promise<ChartDetail> {
+    const topId = Number(chartId);
+    if (!Number.isFinite(topId) || topId <= 0) {
+      throw new AppError("VALIDATION_ERROR", "非法的 QQ 音乐榜单 ID。");
+    }
+
+    const cached = this.#chartDetailCache.get("public", String(topId));
+    if (cached) return cached;
+
+    const cookieMap = this.#parseCookie(auth);
+    const res = await this.#client.musicu<{
+      detail?: {
+        data?: {
+          data?: {
+            topId?: number;
+            title?: string;
+            headPicUrl?: string;
+            frontPicUrl?: string;
+            updateTime?: string;
+            totalNum?: number;
+          };
+          songInfoList?: RawQqSong[];
+        };
+      };
+    }>(
+      {
+        detail: {
+          module: "musicToplist.ToplistInfoServer",
+          method: "GetDetail",
+          param: { topId, offset: 0, num: 100 },
+        },
+      },
+      cookieMap,
+    );
+
+    const info = res.detail?.data?.data;
+    const songs = (res.detail?.data?.songInfoList ?? [])
+      .map(mapQqSong)
+      .filter((song): song is Song => song !== null);
+
+    const result: ChartDetail = {
+      chart: {
+        id: String(topId),
+        platform: "qq",
+        name: info?.title?.trim() || `QQ 榜单 ${topId}`,
+        coverUrl: normalizeCoverUrl(info?.headPicUrl || info?.frontPicUrl, 400),
+        updateFrequency: info?.updateTime ? `更新于 ${info.updateTime}` : undefined,
+        trackCount: Math.max(songs.length, Number(info?.totalNum ?? 0) || 0),
+      },
+      songs,
+    };
+
+    this.#chartDetailCache.set("public", String(topId), result);
+    return result;
+  }
+
+  async getArtistDetail(artistId: string, auth: ProviderAuthContext): Promise<ArtistDetail> {
+    const singerMid = artistId.trim();
+    if (!singerMid) {
+      throw new AppError("VALIDATION_ERROR", "缺少 QQ 音乐歌手 ID。");
+    }
+
+    const cached = this.#artistCache.get("public", singerMid);
+    if (cached) return cached;
+
+    const cookieMap = this.#parseCookie(auth);
+    const res = await this.#client.musicu<{
+      singerInfo?: {
+        data?: {
+          singer_list?: Array<{
+            basic_info?: { singer_mid?: string; name?: string };
+            ex_info?: { desc?: string };
+          }>;
+        };
+      };
+      singerSongs?: {
+        data?: {
+          totalNum?: number;
+          songList?: Array<{ songInfo?: RawQqSong }>;
+        };
+      };
+      singerAlbums?: {
+        data?: {
+          total?: number;
+          albumList?: Array<{
+            albumMid?: string;
+            albumName?: string;
+            publishDate?: string;
+            albumType?: string;
+            singerName?: string;
+            totalNum?: number;
+          }>;
+        };
+      };
+    }>(
+      {
+        singerInfo: {
+          module: "music.musichallSinger.SingerInfoInter",
+          method: "GetSingerDetail",
+          param: {
+            singer_mids: [singerMid],
+            ex_singer: 1,
+            wiki_singer: 1,
+            group_singer: 0,
+            pic: 1,
+            photos: 0,
+          },
+        },
+        singerSongs: {
+          module: "music.musichallSong.SongListInter",
+          method: "GetSingerSongList",
+          param: { singerMid, begin: 0, num: 50, order: 1 },
+        },
+        singerAlbums: {
+          module: "music.musichallAlbum.AlbumListServer",
+          method: "GetAlbumList",
+          param: { singerMid, begin: 0, num: 30, order: 0 },
+        },
+      },
+      cookieMap,
+    );
+
+    const info = res.singerInfo?.data?.singer_list?.[0];
+    const hotSongs = (res.singerSongs?.data?.songList ?? [])
+      .map((item) => (item.songInfo ? mapQqSong(item.songInfo) : null))
+      .filter((song): song is Song => song !== null);
+
+    const name = info?.basic_info?.name?.trim() || hotSongs[0]?.artist.split(" / ")[0] || "";
+    if (!name) {
+      throw new AppError("NOT_FOUND", "未找到该 QQ 音乐歌手信息。");
+    }
+
+    const albums: AlbumSummary[] = (res.singerAlbums?.data?.albumList ?? [])
+      .filter((a) => Boolean(a.albumMid?.trim()) && Boolean(a.albumName?.trim()))
+      .map((a) => ({
+        id: a.albumMid?.trim() ?? "",
+        platform: "qq",
+        name: a.albumName?.trim() ?? "",
+        coverUrl: `https://y.gtimg.cn/music/photo_new/T002R500x500M000${encodeURIComponent(a.albumMid?.trim() ?? "")}.jpg`,
+        artistName: a.singerName?.trim() || name,
+        artistId: singerMid,
+        publishDate: a.publishDate?.trim() || undefined,
+        trackCount: typeof a.totalNum === "number" && a.totalNum > 0 ? a.totalNum : undefined,
+        albumType: a.albumType?.trim() || undefined,
+      }));
+
+    const result: ArtistDetail = {
+      id: singerMid,
+      platform: "qq",
+      name,
+      avatarUrl: `https://y.gtimg.cn/music/photo_new/T001R300x300M000${encodeURIComponent(singerMid)}.jpg`,
+      briefDesc: info?.ex_info?.desc?.trim() || undefined,
+      songCount: res.singerSongs?.data?.totalNum ?? hotSongs.length,
+      albumCount: res.singerAlbums?.data?.total ?? albums.length,
+      hotSongs,
+      albums,
+    };
+
+    this.#artistCache.set("public", singerMid, result);
+    return result;
+  }
+
+  async getAlbumDetail(albumId: string, auth: ProviderAuthContext): Promise<AlbumDetail> {
+    const albumMid = albumId.trim();
+    if (!albumMid) {
+      throw new AppError("VALIDATION_ERROR", "缺少 QQ 音乐专辑 ID。");
+    }
+
+    const cached = this.#albumCache.get("public", albumMid);
+    if (cached) return cached;
+
+    const cookieMap = this.#parseCookie(auth);
+    const res = await this.#client.musicu<{
+      detail?: {
+        data?: {
+          basicInfo?: {
+            albumMid?: string;
+            albumName?: string;
+            publishDate?: string;
+            desc?: string;
+          };
+          company?: { name?: string };
+          singer?: { singerList?: Array<{ mid?: string; name?: string }> };
+        };
+      };
+      songs?: {
+        data?: {
+          totalNum?: number;
+          songList?: Array<{ songInfo?: RawQqSong }>;
+        };
+      };
+    }>(
+      {
+        detail: {
+          module: "music.musichallAlbum.AlbumInfoServer",
+          method: "GetAlbumDetail",
+          param: { albumMid },
+        },
+        songs: {
+          module: "music.musichallAlbum.AlbumSongList",
+          method: "GetAlbumSongList",
+          param: { albumMid, begin: 0, num: 100, order: 2 },
+        },
+      },
+      cookieMap,
+    );
+
+    const basic = res.detail?.data?.basicInfo;
+    if (!basic?.albumName?.trim()) {
+      throw new AppError("NOT_FOUND", "未找到该 QQ 音乐专辑信息。");
+    }
+
+    const songs = (res.songs?.data?.songList ?? [])
+      .map((item) => (item.songInfo ? mapQqSong(item.songInfo) : null))
+      .filter((song): song is Song => song !== null);
+
+    const artists = (res.detail?.data?.singer?.singerList ?? [])
+      .map((s) => ({ id: s.mid?.trim() || undefined, name: s.name?.trim() ?? "" }))
+      .filter((s) => Boolean(s.name));
+
+    const result: AlbumDetail = {
+      id: albumMid,
+      platform: "qq",
+      name: basic.albumName.trim(),
+      coverUrl: `https://y.gtimg.cn/music/photo_new/T002R500x500M000${encodeURIComponent(albumMid)}.jpg`,
+      artists: artists.length > 0 ? artists : [{ name: "未知歌手" }],
+      publishDate: basic.publishDate?.trim() || undefined,
+      company: res.detail?.data?.company?.name?.trim() || undefined,
+      description: basic.desc?.trim() || undefined,
+      trackCount: Math.max(songs.length, Number(res.songs?.data?.totalNum ?? 0) || 0),
+      songs,
+    };
+
+    this.#albumCache.set("public", albumMid, result);
+    return result;
+  }
+
+  async searchEntities(
+    query: string,
+    type: EntitySearchType,
+    auth: ProviderAuthContext,
+    limit = 20,
+  ): Promise<{ artists?: ArtistSummary[]; albums?: AlbumSummary[]; playlists?: PlaylistSummary[] }> {
+    const keyword = query.trim();
+    if (!keyword) return {};
+    const safeLimit = Math.min(40, Math.max(1, limit));
+    const searchType = type === "artist" ? 1 : type === "album" ? 2 : 3;
+    const cookieMap = this.#parseCookie(auth);
+
+    const res = await this.#client.musicu<{
+      req?: {
+        data?: {
+          body?: {
+            singer?: {
+              list?: Array<{
+                singerMID?: string;
+                singerName?: string;
+                singerPic?: string;
+                songNum?: number;
+                albumNum?: number;
+              }>;
+            };
+            album?: {
+              list?: Array<{
+                albumMID?: string;
+                albumName?: string;
+                albumPic?: string;
+                publicTime?: string;
+                singerMID?: string;
+                singerName?: string;
+                song_count?: number;
+              }>;
+            };
+            songlist?: {
+              list?: Array<{
+                dissid?: string | number;
+                dissname?: string;
+                imgurl?: string;
+                song_count?: number;
+                creator?: { name?: string };
+              }>;
+            };
+          };
+        };
+      };
+    }>(
+      {
+        req: {
+          module: "music.search.SearchCgiService",
+          method: "DoSearchForQQMusicDesktop",
+          param: {
+            query: keyword,
+            search_type: searchType,
+            num_per_page: safeLimit,
+            page_num: 1,
+          },
+        },
+      },
+      cookieMap,
+    );
+
+    const body = res.req?.data?.body;
+    if (type === "artist") {
+      return {
+        artists: (body?.singer?.list ?? [])
+          .filter((a) => Boolean(a.singerMID?.trim()) && Boolean(a.singerName?.trim()))
+          .map((a) => ({
+            id: a.singerMID?.trim() ?? "",
+            platform: "qq",
+            name: a.singerName?.trim() ?? "",
+            avatarUrl: normalizeCoverUrl(a.singerPic, 300),
+            songCount: typeof a.songNum === "number" ? a.songNum : undefined,
+            albumCount: typeof a.albumNum === "number" ? a.albumNum : undefined,
+          })),
+      };
+    }
+
+    if (type === "album") {
+      return {
+        albums: (body?.album?.list ?? [])
+          .filter((a) => Boolean(a.albumMID?.trim()) && Boolean(a.albumName?.trim()))
+          .map((a) => ({
+            id: a.albumMID?.trim() ?? "",
+            platform: "qq",
+            name: a.albumName?.trim() ?? "",
+            coverUrl: normalizeCoverUrl(a.albumPic, 400),
+            artistName: a.singerName?.trim() || "未知歌手",
+            artistId: a.singerMID?.trim() || undefined,
+            publishDate: a.publicTime?.trim() || undefined,
+            trackCount: typeof a.song_count === "number" ? a.song_count : undefined,
+          })),
+      };
+    }
+
+    return {
+      playlists: (body?.songlist?.list ?? [])
+        .filter((p) => p.dissid !== undefined && Boolean(p.dissname?.trim()))
+        .map((p) => ({
+          id: String(p.dissid),
+          platform: "qq",
+          name: p.dissname?.trim() ?? "",
+          coverUrl: normalizeCoverUrl(p.imgurl, 400),
+          trackCount: Math.max(0, Number(p.song_count ?? 0) || 0),
+          creatorName: p.creator?.name?.trim() || "QQ 音乐用户",
+          owned: false,
+        })),
+    };
   }
 
   async startQrLogin(scopeKey: string): Promise<QrStartResult> {

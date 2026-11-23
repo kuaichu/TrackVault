@@ -1,4 +1,12 @@
 import type {
+  AlbumDetail,
+  AlbumSummary,
+  ArtistDetail,
+  ArtistSummary,
+  ChartDetail,
+  ChartSummary,
+  EntitySearchResult,
+  EntitySearchType,
   MusicPlatform,
   PlaylistSummary,
   PlaylistTracksPage,
@@ -33,10 +41,12 @@ export class CatalogService {
   }
 
   #buildAuth(actor: ActorContext, platform: MusicPlatform): ProviderAuthContext {
+    const binding = this.#credentials.getBindingView(actor.userId, platform);
     return {
       platform,
       cookie: this.#credentials.getDecryptedCookie(actor.userId, platform),
       scopeKey: actor.userId,
+      accountUid: binding.accountUid,
     };
   }
 
@@ -87,6 +97,143 @@ export class CatalogService {
     }
 
     return { results: merged, warnings };
+  }
+
+  async searchEntities(
+    actor: ActorContext,
+    query: string,
+    mode: ProviderMode,
+    type: EntitySearchType,
+  ): Promise<EntitySearchResult> {
+    const keyword = query.trim();
+    if (!keyword) {
+      return { type, artists: [], albums: [], playlists: [], warnings: [] };
+    }
+
+    const runSingle = async (platform: MusicPlatform) => {
+      const adapter = this.#providers.get(platform);
+      if (!adapter.searchEntities) {
+        return {
+          artists: [] as ArtistSummary[],
+          albums: [] as AlbumSummary[],
+          playlists: [] as PlaylistSummary[],
+        };
+      }
+      const res = await adapter.searchEntities(keyword, type, this.#buildAuth(actor, platform), 20);
+      return {
+        artists: res.artists ?? [],
+        albums: res.albums ?? [],
+        playlists: res.playlists ?? [],
+      };
+    };
+
+    if (mode === "netease" || mode === "qq") {
+      const res = await runSingle(mode);
+      return { type, ...res, warnings: [] };
+    }
+
+    const [neRes, qqRes] = await Promise.allSettled([runSingle("netease"), runSingle("qq")]);
+    const warnings: string[] = [];
+    const ne =
+      neRes.status === "fulfilled"
+        ? neRes.value
+        : (() => {
+            warnings.push(
+              `网易云搜索失败：${neRes.reason instanceof Error ? neRes.reason.message : "未知错误"}`,
+            );
+            return { artists: [], albums: [], playlists: [] };
+          })();
+    const qq =
+      qqRes.status === "fulfilled"
+        ? qqRes.value
+        : (() => {
+            warnings.push(
+              `QQ 音乐搜索失败：${qqRes.reason instanceof Error ? qqRes.reason.message : "未知错误"}`,
+            );
+            return { artists: [], albums: [], playlists: [] };
+          })();
+
+    const interleave = <T>(a: T[], b: T[]): T[] => {
+      const out: T[] = [];
+      const max = Math.max(a.length, b.length);
+      for (let i = 0; i < max; i += 1) {
+        const left = a[i];
+        const right = b[i];
+        if (left) out.push(left);
+        if (right) out.push(right);
+      }
+      return out;
+    };
+
+    return {
+      type,
+      artists: interleave(ne.artists, qq.artists),
+      albums: interleave(ne.albums, qq.albums),
+      playlists: interleave(ne.playlists, qq.playlists),
+      warnings,
+    };
+  }
+
+  async getRecommendedPlaylists(actor: ActorContext, platform: MusicPlatform): Promise<PlaylistSummary[]> {
+    const adapter = this.#providers.get(platform);
+    if (!adapter.getRecommendedPlaylists) return [];
+    return adapter.getRecommendedPlaylists(this.#buildAuth(actor, platform), 10);
+  }
+
+  async getCharts(actor: ActorContext, platform: MusicPlatform): Promise<ChartSummary[]> {
+    const adapter = this.#providers.get(platform);
+    if (!adapter.getCharts) return [];
+    return adapter.getCharts(this.#buildAuth(actor, platform));
+  }
+
+  async getChartDetail(actor: ActorContext, platform: MusicPlatform, chartId: string): Promise<ChartDetail> {
+    const adapter = this.#providers.get(platform);
+    if (!adapter.getChartDetail) {
+      throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持排行榜详情。`);
+    }
+    return adapter.getChartDetail(chartId, this.#buildAuth(actor, platform));
+  }
+
+  async getArtistDetail(
+    actor: ActorContext,
+    platform: MusicPlatform,
+    artistId: string,
+  ): Promise<ArtistDetail> {
+    const adapter = this.#providers.get(platform);
+    if (!adapter.getArtistDetail) {
+      throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持歌手详情页。`);
+    }
+    return adapter.getArtistDetail(artistId, this.#buildAuth(actor, platform));
+  }
+
+  async getAlbumDetail(actor: ActorContext, platform: MusicPlatform, albumId: string): Promise<AlbumDetail> {
+    const adapter = this.#providers.get(platform);
+    if (!adapter.getAlbumDetail) {
+      throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持专辑详情页。`);
+    }
+    return adapter.getAlbumDetail(albumId, this.#buildAuth(actor, platform));
+  }
+
+  async getPersonalFm(actor: ActorContext): Promise<Song[]> {
+    const adapter = this.#providers.get("netease");
+    if (!adapter.getPersonalFm) {
+      throw new AppError("FEATURE_UNSUPPORTED", "暂不支持私人 FM。");
+    }
+    return adapter.getPersonalFm(this.#buildAuth(actor, "netease"));
+  }
+
+  async createPlaylist(actor: ActorContext, platform: MusicPlatform, name: string, trackIds: string[] = []) {
+    const adapter = this.#providers.get(platform);
+    if (!adapter.createPlaylistWithTracks) {
+      throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持创建歌单。`);
+    }
+    return adapter.createPlaylistWithTracks(name, trackIds, this.#buildAuth(actor, platform));
+  }
+
+  async getLikedSongIds(actor: ActorContext, platform: MusicPlatform): Promise<string[]> {
+    const adapter = this.#providers.get(platform);
+    if (!adapter.getLikedSongIds) return [];
+    return adapter.getLikedSongIds(this.#buildAuth(actor, platform));
   }
 
   async getDiscover(actor: ActorContext, platform?: MusicPlatform): Promise<Song[]> {

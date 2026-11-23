@@ -28,11 +28,13 @@ interface PlayerStateStore {
 
   setStatePatch(patch: Partial<PlayerStateStore>): void;
   addToQueue(song: Song): void;
+  insertNextInQueue(song: Song): void;
   removeFromQueue(songKey: string): void;
   clearQueue(): void;
   setFullscreenOpen(open: boolean): void;
   setDrawerOpen(open: boolean): void;
   setDrawerTab(tab: RightDrawerTab): void;
+  toggleDrawerTab(tab: RightDrawerTab): void;
 }
 
 /**
@@ -68,6 +70,24 @@ export const usePlayerStore = create<PlayerStateStore>((set) => ({
     });
   },
 
+  insertNextInQueue(song) {
+    set((state) => {
+      const targetKey = getSongKey(song);
+      const filtered = state.queue.filter((item) => getSongKey(item) !== targetKey);
+      if (!state.currentTrack) {
+        return { queue: [song, ...filtered] };
+      }
+      const curKey = getSongKey(state.currentTrack);
+      const curIdx = filtered.findIndex((item) => getSongKey(item) === curKey);
+      if (curIdx < 0) {
+        return { queue: [song, ...filtered] };
+      }
+      const next = [...filtered];
+      next.splice(curIdx + 1, 0, song);
+      return { queue: next };
+    });
+  },
+
   removeFromQueue(songKey) {
     set((state) => ({
       queue: state.queue.filter((item) => getSongKey(item) !== songKey),
@@ -88,6 +108,15 @@ export const usePlayerStore = create<PlayerStateStore>((set) => ({
 
   setDrawerTab(tab) {
     set({ drawerTab: tab, drawerOpen: true });
+  },
+
+  toggleDrawerTab(tab) {
+    set((state) => {
+      if (state.drawerOpen && state.drawerTab === tab) {
+        return { drawerOpen: false };
+      }
+      return { drawerOpen: true, drawerTab: tab };
+    });
   },
 }));
 

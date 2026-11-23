@@ -71,13 +71,15 @@ export function mapQqSong(raw: RawQqSong): Song | null {
   if (!id || !title) return null;
 
   const artists = (raw.singer ?? [])
+    .slice(0, 100)
     .map((s) => ({
       id: s.mid || (s.id !== undefined ? String(s.id) : undefined),
       name: s.name?.trim() ?? "",
     }))
     .filter((a) => Boolean(a.name));
 
-  const artistText = artists.map((a) => a.name).join(" / ") || "未知歌手";
+  const fullArtistText = artists.map((a) => a.name).join(" / ") || "未知歌手";
+  const artistText = fullArtistText.length > 900 ? `${fullArtistText.slice(0, 897)}...` : fullArtistText;
   const albumName = (raw.album?.title ?? raw.album?.name ?? raw.albumname ?? "").trim() || "未知专辑";
   const albumMid = raw.album?.mid ?? raw.albummid;
   const durationSeconds = Math.max(0, Number(raw.interval ?? 0) || 0);

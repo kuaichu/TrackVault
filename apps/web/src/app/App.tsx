@@ -1,9 +1,13 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { AlbumDetailPage } from "../features/album/AlbumDetailPage.js";
+import { ArtistDetailPage } from "../features/artist/ArtistDetailPage.js";
 import { AuthGatePage } from "../features/auth/AuthGatePage.js";
+import { ChartDetailPage, ChartsPage } from "../features/charts/ChartsPage.js";
 import { DiscoverPage } from "../features/discover/DiscoverPage.js";
 import { DownloadsPage } from "../features/downloads/DownloadsPage.js";
+import { PersonalFmPage } from "../features/fm/PersonalFmPage.js";
 import { CloudPage, HistoryPage } from "../features/library/CloudAndHistoryPage.js";
 import { PlaylistDetailPage, PlaylistsPage } from "../features/library/PlaylistsPage.js";
 import { SearchPage } from "../features/search/SearchPage.js";
@@ -44,7 +48,7 @@ function AuthenticatedApp() {
   if (authQuery.isLoading) {
     return (
       <div className="flex h-screen items-center justify-center bg-[var(--tv-bg)] text-sm text-[var(--tv-text-muted)]">
-        正在连接 TrackVault v2...
+        正在载入曲库...
       </div>
     );
   }
@@ -58,7 +62,12 @@ function AuthenticatedApp() {
     <AppShell user={status.user}>
       <Routes>
         <Route path="/discover" element={<DiscoverPage />} />
+        <Route path="/charts" element={<ChartsPage />} />
+        <Route path="/charts/:platform/:id" element={<ChartDetailPage />} />
+        <Route path="/fm" element={<PersonalFmPage />} />
         <Route path="/search" element={<SearchPage />} />
+        <Route path="/artist/:platform/:id" element={<ArtistDetailPage />} />
+        <Route path="/album/:platform/:id" element={<AlbumDetailPage />} />
         <Route path="/playlists" element={<PlaylistsPage />} />
         <Route path="/playlists/:platform/:id" element={<PlaylistDetailPage />} />
         <Route path="/cloud" element={<CloudPage />} />

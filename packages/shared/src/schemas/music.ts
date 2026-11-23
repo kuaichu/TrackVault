@@ -42,11 +42,11 @@ export const SongSchema = z.object({
   platform: MusicPlatformSchema,
   providerSongId: z.string().max(128).optional(),
   mediaId: z.string().max(128).optional(),
-  title: z.string().min(1).max(300),
-  artist: z.string().max(300),
+  title: z.string().min(1).max(500),
+  artist: z.string().max(1000),
   primaryArtistId: z.string().max(128).optional(),
-  artists: z.array(SongArtistSchema).max(30).optional(),
-  album: z.string().max(300),
+  artists: z.array(SongArtistSchema).max(200).optional(),
+  album: z.string().max(500),
   albumId: z.string().max(128).optional(),
   coverUrl: z.string().max(2048).optional(),
   durationSeconds: z.number().nonnegative().max(86_400),
@@ -93,6 +93,86 @@ export const PlaylistTracksPageSchema = z.object({
   hasMore: z.boolean(),
 });
 export type PlaylistTracksPage = z.infer<typeof PlaylistTracksPageSchema>;
+
+export const ArtistSummarySchema = z.object({
+  id: z.string(),
+  platform: MusicPlatformSchema,
+  name: z.string(),
+  avatarUrl: z.string().optional(),
+  songCount: z.number().int().nonnegative().optional(),
+  albumCount: z.number().int().nonnegative().optional(),
+});
+export type ArtistSummary = z.infer<typeof ArtistSummarySchema>;
+
+export const AlbumSummarySchema = z.object({
+  id: z.string(),
+  platform: MusicPlatformSchema,
+  name: z.string(),
+  coverUrl: z.string().optional(),
+  artistName: z.string(),
+  artistId: z.string().optional(),
+  publishDate: z.string().optional(),
+  trackCount: z.number().int().nonnegative().optional(),
+  albumType: z.string().optional(),
+});
+export type AlbumSummary = z.infer<typeof AlbumSummarySchema>;
+
+export const ArtistDetailSchema = z.object({
+  id: z.string(),
+  platform: MusicPlatformSchema,
+  name: z.string(),
+  alias: z.array(z.string()).optional(),
+  avatarUrl: z.string().optional(),
+  briefDesc: z.string().optional(),
+  songCount: z.number().int().nonnegative().optional(),
+  albumCount: z.number().int().nonnegative().optional(),
+  hotSongs: z.array(SongSchema),
+  albums: z.array(AlbumSummarySchema),
+});
+export type ArtistDetail = z.infer<typeof ArtistDetailSchema>;
+
+export const AlbumDetailSchema = z.object({
+  id: z.string(),
+  platform: MusicPlatformSchema,
+  name: z.string(),
+  coverUrl: z.string().optional(),
+  artists: z.array(SongArtistSchema),
+  publishDate: z.string().optional(),
+  company: z.string().optional(),
+  description: z.string().optional(),
+  trackCount: z.number().int().nonnegative(),
+  songs: z.array(SongSchema),
+});
+export type AlbumDetail = z.infer<typeof AlbumDetailSchema>;
+
+export const ChartSummarySchema = z.object({
+  id: z.string(),
+  platform: MusicPlatformSchema,
+  name: z.string(),
+  coverUrl: z.string().optional(),
+  updateFrequency: z.string().optional(),
+  trackCount: z.number().int().nonnegative().optional(),
+  previewTracks: z.array(z.string()).optional(),
+});
+export type ChartSummary = z.infer<typeof ChartSummarySchema>;
+
+export const ChartDetailSchema = z.object({
+  chart: ChartSummarySchema,
+  songs: z.array(SongSchema),
+});
+export type ChartDetail = z.infer<typeof ChartDetailSchema>;
+
+export const EntitySearchTypeSchema = z.enum(["artist", "album", "playlist"]);
+export type EntitySearchType = z.infer<typeof EntitySearchTypeSchema>;
+
+export const EntitySearchResultSchema = z.object({
+  type: EntitySearchTypeSchema,
+  artists: z.array(ArtistSummarySchema),
+  albums: z.array(AlbumSummarySchema),
+  playlists: z.array(PlaylistSummarySchema),
+  warnings: z.array(z.string()),
+});
+export type EntitySearchResult = z.infer<typeof EntitySearchResultSchema>;
 
 export const LyricLineSchema = z.object({
   time: z.number().nonnegative(),

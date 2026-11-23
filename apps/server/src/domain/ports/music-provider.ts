@@ -1,4 +1,11 @@
 import type {
+  AlbumDetail,
+  AlbumSummary,
+  ArtistDetail,
+  ArtistSummary,
+  ChartDetail,
+  ChartSummary,
+  EntitySearchType,
   MusicPlatform,
   PlaylistSort,
   PlaylistSummary,
@@ -19,6 +26,8 @@ export interface ProviderAuthContext {
   readonly cookie: string | null;
   /** Used purely for ScopedLruCache isolation (userId or "public"). */
   readonly scopeKey: string;
+  /** Optional persisted third-party account UID (avoids redundant login_status round-trips). */
+  readonly accountUid?: string | null;
 }
 
 export interface CredentialVerificationResult {
@@ -73,6 +82,22 @@ export interface MusicProviderAdapter {
   getDiscoverTracks(auth: ProviderAuthContext): Promise<Song[]>;
   getDailyRecommendTracks?(auth: ProviderAuthContext): Promise<Song[]>;
   getCloudTracks?(auth: ProviderAuthContext): Promise<Song[]>;
+  getPersonalFm?(auth: ProviderAuthContext): Promise<Song[]>;
+  getRecommendedPlaylists?(auth: ProviderAuthContext, limit?: number): Promise<PlaylistSummary[]>;
+  getCharts?(auth: ProviderAuthContext): Promise<ChartSummary[]>;
+  getChartDetail?(chartId: string, auth: ProviderAuthContext): Promise<ChartDetail>;
+  getArtistDetail?(artistId: string, auth: ProviderAuthContext): Promise<ArtistDetail>;
+  getAlbumDetail?(albumId: string, auth: ProviderAuthContext): Promise<AlbumDetail>;
+  searchEntities?(
+    query: string,
+    type: EntitySearchType,
+    auth: ProviderAuthContext,
+    limit?: number,
+  ): Promise<{
+    artists?: ArtistSummary[];
+    albums?: AlbumSummary[];
+    playlists?: PlaylistSummary[];
+  }>;
   getUserPlaylists(auth: ProviderAuthContext): Promise<PlaylistSummary[]>;
   getPlaylistTracks(
     playlistId: string,
@@ -108,6 +133,7 @@ export interface MusicProviderAdapter {
     liked: boolean,
     auth: ProviderAuthContext,
   ): Promise<{ liked: boolean }>;
+  getLikedSongIds?(auth: ProviderAuthContext): Promise<string[]>;
   isSongLiked?(songId: string, auth: ProviderAuthContext): Promise<boolean>;
   toggleSongLike?(songId: string, liked: boolean, auth: ProviderAuthContext): Promise<{ liked: boolean }>;
   resolveAudio(

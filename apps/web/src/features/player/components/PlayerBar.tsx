@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ChevronUp,
   Heart,
   ListMusic,
   Loader2,
-  Maximize2,
   MessageSquare,
   Pause,
   Play,
@@ -15,13 +15,15 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { type QualityLevel, getQualityLabel } from "#shared";
+import { ArtistLinks } from "../../../entities/music/EntityLinks.js";
 import { api } from "../../../shared/api/endpoints.js";
 import { toast } from "../../../shared/store/toast-store.js";
 import { CoverArt, PlatformBadge } from "../../../shared/ui/primitives.js";
 import { audioEngine } from "../engine/audio-engine.js";
 import { usePlayerStore } from "../store/player-store.js";
-import { PlaybackProgressBar } from "./PlaybackProgressBar.js";
+import { MiniProgressStripe, PlaybackProgressBar } from "./PlaybackProgressBar.js";
 
 export function PlayerBar() {
   const queryClient = useQueryClient();
@@ -33,8 +35,19 @@ export function PlayerBar() {
   const defaultPlaybackQuality = usePlayerStore((s) => s.defaultPlaybackQuality);
   const activeQualityOverride = usePlayerStore((s) => s.activeQualityOverride);
   const playerError = usePlayerStore((s) => s.playerError);
+  const drawerOpen = usePlayerStore((s) => s.drawerOpen);
+  const drawerTab = usePlayerStore((s) => s.drawerTab);
   const setFullscreenOpen = usePlayerStore((s) => s.setFullscreenOpen);
-  const setDrawerTab = usePlayerStore((s) => s.setDrawerTab);
+  const toggleDrawerTab = usePlayerStore((s) => s.toggleDrawerTab);
+
+  const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (!qualityMenuOpen) return;
+    const onPointerDown = () => setQualityMenuOpen(false);
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [qualityMenuOpen]);
 
   const canLike = currentTrack?.platform === "netease";
   const { data: likeData } = useQuery({
@@ -51,67 +64,194 @@ export function PlayerBar() {
     },
     onSuccess: (res) => {
       queryClient.setQueryData(["song-like", currentTrack?.platform, currentTrack?.id], res);
-      toast.success(res.liked ? "已加入红心喜欢" : "已取消喜欢");
+      if (currentTrack?.platform === "netease") {
+        queryClient.setQueryData<{ ids: string[] }>(["liked-ids", "netease"], (prev) => {
+          const next = new Set(prev?.ids ?? []);
+          if (res.liked) next.add(currentTrack.id);
+          else next.delete(currentTrack.id);
+          return { ids: [...next] };
+        });
+      }
+      toast.success(res.liked ? "已喜欢" : "已取消喜欢");
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "操作失败"),
   });
 
   const activeQuality = activeQualityOverride ?? defaultPlaybackQuality;
+  const availableQualities =
+    currentTrack && currentTrack.availableQualities.length > 0
+      ? currentTrack.availableQualities
+      : [{ level: "standard" as const, label: "128K" }];
 
   return (
     <footer
-      className="border-t border-[var(--tv-border)] bg-[var(--tv-surface)]/95 backdrop-blur-xl px-4 py-2.5"
+      className="relative shrink-0 border-t border-[var(--tv-border)] bg-[var(--tv-player-bg)] backdrop-blur-2xl select-none"
       style={{ zIndex: "var(--tv-z-sticky)" }}
     >
-      <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4">
-        {/* Left: Track Info */}
-        <div className="flex min-w-0 w-64 items-center gap-3">
+      {/* Mobile Mini Player Bar (< md) */}
+      <div className="relative flex h-[58px] items-center justify-between gap-2.5 px-3.5 md:hidden">
+        <MiniProgressStripe />
+
+        {currentTrack ? (
+          <button
+            type="button"
+            onClick={() => setFullscreenOpen(true)}
+            className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+          >
+            <CoverArt
+              src={currentTrack.coverUrl}
+              alt={currentTrack.title}
+              className="h-10 w-10 shadow-sm"
+              rounded="rounded-lg"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px] font-semibold text-[var(--tv-text)]">
+                {currentTrack.title}
+              </div>
+              <div className="truncate text-[11.5px] text-[var(--tv-text-muted)]">
+                {playerError ? (
+                  <span className="text-[var(--tv-danger)]">{playerError}</span>
+                ) : (
+                  currentTrack.artist
+                )}
+              </div>
+            </div>
+          </button>
+        ) : (
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            <div className="h-9 w-9 rounded-lg bg-[var(--tv-surface)]" />
+            <span className="text-xs text-[var(--tv-text-subtle)]">未在播放</span>
+          </div>
+        )}
+
+        <div className="flex shrink-0 items-center gap-1">
+          {canLike && (
+            <button
+              type="button"
+              onClick={() => likeMutation.mutate(!likeData?.liked)}
+              className={`rounded-full p-2 transition-colors ${
+                likeData?.liked ? "text-[var(--tv-accent)]" : "text-[var(--tv-text-muted)]"
+              }`}
+              aria-label={likeData?.liked ? "取消喜欢" : "喜欢"}
+            >
+              <Heart className={`h-4 w-4 ${likeData?.liked ? "fill-current" : ""}`} />
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => void audioEngine.togglePlay()}
+            disabled={!currentTrack}
+            aria-label={isPlaying ? "暂停" : "播放"}
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--tv-contrast-bg)] text-[var(--tv-contrast-fg)] active:scale-95 disabled:opacity-35"
+          >
+            {isLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : isPlaying ? (
+              <Pause className="h-4 w-4 fill-current" />
+            ) : (
+              <Play className="ml-0.5 h-4 w-4 fill-current" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void audioEngine.playNext()}
+            disabled={!currentTrack}
+            className="rounded-full p-2 text-[var(--tv-text)] disabled:opacity-35"
+            aria-label="下一首"
+          >
+            <SkipForward className="h-4 w-4 fill-current" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => toggleDrawerTab("queue")}
+            className={`rounded-full p-2 ${
+              drawerOpen && drawerTab === "queue" ? "text-[var(--tv-accent)]" : "text-[var(--tv-text-muted)]"
+            }`}
+            aria-label="播放队列"
+          >
+            <ListMusic className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Desktop 3-Column Player Bar (>= md) */}
+      <div className="mx-auto hidden h-[76px] max-w-[1680px] grid-cols-[minmax(0,1fr)_minmax(0,1.45fr)_minmax(0,1fr)] items-center gap-4 px-5 md:grid">
+        {/* Left: Cover + Track Info + Like */}
+        <div className="flex min-w-0 items-center gap-3">
           {currentTrack ? (
             <>
               <button
                 type="button"
                 onClick={() => setFullscreenOpen(true)}
-                className="group relative shrink-0"
-                title="展开全屏播放器"
+                className="group relative shrink-0 overflow-hidden rounded-lg shadow-sm"
+                title="展开全屏歌词"
+                aria-label="展开全屏播放器"
               >
-                <CoverArt src={currentTrack.coverUrl} alt={currentTrack.title} className="h-12 w-12" />
-                <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/50 opacity-0 group-hover:opacity-100">
-                  <Maximize2 className="h-4 w-4 text-white" />
+                <CoverArt
+                  src={currentTrack.coverUrl}
+                  alt={currentTrack.title}
+                  className="h-12 w-12"
+                  rounded="rounded-lg"
+                />
+                <span className="absolute inset-0 flex items-center justify-center bg-black/45 opacity-0 transition-opacity group-hover:opacity-100">
+                  <ChevronUp className="h-5 w-5 text-white" />
                 </span>
               </button>
+
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5">
-                  <span className="truncate text-sm font-medium text-[var(--tv-text)]">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFullscreenOpen(true)}
+                    className="truncate text-left text-[13.5px] font-semibold text-[var(--tv-text)] hover:underline"
+                  >
                     {currentTrack.title}
-                  </span>
-                  <PlatformBadge platform={currentTrack.platform} />
+                  </button>
+                  <PlatformBadge platform={currentTrack.platform} subtle />
                 </div>
-                <div className="truncate text-xs text-[var(--tv-text-muted)]">
-                  {playerError ? <span className="text-rose-400">{playerError}</span> : currentTrack.artist}
+                <div className="mt-0.5 truncate text-xs text-[var(--tv-text-muted)]">
+                  {playerError ? (
+                    <span className="text-[var(--tv-danger)]">{playerError}</span>
+                  ) : (
+                    <ArtistLinks
+                      platform={currentTrack.platform}
+                      artists={currentTrack.artists}
+                      fallbackText={currentTrack.artist}
+                      primaryArtistId={currentTrack.primaryArtistId}
+                    />
+                  )}
                 </div>
               </div>
+
               {canLike && (
                 <button
                   type="button"
                   onClick={() => likeMutation.mutate(!likeData?.liked)}
-                  className={`rounded-lg p-1.5 transition-colors ${
+                  className={`rounded-full p-1.5 transition-colors ${
                     likeData?.liked
-                      ? "text-rose-400 hover:bg-rose-500/10"
-                      : "text-[var(--tv-text-muted)] hover:bg-white/10"
+                      ? "text-[var(--tv-accent)]"
+                      : "text-[var(--tv-text-subtle)] hover:text-[var(--tv-text)]"
                   }`}
-                  title={likeData?.liked ? "取消喜欢" : "加入红心"}
+                  title={likeData?.liked ? "取消喜欢" : "喜欢"}
+                  aria-label={likeData?.liked ? "取消喜欢" : "喜欢"}
                 >
                   <Heart className={`h-4 w-4 ${likeData?.liked ? "fill-current" : ""}`} />
                 </button>
               )}
             </>
           ) : (
-            <div className="text-xs text-[var(--tv-text-subtle)]">尚未播放歌曲</div>
+            <div className="flex items-center gap-3">
+              <div className="h-11 w-11 rounded-lg bg-[var(--tv-surface)]" />
+              <div className="text-xs text-[var(--tv-text-subtle)]">未在播放</div>
+            </div>
           )}
         </div>
 
-        {/* Center: Controls & Progress */}
-        <div className="flex flex-1 flex-col items-center gap-1">
+        {/* Center: Clean Monochrome Transport + Tactile Progress */}
+        <div className="flex flex-col items-center justify-center gap-1">
           <div className="flex items-center gap-3">
             <button
               type="button"
@@ -123,12 +263,17 @@ export function PlayerBar() {
                     ? "随机播放"
                     : "列表循环"
               }
-              className="rounded-lg p-1.5 text-[var(--tv-text-muted)] hover:bg-white/10 hover:text-amber-300"
+              aria-label="切换播放模式"
+              className={`rounded-full p-1.5 transition-colors hover:bg-[var(--tv-surface-hover)] ${
+                playbackMode === "sequential"
+                  ? "text-[var(--tv-text-muted)] hover:text-[var(--tv-text)]"
+                  : "text-[var(--tv-accent)]"
+              }`}
             >
               {playbackMode === "repeat-one" ? (
-                <Repeat1 className="h-4 w-4 text-amber-400" />
+                <Repeat1 className="h-4 w-4" />
               ) : playbackMode === "shuffle" ? (
-                <Shuffle className="h-4 w-4 text-amber-400" />
+                <Shuffle className="h-4 w-4" />
               ) : (
                 <Repeat className="h-4 w-4" />
               )}
@@ -137,10 +282,10 @@ export function PlayerBar() {
             <button
               type="button"
               onClick={() => void audioEngine.playPrevious()}
-              className="rounded-lg p-1.5 text-[var(--tv-text)] hover:bg-white/10"
+              className="rounded-full p-1.5 text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)]"
               aria-label="上一首"
             >
-              <SkipBack className="h-4 w-4" />
+              <SkipBack className="h-4 w-4 fill-current" />
             </button>
 
             <button
@@ -148,92 +293,136 @@ export function PlayerBar() {
               onClick={() => void audioEngine.togglePlay()}
               disabled={!currentTrack}
               aria-label={isPlaying ? "暂停" : "播放"}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-amber-400 text-slate-950 shadow-lg shadow-amber-500/20 hover:bg-amber-300 disabled:opacity-40"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--tv-contrast-bg)] text-[var(--tv-contrast-fg)] transition-transform hover:scale-105 hover:bg-[var(--tv-contrast-bg-hover)] active:scale-95 disabled:opacity-35"
             >
               {isLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : isPlaying ? (
                 <Pause className="h-4 w-4 fill-current" />
               ) : (
-                <Play className="h-4 w-4 fill-current ml-0.5" />
+                <Play className="ml-0.5 h-4 w-4 fill-current" />
               )}
             </button>
 
             <button
               type="button"
               onClick={() => void audioEngine.playNext()}
-              className="rounded-lg p-1.5 text-[var(--tv-text)] hover:bg-white/10"
+              className="rounded-full p-1.5 text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)]"
               aria-label="下一首"
             >
-              <SkipForward className="h-4 w-4" />
+              <SkipForward className="h-4 w-4 fill-current" />
             </button>
 
             {currentTrack && (
-              <select
-                aria-label="切换播放音质"
-                value={activeQuality}
-                onChange={(e) => void audioEngine.switchPlaybackQuality(e.target.value as QualityLevel)}
-                className="rounded-lg border border-[var(--tv-border)] bg-[var(--tv-surface-elevated)] px-2 py-1 text-[11px] text-amber-300 focus:border-amber-400/60 focus:outline-none"
-              >
-                {(currentTrack.availableQualities.length > 0
-                  ? currentTrack.availableQualities
-                  : [{ level: "standard" as const, label: "128K" }]
-                ).map((q) => (
-                  <option key={q.level} value={q.level}>
-                    播放 {getQualityLabel(q.level)}
-                  </option>
-                ))}
-              </select>
+              <div className="relative" onPointerDown={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  onClick={() => setQualityMenuOpen((v) => !v)}
+                  className="rounded border border-[var(--tv-border-strong)] px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--tv-text-muted)] transition-colors hover:border-[var(--tv-text-subtle)] hover:text-[var(--tv-text)]"
+                  title="切换试听音质"
+                >
+                  {getQualityLabel(activeQuality)}
+                </button>
+                {qualityMenuOpen && (
+                  <div
+                    className="absolute bottom-full left-1/2 mb-2 w-32 -translate-x-1/2 rounded-xl border border-[var(--tv-border-strong)] bg-[var(--tv-surface-elevated)] p-1 shadow-xl"
+                    style={{ zIndex: "var(--tv-z-dropdown)" }}
+                  >
+                    <div className="px-2 py-1 text-[10px] font-medium text-[var(--tv-text-subtle)]">
+                      试听音质
+                    </div>
+                    {availableQualities.map((q) => (
+                      <button
+                        key={q.level}
+                        type="button"
+                        onClick={() => {
+                          setQualityMenuOpen(false);
+                          void audioEngine.switchPlaybackQuality(q.level as QualityLevel);
+                        }}
+                        className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--tv-surface-hover)] ${
+                          q.level === activeQuality
+                            ? "font-semibold text-[var(--tv-accent)]"
+                            : "text-[var(--tv-text)]"
+                        }`}
+                      >
+                        <span>{q.label}</span>
+                        {q.level === activeQuality && (
+                          <span className="h-1.5 w-1.5 rounded-full bg-[var(--tv-accent)]" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
           <PlaybackProgressBar />
         </div>
 
-        {/* Right: Volume & Drawers */}
-        <div className="hidden w-64 items-center justify-end gap-2 md:flex">
+        {/* Right: Lyrics / Comments / Queue + Sleek Volume */}
+        <div className="flex items-center justify-end gap-1">
           <button
             type="button"
-            onClick={() => setDrawerTab("lyrics")}
-            className="rounded-lg px-2 py-1 text-xs text-[var(--tv-text-muted)] hover:bg-white/10 hover:text-[var(--tv-text)]"
+            onClick={() => toggleDrawerTab("lyrics")}
+            className={`rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+              drawerOpen && drawerTab === "lyrics"
+                ? "bg-[var(--tv-accent-soft)] text-[var(--tv-accent)]"
+                : "text-[var(--tv-text-muted)] hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
+            }`}
+            title="歌词"
           >
             词
-          </button>
-          <button
-            type="button"
-            onClick={() => setDrawerTab("comments")}
-            className="rounded-lg p-1.5 text-[var(--tv-text-muted)] hover:bg-white/10 hover:text-[var(--tv-text)]"
-            title="评论"
-          >
-            <MessageSquare className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setDrawerTab("queue")}
-            className="rounded-lg p-1.5 text-[var(--tv-text-muted)] hover:bg-white/10 hover:text-[var(--tv-text)]"
-            title="播放队列"
-          >
-            <ListMusic className="h-4 w-4" />
           </button>
 
           <button
             type="button"
-            onClick={() => audioEngine.setVolume(volume > 0 ? 0 : 0.85)}
-            className="rounded-lg p-1.5 text-[var(--tv-text-muted)] hover:bg-white/10"
-            aria-label="静音切换"
+            onClick={() => toggleDrawerTab("comments")}
+            className={`rounded-md p-1.5 transition-colors ${
+              drawerOpen && drawerTab === "comments"
+                ? "bg-[var(--tv-accent-soft)] text-[var(--tv-accent)]"
+                : "text-[var(--tv-text-muted)] hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
+            }`}
+            title="评论"
+            aria-label="歌曲评论"
           >
-            {volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+            <MessageSquare className="h-4 w-4" />
           </button>
-          <input
-            type="range"
-            aria-label="音量"
-            min={0}
-            max={1}
-            step={0.02}
-            value={volume}
-            onChange={(e) => audioEngine.setVolume(Number(e.target.value))}
-            className="w-20 accent-amber-400"
-          />
+
+          <button
+            type="button"
+            onClick={() => toggleDrawerTab("queue")}
+            className={`rounded-md p-1.5 transition-colors ${
+              drawerOpen && drawerTab === "queue"
+                ? "bg-[var(--tv-accent-soft)] text-[var(--tv-accent)]"
+                : "text-[var(--tv-text-muted)] hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
+            }`}
+            title="播放队列"
+            aria-label="播放队列"
+          >
+            <ListMusic className="h-4 w-4" />
+          </button>
+
+          <div className="ml-2 hidden items-center gap-1.5 lg:flex">
+            <button
+              type="button"
+              onClick={() => audioEngine.setVolume(volume > 0 ? 0 : 0.85)}
+              className="rounded-md p-1.5 text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
+              aria-label="静音切换"
+            >
+              {volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+            </button>
+            <input
+              type="range"
+              aria-label="音量"
+              min={0}
+              max={1}
+              step={0.02}
+              value={volume}
+              onChange={(e) => audioEngine.setVolume(Number(e.target.value))}
+              className="tv-range w-20"
+            />
+          </div>
         </div>
       </div>
     </footer>

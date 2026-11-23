@@ -87,7 +87,7 @@ export function mapNeteaseSong(
   const title = raw.name?.trim() ?? "";
   if (!id || !title) return null;
 
-  const rawArtists = raw.ar ?? raw.artists ?? [];
+  const rawArtists = (raw.ar ?? raw.artists ?? []).slice(0, 100);
   const artists = rawArtists
     .map((artist) => ({
       id:
@@ -98,7 +98,8 @@ export function mapNeteaseSong(
     }))
     .filter((artist) => Boolean(artist.name));
 
-  const artistText = artists.map((a) => a.name).join(" / ") || "未知歌手";
+  const fullArtistText = artists.map((a) => a.name).join(" / ") || "未知歌手";
+  const artistText = fullArtistText.length > 900 ? `${fullArtistText.slice(0, 897)}...` : fullArtistText;
   const albumObj = raw.al ?? raw.album;
   const album = albumObj?.name?.trim() || "未知专辑";
   const albumId =

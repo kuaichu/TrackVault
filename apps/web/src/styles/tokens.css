@@ -1,31 +1,83 @@
 @import "tailwindcss";
 
-:root {
-  /* Core Palette - Obsidian Studio & Warm Amber Accent */
-  --tv-bg: #0b0e14;
-  --tv-surface: #121722;
-  --tv-surface-elevated: #181f2e;
-  --tv-surface-hover: #1f283b;
-  --tv-border: rgba(255, 255, 255, 0.08);
-  --tv-border-strong: rgba(255, 255, 255, 0.16);
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
 
-  --tv-text: #f3f5f9;
-  --tv-text-muted: #98a2b3;
-  --tv-text-subtle: #667085;
+  /* True Neutral Charcoal Palette (inspired by Feishin defaultDark & Apple Music Dark) */
+  --tv-bg: #111113;
+  --tv-sidebar: #161618;
+  --tv-surface: #1c1c1f;
+  --tv-surface-elevated: #242428;
+  --tv-surface-hover: rgba(255, 255, 255, 0.055);
+  --tv-surface-active: rgba(255, 255, 255, 0.095);
+  --tv-header-bg: rgba(17, 17, 19, 0.82);
+  --tv-player-bg: rgba(22, 22, 25, 0.88);
 
-  --tv-accent: #f59e0b;
-  --tv-accent-soft: rgba(245, 158, 11, 0.15);
-  --tv-netease: #ef4444;
-  --tv-qq: #10b981;
-  --tv-danger: #f43f5e;
+  --tv-border: rgba(255, 255, 255, 0.075);
+  --tv-border-strong: rgba(255, 255, 255, 0.15);
+
+  --tv-text: #f5f5f7;
+  --tv-text-muted: #9b9ba3;
+  --tv-text-subtle: #66666e;
+
+  /* Editorial Music Crimson Accent (YesPlayMusic / Apple Music inspired) */
+  --tv-accent: #fa2d48;
+  --tv-accent-hover: #ff455e;
+  --tv-accent-soft: rgba(250, 45, 72, 0.14);
+  --tv-accent-fg: #ffffff;
+
+  /* High-contrast neutral primary (Spotify / Apple Music play button & monochrome CTAs) */
+  --tv-contrast-bg: #f5f5f7;
+  --tv-contrast-bg-hover: #ffffff;
+  --tv-contrast-fg: #111113;
+
+  --tv-netease: #e6212a;
+  --tv-qq: #18c37d;
+  --tv-danger: #f04452;
   --tv-success: #22c55e;
 
-  /* Explicit 5-level z-index scale (replaces 22 arbitrary z-index values in v1) */
+  /* Explicit 5-level z-index scale */
   --tv-z-base: 0;
   --tv-z-sticky: 20;
   --tv-z-dropdown: 40;
   --tv-z-modal: 60;
   --tv-z-toast: 80;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* Crisp Editorial Light Palette (YesPlayMusic / macOS Music inspired) */
+  --tv-bg: #ffffff;
+  --tv-sidebar: #f6f6f7;
+  --tv-surface: #f2f2f5;
+  --tv-surface-elevated: #ffffff;
+  --tv-surface-hover: rgba(0, 0, 0, 0.042);
+  --tv-surface-active: rgba(0, 0, 0, 0.075);
+  --tv-header-bg: rgba(255, 255, 255, 0.84);
+  --tv-player-bg: rgba(250, 250, 252, 0.88);
+
+  --tv-border: rgba(0, 0, 0, 0.075);
+  --tv-border-strong: rgba(0, 0, 0, 0.15);
+
+  --tv-text: #1d1d1f;
+  --tv-text-muted: #63636a;
+  --tv-text-subtle: #8e8e96;
+
+  --tv-accent: #df223b;
+  --tv-accent-hover: #c91c33;
+  --tv-accent-soft: rgba(223, 34, 59, 0.1);
+  --tv-accent-fg: #ffffff;
+
+  --tv-contrast-bg: #1d1d1f;
+  --tv-contrast-bg-hover: #000000;
+  --tv-contrast-fg: #ffffff;
+
+  --tv-netease: #d91c24;
+  --tv-qq: #12a86b;
+  --tv-danger: #d92d3a;
+  --tv-success: #16a34a;
 }
 
 * {
@@ -37,13 +89,34 @@ body,
 #root {
   height: 100%;
   margin: 0;
-  font-family: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC",
+    "HarmonyOS Sans SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
-/* Custom thin scrollbars */
+::selection {
+  background: var(--tv-accent-soft);
+  color: var(--tv-accent);
+}
+
+button:not(:disabled),
+select:not(:disabled) {
+  cursor: pointer;
+}
+
+.tv-theme-switching *,
+.tv-theme-switching *::before,
+.tv-theme-switching *::after {
+  transition: none !important;
+}
+
+/* Native macOS-style thin scrollbars */
 ::-webkit-scrollbar {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -51,10 +124,81 @@ body,
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--tv-border-strong);
   border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.24);
+  background: var(--tv-text-subtle);
+}
+
+/* Sleek minimalist volume range slider */
+.tv-range {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tv-range::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--tv-border-strong);
+}
+
+.tv-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: var(--tv-text);
+  margin-top: -4px;
+  transition: transform 120ms ease;
+}
+
+.tv-range:hover::-webkit-slider-thumb {
+  transform: scale(1.18);
+}
+
+/* Active track 3-bar equalizer animation (Spotify / Feishin style) */
+@keyframes tv-eq-bounce {
+  0%,
+  100% {
+    transform: scaleY(0.28);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.tv-eq-bar {
+  transform-origin: bottom;
+  animation: tv-eq-bounce 0.9s ease-in-out infinite;
+}
+
+/* Soft vertical fade mask for synchronized lyrics (Apple Music / YesPlayMusic style) */
+.tv-lyric-mask {
+  mask-image: linear-gradient(to bottom, transparent 0%, black 12%, black 85%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12%, black 85%, transparent 100%);
+}
+
+/* Restrained concentric vinyl grooves for AuthGate editorial canvas */
+.tv-vinyl-grooves {
+  background-image: repeating-radial-gradient(
+    circle at 22% 76%,
+    rgba(255, 255, 255, 0.032) 0px,
+    rgba(255, 255, 255, 0.032) 1px,
+    transparent 1px,
+    transparent 11px
+  );
+}
+
+/* Mobile safe-area inset support for bottom nav / fullscreen player */
+.tv-pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.tv-pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
 }

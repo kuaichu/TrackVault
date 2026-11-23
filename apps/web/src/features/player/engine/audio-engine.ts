@@ -84,11 +84,28 @@ export class AudioEngine {
     });
 
     this.#audio.addEventListener("error", () => {
+      const errorToken = this.#playToken;
+      const failedSrc = this.#audio.currentSrc || this.#audio.src;
+      const fallbackMessage = "音频加载失败，请检查平台账号绑定、会员权限或切换其他音质。";
+
       usePlayerStore.getState().setStatePatch({
         isPlaying: false,
         isLoading: false,
-        playerError: "音频加载失败，请检查平台账号绑定、会员权限或切换其他音质。",
+        playerError: fallbackMessage,
       });
+
+      if (failedSrc?.includes("/api/media/stream") && typeof fetch === "function") {
+        void fetch(failedSrc, { credentials: "include", headers: { Range: "bytes=0-1" } })
+          .then(async (res) => {
+            if (res.ok) return;
+            const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+            const detail = body?.error?.message?.trim();
+            if (detail && errorToken === this.#playToken) {
+              usePlayerStore.getState().setStatePatch({ playerError: detail });
+            }
+          })
+          .catch(() => undefined);
+      }
     });
 
     if (typeof window !== "undefined") {

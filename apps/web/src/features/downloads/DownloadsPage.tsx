@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, ExternalLink, Trash2, XCircle } from "lucide-react";
+import { Download, ExternalLink, Trash2, X } from "lucide-react";
 import { sanitizeExternalUrl } from "#shared";
 import { api } from "../../shared/api/endpoints.js";
 import { toast } from "../../shared/store/toast-store.js";
+import { EmptyState } from "../../shared/ui/primitives.js";
 
 export function DownloadsPage() {
   const queryClient = useQueryClient();
@@ -22,73 +23,73 @@ export function DownloadsPage() {
   const clearMutation = useMutation({
     mutationFn: () => api.clearFinishedJobs("download"),
     onSuccess: (res) => {
-      toast.success(`已清理 ${res.removedCount} 条已结束任务`);
+      toast.success(`已清除 ${res.removedCount} 条记录`);
       void queryClient.invalidateQueries({ queryKey: ["jobs"] });
     },
   });
 
   const jobs = jobsQuery.data?.jobs ?? [];
+  const hasFinished = jobs.some(
+    (j) => j.status === "completed" || j.status === "failed" || j.status === "cancelled",
+  );
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-white">统一下载中心</h1>
-          <p className="text-xs text-[var(--tv-text-muted)]">
-            通过 SSE 实时推送进度（零轮询风暴）；服务端受控流式写标签后提供单次安全取回
-          </p>
-        </div>
-        {jobs.some((j) => j.status === "completed" || j.status === "failed" || j.status === "cancelled") && (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-[28px] font-bold tracking-tight text-[var(--tv-text)]">下载管理</h1>
+        {hasFinished && (
           <button
             type="button"
             onClick={() => clearMutation.mutate()}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--tv-border)] bg-[var(--tv-surface)] px-3 py-1.5 text-xs text-[var(--tv-text-muted)] hover:text-white"
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
           >
             <Trash2 className="h-3.5 w-3.5" />
-            清空已结束
+            清除已结束
           </button>
         )}
       </div>
 
       {jobsQuery.isLoading ? (
-        <div className="py-16 text-center text-sm text-[var(--tv-text-muted)]">加载下载任务...</div>
-      ) : jobs.length === 0 ? (
-        <div className="rounded-2xl border border-[var(--tv-border)] bg-[var(--tv-surface)] py-16 text-center text-sm text-[var(--tv-text-muted)]">
-          暂无下载任务，在任意歌曲列表点击下载按钮即可开始
+        <div className="space-y-2">
+          {["dl1", "dl2", "dl3"].map((id) => (
+            <div key={id} className="h-16 animate-pulse rounded-lg bg-[var(--tv-surface)]" />
+          ))}
         </div>
+      ) : jobs.length === 0 ? (
+        <EmptyState title="暂无下载任务" description="在任意曲目列表中点击下载图标即可添加到队列。" />
       ) : (
-        <div className="space-y-2.5">
+        <div className="divide-y divide-[var(--tv-border)] border-t border-[var(--tv-border)]">
           {jobs.map((job) => {
             const safeDirectUrl = sanitizeExternalUrl(job.directUrl);
+            const isActive = job.status === "running" || job.status === "queued";
+
             return (
-              <div
-                key={job.id}
-                className="rounded-2xl border border-[var(--tv-border)] bg-[var(--tv-surface)] p-4 space-y-2.5"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-3">
+              <div key={job.id} className="py-4 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-4">
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-white">{job.title}</div>
+                    <div className="truncate text-sm font-medium text-[var(--tv-text)]">{job.title}</div>
                     <div className="mt-0.5 text-xs text-[var(--tv-text-muted)]">
                       {job.errorMessage ? (
-                        <span className="text-rose-400">{job.errorMessage}</span>
+                        <span className="text-[var(--tv-danger)]">{job.errorMessage}</span>
                       ) : (
-                        (job.subtitle ?? job.status)
+                        (job.subtitle ?? (job.status === "completed" ? "已准备就绪" : "处理中"))
                       )}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                        job.status === "completed"
-                          ? "bg-emerald-500/15 text-emerald-300"
-                          : job.status === "failed"
-                            ? "bg-rose-500/15 text-rose-300"
-                            : job.status === "cancelled"
-                              ? "bg-white/10 text-white/60"
-                              : "bg-amber-500/15 text-amber-300"
-                      }`}
-                    >
+                  <div className="flex items-center gap-2.5">
+                    <span className="inline-flex items-center gap-1.5 text-xs tabular-nums text-[var(--tv-text-muted)]">
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${
+                          job.status === "completed"
+                            ? "bg-[var(--tv-success)]"
+                            : job.status === "failed"
+                              ? "bg-[var(--tv-danger)]"
+                              : job.status === "cancelled"
+                                ? "bg-[var(--tv-text-subtle)]"
+                                : "bg-[var(--tv-accent)]"
+                        }`}
+                      />
                       {job.status === "running"
                         ? `${job.progress}%`
                         : job.status === "queued"
@@ -100,13 +101,13 @@ export function DownloadsPage() {
                               : "失败"}
                     </span>
 
-                    {(job.status === "queued" || job.status === "running") && (
+                    {isActive && (
                       <button
                         type="button"
                         onClick={() => cancelMutation.mutate(job.id)}
-                        className="inline-flex items-center gap-1 rounded-xl border border-rose-500/30 px-2.5 py-1 text-xs text-rose-300 hover:bg-rose-500/10"
+                        className="inline-flex items-center gap-1 rounded-lg bg-[var(--tv-surface)] px-2.5 py-1.5 text-xs text-[var(--tv-text-muted)] hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-danger)]"
                       >
-                        <XCircle className="h-3.5 w-3.5" />
+                        <X className="h-3.5 w-3.5" />
                         取消
                       </button>
                     )}
@@ -115,10 +116,10 @@ export function DownloadsPage() {
                       <a
                         href={api.getJobDownloadFileUrl(job.id)}
                         download={job.artifactFilename}
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-amber-400 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-amber-300"
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--tv-accent)] px-3 py-1.5 text-xs font-medium text-[var(--tv-accent-fg)] hover:bg-[var(--tv-accent-hover)]"
                       >
                         <Download className="h-3.5 w-3.5" />
-                        保存到本地
+                        保存文件
                       </a>
                     )}
 
@@ -127,7 +128,7 @@ export function DownloadsPage() {
                         href={safeDirectUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-amber-400/40 px-3 py-1.5 text-xs text-amber-300 hover:bg-amber-400/10"
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--tv-surface)] px-3 py-1.5 text-xs font-medium text-[var(--tv-text)] hover:bg-[var(--tv-surface-active)]"
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
                         打开直链
@@ -136,10 +137,10 @@ export function DownloadsPage() {
                   </div>
                 </div>
 
-                {(job.status === "running" || job.status === "queued") && (
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                {isActive && (
+                  <div className="h-1 w-full overflow-hidden rounded-full bg-[var(--tv-surface)]">
                     <div
-                      className="h-full bg-amber-400 transition-[width] duration-300"
+                      className="h-full rounded-full bg-[var(--tv-accent)] transition-[width] duration-300"
                       style={{ width: `${Math.max(4, job.progress)}%` }}
                     />
                   </div>

@@ -38,11 +38,19 @@ export function LyricScroller({
   }, [activeIndex]);
 
   if (loading) {
-    return <div className="py-12 text-center text-sm text-[var(--tv-text-muted)]">加载歌词中...</div>;
+    return (
+      <div className={`py-16 text-center text-sm ${large ? "text-white/50" : "text-[var(--tv-text-muted)]"}`}>
+        载入歌词...
+      </div>
+    );
   }
 
   if (lines.length === 0) {
-    return <div className="py-12 text-center text-sm text-[var(--tv-text-muted)]">纯音乐或暂无同步歌词</div>;
+    return (
+      <div className={`py-16 text-center text-sm ${large ? "text-white/50" : "text-[var(--tv-text-muted)]"}`}>
+        纯音乐或暂无歌词
+      </div>
+    );
   }
 
   return (
@@ -50,31 +58,52 @@ export function LyricScroller({
       onWheel={() => {
         manualScrollUntilRef.current = Date.now() + 3000;
       }}
-      className="h-full overflow-y-auto px-3 py-10 space-y-3"
+      className={`tv-lyric-mask h-full overflow-y-auto ${large ? "px-4 py-28 space-y-5" : "px-3 py-12 space-y-2.5"}`}
     >
       {lines.map((line, index) => {
         const isActive = index === activeIndex;
+        const distance = activeIndex >= 0 ? Math.abs(index - activeIndex) : 0;
+
+        if (large) {
+          return (
+            <button
+              key={`${line.time}-${index}`}
+              ref={isActive ? activeRef : undefined}
+              type="button"
+              onClick={() => audioEngine.seek(line.time)}
+              className={`block w-full origin-left rounded-xl px-3 py-1.5 text-left transition-all duration-300 hover:bg-white/8 hover:text-white ${
+                isActive
+                  ? "scale-[1.02] text-[26px] font-bold leading-snug text-white"
+                  : distance <= 2
+                    ? "text-[20px] font-semibold leading-snug text-white/40"
+                    : "text-[19px] font-medium leading-snug text-white/25"
+              }`}
+            >
+              <div>{line.text}</div>
+              {line.translation && (
+                <div className={`mt-1 text-base font-normal ${isActive ? "text-white/75" : "text-white/28"}`}>
+                  {line.translation}
+                </div>
+              )}
+            </button>
+          );
+        }
+
         return (
           <button
             key={`${line.time}-${index}`}
             ref={isActive ? activeRef : undefined}
             type="button"
             onClick={() => audioEngine.seek(line.time)}
-            className={`block w-full rounded-xl px-3 py-1.5 text-left transition-all hover:bg-white/5 ${
+            className={`block w-full rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--tv-surface-hover)] ${
               isActive
-                ? large
-                  ? "text-xl font-semibold text-amber-300"
-                  : "text-sm font-semibold text-amber-300"
-                : large
-                  ? "text-base text-white/55"
-                  : "text-xs text-[var(--tv-text-muted)]"
+                ? "text-[14px] font-semibold text-[var(--tv-text)]"
+                : "text-[12.5px] text-[var(--tv-text-muted)]"
             }`}
           >
             <div>{line.text}</div>
             {line.translation && (
-              <div className={`mt-0.5 ${isActive ? "text-amber-200/80" : "text-white/35"} text-xs`}>
-                {line.translation}
-              </div>
+              <div className="mt-0.5 text-[11.5px] text-[var(--tv-text-subtle)]">{line.translation}</div>
             )}
           </button>
         );

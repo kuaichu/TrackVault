@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { MusicPlatformSchema, PlaylistSortSchema, ProviderModeSchema } from "#shared";
+import { EntitySearchTypeSchema, MusicPlatformSchema, PlaylistSortSchema, ProviderModeSchema } from "#shared";
 import type { CatalogService } from "../../../application/catalog/catalog-service.js";
 import type { ProviderRegistry } from "../../../domain/ports/music-provider.js";
 import { requireActor } from "../auth-plugin.js";
@@ -29,10 +29,63 @@ export function registerCatalogRoutes(
     return { results, mode: query.mode, warnings };
   });
 
+  app.get("/api/search/entities", async (request) => {
+    const actor = requireActor(request);
+    const query = z
+      .object({
+        q: z.string().trim().max(200).default(""),
+        mode: ProviderModeSchema.default("aggregate"),
+        type: EntitySearchTypeSchema.default("artist"),
+      })
+      .parse(request.query);
+
+    return catalogService.searchEntities(actor, query.q, query.mode, query.type);
+  });
+
   app.get("/api/discover", async (request) => {
     const actor = requireActor(request);
     const query = z.object({ platform: MusicPlatformSchema.optional() }).parse(request.query);
     const songs = await catalogService.getDiscover(actor, query.platform);
+    return { songs };
+  });
+
+  app.get("/api/discover/playlists", async (request) => {
+    const actor = requireActor(request);
+    const query = z.object({ platform: MusicPlatformSchema.default("netease") }).parse(request.query);
+    const playlists = await catalogService.getRecommendedPlaylists(actor, query.platform);
+    return { playlists };
+  });
+
+  app.get("/api/charts", async (request) => {
+    const actor = requireActor(request);
+    const query = z.object({ platform: MusicPlatformSchema.default("netease") }).parse(request.query);
+    const charts = await catalogService.getCharts(actor, query.platform);
+    return { charts };
+  });
+
+  app.get("/api/charts/:platform/:id", async (request) => {
+    const actor = requireActor(request);
+    const params = z.object({ platform: MusicPlatformSchema, id: z.string().min(1) }).parse(request.params);
+    return catalogService.getChartDetail(actor, params.platform, params.id);
+  });
+
+  app.get("/api/artists/:platform/:id", async (request) => {
+    const actor = requireActor(request);
+    const params = z.object({ platform: MusicPlatformSchema, id: z.string().min(1) }).parse(request.params);
+    const artist = await catalogService.getArtistDetail(actor, params.platform, params.id);
+    return { artist };
+  });
+
+  app.get("/api/albums/:platform/:id", async (request) => {
+    const actor = requireActor(request);
+    const params = z.object({ platform: MusicPlatformSchema, id: z.string().min(1) }).parse(request.params);
+    const album = await catalogService.getAlbumDetail(actor, params.platform, params.id);
+    return { album };
+  });
+
+  app.get("/api/fm", async (request) => {
+    const actor = requireActor(request);
+    const songs = await catalogService.getPersonalFm(actor);
     return { songs };
   });
 
@@ -50,6 +103,19 @@ export function registerCatalogRoutes(
     const actor = requireActor(request);
     const query = z.object({ platform: MusicPlatformSchema.default("netease") }).parse(request.query);
     return { playlists: await catalogService.getUserPlaylists(actor, query.platform) };
+  });
+
+  app.post("/api/playlists/:platform", async (request, reply) => {
+    const actor = requireActor(request);
+    const params = z.object({ platform: MusicPlatformSchema }).parse(request.params);
+    const body = z
+      .object({
+        name: z.string().trim().min(1).max(120),
+        trackIds: z.array(z.string().min(1)).max(200).default([]),
+      })
+      .parse(request.body);
+    const result = await catalogService.createPlaylist(actor, params.platform, body.name, body.trackIds);
+    return reply.code(201).send(result);
   });
 
   app.get("/api/playlists/:platform/:id/songs", async (request) => {
@@ -112,6 +178,12 @@ export function registerCatalogRoutes(
       .parse(request.params);
     const body = z.object({ liked: z.boolean() }).parse(request.body);
     return catalogService.setCommentLiked(actor, params.platform, params.id, params.commentId, body.liked);
+  });
+
+  app.get("/api/likes/:platform", async (request) => {
+    const actor = requireActor(request);
+    const params = z.object({ platform: MusicPlatformSchema }).parse(request.params);
+    return { ids: await catalogService.getLikedSongIds(actor, params.platform) };
   });
 
   app.get("/api/likes/:platform/:id", async (request) => {

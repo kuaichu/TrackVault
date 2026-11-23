@@ -130,6 +130,7 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
           "https://*.music.126.net",
           "https://*.gtimg.cn",
           "https://*.qpic.cn",
+          "https://qpic.y.qq.com",
         ],
         mediaSrc: ["'self'", "blob:"],
         connectSrc: ["'self'"],

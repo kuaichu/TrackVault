@@ -1,8 +1,14 @@
 import type {
+  AlbumDetail,
+  ArtistDetail,
   AuthStatus,
+  ChartDetail,
+  ChartSummary,
   CompareStatus,
   CreateDownloadJobInput,
   CreateMemberInput,
+  EntitySearchResult,
+  EntitySearchType,
   ExportFormat,
   ExportPayload,
   JobKind,
@@ -86,12 +92,35 @@ export const api = {
       `/api/search?q=${encodeURIComponent(q)}&mode=${mode}`,
       { signal },
     ),
+  searchEntities: (q: string, mode: ProviderMode, type: EntitySearchType, signal?: AbortSignal) =>
+    apiRequest<EntitySearchResult>(
+      `/api/search/entities?q=${encodeURIComponent(q)}&mode=${mode}&type=${type}`,
+      { signal },
+    ),
   getDiscover: (platform?: MusicPlatform) =>
     apiRequest<{ songs: Song[] }>(platform ? `/api/discover?platform=${platform}` : "/api/discover"),
+  getRecommendedPlaylists: (platform: MusicPlatform) =>
+    apiRequest<{ playlists: PlaylistSummary[] }>(`/api/discover/playlists?platform=${platform}`),
+  getCharts: (platform: MusicPlatform) =>
+    apiRequest<{ charts: ChartSummary[] }>(`/api/charts?platform=${platform}`),
+  getChartDetail: (platform: MusicPlatform, id: string) =>
+    apiRequest<ChartDetail>(`/api/charts/${platform}/${encodeURIComponent(id)}`),
+  getArtistDetail: (platform: MusicPlatform, id: string) =>
+    apiRequest<{ artist: ArtistDetail }>(`/api/artists/${platform}/${encodeURIComponent(id)}`),
+  getAlbumDetail: (platform: MusicPlatform, id: string) =>
+    apiRequest<{ album: AlbumDetail }>(`/api/albums/${platform}/${encodeURIComponent(id)}`),
+  getPersonalFm: () => apiRequest<{ songs: Song[] }>("/api/fm"),
   getDailyRecommend: () => apiRequest<{ songs: Song[] }>("/api/recommend/daily"),
   getCloudSongs: () => apiRequest<{ songs: Song[] }>("/api/cloud/songs"),
   getUserPlaylists: (platform: MusicPlatform) =>
     apiRequest<{ playlists: PlaylistSummary[] }>(`/api/playlists?platform=${platform}`),
+  createPlaylist: (platform: MusicPlatform, name: string, trackIds: string[] = []) =>
+    apiRequest<{
+      playlistId: string;
+      playlistName: string;
+      playlistUrl: string;
+      addedCount: number;
+    }>(`/api/playlists/${platform}`, { method: "POST", body: { name, trackIds } }),
   getPlaylistTracks: (
     platform: MusicPlatform,
     id: string,
@@ -129,6 +158,7 @@ export const api = {
       `/api/comments/${platform}/${encodeURIComponent(songId)}/${encodeURIComponent(commentId)}/like`,
       { method: "POST", body: { liked } },
     ),
+  getLikedSongIds: (platform: MusicPlatform) => apiRequest<{ ids: string[] }>(`/api/likes/${platform}`),
   isSongLiked: (platform: MusicPlatform, id: string) =>
     apiRequest<{ liked: boolean }>(`/api/likes/${platform}/${encodeURIComponent(id)}`),
   toggleSongLike: (platform: MusicPlatform, id: string, liked: boolean) =>
