@@ -1,24 +1,155 @@
-import { type PlaybackMode, type QualityLevel, type Song, getSongKey } from "#shared";
+import {
+  type PlaybackMode,
+  type PlayerState,
+  type PreferenceQualityLevel,
+  QUALITY_RANK,
+  type QualityLevel,
+  type Song,
+  getSongKey,
+} from "#shared";
 import { api } from "../../../shared/api/endpoints.js";
 import { usePlaybackClockStore, usePlayerStore } from "../store/player-store.js";
 
 const FADE_DURATION_MS = 220;
+const PAUSE_FADE_DURATION_MS = 140;
 const REMOTE_SYNC_INTERVAL_MS = 10_000;
+const PERSIST_DEBOUNCE_MS = 400;
+const MAX_PERSISTED_QUEUE_LENGTH = 200;
+/** Keep well below the browser's 64 KiB shared hard limit for fetch(..., { keepalive: true }). */
+export const KEEPALIVE_MAX_BYTES = 58 * 1024;
+
+function positiveMod(idx: number, len: number): number {
+  return ((idx % len) + len) % len;
+}
+
+function utf8ByteLength(text: string): number {
+  if (typeof TextEncoder !== "undefined") {
+    return new TextEncoder().encode(text).byteLength;
+  }
+  return new Blob([text]).size;
+}
+
+/**
+ * Serializes a bounded window (at most `maxItems`) of `queue` centered around `currentTrack`
+ * so the active track and its surrounding neighbors are always preserved even past index 200.
+ */
+export function serializeQueueWindow(
+  queue: readonly Song[],
+  currentTrack: Song | null,
+  maxItems = MAX_PERSISTED_QUEUE_LENGTH,
+): Song[] {
+  if (maxItems <= 0 || queue.length === 0) return [];
+  if (queue.length <= maxItems) return [...queue];
+
+  const currentIdx = currentTrack
+    ? queue.findIndex((item) => getSongKey(item) === getSongKey(currentTrack))
+    : -1;
+  if (currentIdx < 0) {
+    return queue.slice(0, maxItems);
+  }
+
+  const half = Math.floor(maxItems / 2);
+  const start = Math.max(0, Math.min(currentIdx - half, queue.length - maxItems));
+  return queue.slice(start, start + maxItems);
+}
+
+/**
+ * Ensures a `pagehide` keepalive payload fits safely under the browser's 64 KiB keepalive cap
+ * by progressively shrinking the centered queue window until serialized UTF-8 bytes <= `maxBytes`.
+ */
+export function buildBoundedKeepalivePlayerState(
+  state: PlayerState,
+  maxBytes = KEEPALIVE_MAX_BYTES,
+): PlayerState {
+  const fullJson = JSON.stringify(state);
+  if (utf8ByteLength(fullJson) <= maxBytes) {
+    return state;
+  }
+
+  let lo = 0;
+  let hi = state.playQueue.length - 1;
+  let best: PlayerState | null = null;
+
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const candidate: PlayerState = {
+      ...state,
+      playQueue: mid === 0 ? [] : serializeQueueWindow(state.playQueue, state.currentTrack, mid),
+    };
+    if (utf8ByteLength(JSON.stringify(candidate)) <= maxBytes) {
+      best = candidate;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+
+  return best ?? { ...state, playQueue: [] };
+}
+
+/**
+ * Computes the effective quality badge/selection for the current track based on its available tiers
+ * so the UI never displays a higher tier (e.g. Hi-Res) than the track actually supports.
+ */
+export function resolveEffectivePlaybackQuality(
+  song: Song | null,
+  activeQualityOverride: QualityLevel | null,
+  defaultPlaybackQuality: PreferenceQualityLevel,
+): QualityLevel {
+  const desired: QualityLevel = activeQualityOverride ?? defaultPlaybackQuality;
+  if (!song || song.availableQualities.length === 0) {
+    return desired;
+  }
+
+  if (song.availableQualities.some((q) => q.level === desired)) {
+    return desired;
+  }
+
+  const desiredRank = QUALITY_RANK[desired] ?? 0;
+  let bestAtOrBelow: QualityLevel | null = null;
+  let bestAtOrBelowRank = -1;
+  let lowestAvailable: QualityLevel | null = null;
+  let lowestAvailableRank = Number.POSITIVE_INFINITY;
+
+  for (const option of song.availableQualities) {
+    const rank = QUALITY_RANK[option.level] ?? 0;
+    if (rank <= desiredRank && rank > bestAtOrBelowRank) {
+      bestAtOrBelow = option.level;
+      bestAtOrBelowRank = rank;
+    }
+    if (rank < lowestAvailableRank) {
+      lowestAvailable = option.level;
+      lowestAvailableRank = rank;
+    }
+  }
+
+  return bestAtOrBelow ?? lowestAvailable ?? desired;
+}
 
 /**
  * Pure TypeScript AudioEngine completely decoupled from React component lifecycles.
- * - Single monotonic playToken eliminates stale loadedmetadata / fade-in races & broken watchdogs.
+ * - Single monotonic playToken eliminates stale loadedmetadata / fade-in / FM races.
+ * - Wall-clock deadline + document.hidden fast-path guarantee fades & pauses never stall in background tabs.
+ * - `#volumeRevision` & `#pendingPause` prevent fade-ins from clobbering mute or volume changes cancelling pause.
  * - Updates high-frequency clock store only, keeping main component tree at 0 re-renders during playback.
- * - Throttles remote state persistence to every 10s + pause/track-change/pagehide.
  */
 export class AudioEngine {
   readonly #audio: HTMLAudioElement;
   #playToken = 0;
+  #volumeRevision = 0;
+  #pendingPause = false;
   #fadeFrameId: number | null = null;
+  #fadeTimeoutId: ReturnType<typeof setTimeout> | null = null;
   #pendingSeek: number | null = null;
   #lastPersistAt = 0;
+  #persistDebounceId: ReturnType<typeof setTimeout> | null = null;
   #listenersBound = false;
+  #pagehideHandler: (() => void) | null = null;
   #onPlayHistoryRecorded: ((res: { items: Song[] }) => void) | null = null;
+  #pendingHistorySong: { token: number; song: Song } | null = null;
+  #recordedHistoryForCurrentPlay = false;
+  #fmAbortController: AbortController | null = null;
+  #fmFetching = false;
 
   constructor(audioElement?: HTMLAudioElement) {
     this.#audio = audioElement ?? new Audio();
@@ -32,6 +163,20 @@ export class AudioEngine {
    */
   setPlayHistoryListener(listener: ((res: { items: Song[] }) => void) | null): void {
     this.#onPlayHistoryRecorded = listener;
+  }
+
+  dispose(): void {
+    this.#cancelFade();
+    this.#clearPersistDebounce();
+    this.#abortFmFetch();
+    if (this.#pagehideHandler && typeof window !== "undefined") {
+      window.removeEventListener("pagehide", this.#pagehideHandler);
+      this.#pagehideHandler = null;
+    }
+  }
+
+  #isPlayable(song: Song | undefined): song is Song {
+    return Boolean(song && !song.availability?.playback.locked);
   }
 
   #bindEvents(): void {
@@ -67,10 +212,27 @@ export class AudioEngine {
     });
 
     this.#audio.addEventListener("playing", () => {
+      if (this.#pendingPause) return;
       usePlayerStore.getState().setStatePatch({ isPlaying: true, isLoading: false, playerError: null });
+
+      const pending = this.#pendingHistorySong;
+      if (pending && pending.token === this.#playToken && !this.#recordedHistoryForCurrentPlay) {
+        this.#recordedHistoryForCurrentPlay = true;
+        this.#pendingHistorySong = null;
+        const recordToken = pending.token;
+        void api
+          .recordPlayHistory(pending.song)
+          .then((res) => {
+            if (recordToken === this.#playToken) {
+              this.#onPlayHistoryRecorded?.(res);
+            }
+          })
+          .catch(() => undefined);
+      }
     });
 
     this.#audio.addEventListener("pause", () => {
+      this.#pendingPause = false;
       const state = usePlayerStore.getState();
       state.setStatePatch({ isPlaying: false, isLoading: false });
       if (state.hydrated && state.currentTrack) {
@@ -79,14 +241,14 @@ export class AudioEngine {
     });
 
     this.#audio.addEventListener("waiting", () => {
-      if (!this.#audio.paused) {
+      if (!this.#audio.paused && !this.#pendingPause) {
         usePlayerStore.getState().setStatePatch({ isLoading: true });
       }
     });
 
     this.#audio.addEventListener("ended", () => {
-      const { playbackMode, currentTrack } = usePlayerStore.getState();
-      if (playbackMode === "repeat-one" && currentTrack) {
+      const { playbackMode, currentTrack, fmMode } = usePlayerStore.getState();
+      if (playbackMode === "repeat-one" && currentTrack && !fmMode) {
         this.#audio.currentTime = 0;
         usePlaybackClockStore.getState().setClock({ currentTime: 0 });
         void this.#startAudioWithFade(this.#playToken);
@@ -112,7 +274,10 @@ export class AudioEngine {
       if (failedSrc?.includes("/api/media/stream") && typeof fetch === "function") {
         void fetch(failedSrc, { credentials: "include", headers: { Range: "bytes=0-1" } })
           .then(async (res) => {
-            if (res.ok) return;
+            if (res.ok) {
+              void res.body?.cancel();
+              return;
+            }
             const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
             const detail = body?.error?.message?.trim();
             if (detail && errorToken === this.#playToken) {
@@ -124,7 +289,8 @@ export class AudioEngine {
     });
 
     if (typeof window !== "undefined") {
-      window.addEventListener("pagehide", () => this.#persistRemoteState());
+      this.#pagehideHandler = () => this.#persistRemoteState({ keepalive: true });
+      window.addEventListener("pagehide", this.#pagehideHandler);
     }
   }
 
@@ -133,16 +299,46 @@ export class AudioEngine {
       window.cancelAnimationFrame(this.#fadeFrameId);
       this.#fadeFrameId = null;
     }
+    if (this.#fadeTimeoutId !== null) {
+      globalThis.clearTimeout(this.#fadeTimeoutId);
+      this.#fadeTimeoutId = null;
+    }
   }
 
-  #animateVolume(token: number, from: number, to: number, durationMs: number, onDone?: () => void): void {
+  #clearPersistDebounce(): void {
+    if (this.#persistDebounceId !== null) {
+      globalThis.clearTimeout(this.#persistDebounceId);
+      this.#persistDebounceId = null;
+    }
+  }
+
+  #completePendingPause(): void {
+    if (!this.#pendingPause) return;
+    this.#pendingPause = false;
+    this.#audio.pause();
+    const { volume, muted } = usePlayerStore.getState();
+    const effectiveVolume = muted ? 0 : volume;
+    this.#audio.volume = effectiveVolume;
+    this.#audio.muted = muted || effectiveVolume === 0;
+  }
+
+  #animateVolume(
+    token: number,
+    volumeRevision: number,
+    from: number,
+    to: number,
+    durationMs: number,
+    onDone?: () => void,
+  ): void {
     this.#cancelFade();
     const clampedFrom = Math.min(1, Math.max(0, from));
     const clampedTo = Math.min(1, Math.max(0, to));
     this.#audio.volume = clampedFrom;
 
+    const isHidden = typeof document !== "undefined" && Boolean(document.hidden);
     if (
       durationMs <= 0 ||
+      isHidden ||
       typeof window === "undefined" ||
       typeof window.requestAnimationFrame !== "function"
     ) {
@@ -151,10 +347,33 @@ export class AudioEngine {
       return;
     }
 
-    const startedAt = window.performance.now();
-    const step = (now: number) => {
-      if (token !== this.#playToken) return;
-      const progress = Math.min(1, Math.max(0, (now - startedAt) / durationMs));
+    const startedAt = Date.now();
+    let finished = false;
+
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      this.#cancelFade();
+      if (token !== this.#playToken || volumeRevision !== this.#volumeRevision) return;
+      this.#audio.volume = clampedTo;
+      onDone?.();
+    };
+
+    // Wall-clock deadline guarantees convergence even if rAF is throttled/paused in a background tab
+    this.#fadeTimeoutId = globalThis.setTimeout(finish, durationMs + 50);
+
+    const step = () => {
+      if (finished) return;
+      if (token !== this.#playToken || volumeRevision !== this.#volumeRevision) {
+        finished = true;
+        this.#cancelFade();
+        return;
+      }
+      if (typeof document !== "undefined" && document.hidden) {
+        finish();
+        return;
+      }
+      const progress = Math.min(1, Math.max(0, (Date.now() - startedAt) / durationMs));
       const eased = 1 - (1 - progress) ** 3;
       this.#audio.volume = Math.min(1, Math.max(0, clampedFrom + (clampedTo - clampedFrom) * eased));
 
@@ -163,29 +382,56 @@ export class AudioEngine {
         return;
       }
 
-      this.#audio.volume = clampedTo;
-      this.#fadeFrameId = null;
-      onDone?.();
+      finish();
     };
 
     this.#fadeFrameId = window.requestAnimationFrame(step);
   }
 
-  async #startAudioWithFade(token: number): Promise<void> {
-    const targetVolume = usePlayerStore.getState().volume;
-    this.#audio.volume = 0;
+  async #startAudioWithFade(
+    token: number,
+    options?: { fromVolume?: number; fallbackError?: string },
+  ): Promise<void> {
+    const startRevision = this.#volumeRevision;
+    const initialState = usePlayerStore.getState();
+    const initialTarget = initialState.muted ? 0 : initialState.volume;
+    const fromVolume = Math.min(initialTarget, Math.max(0, options?.fromVolume ?? 0));
+    this.#audio.volume = fromVolume;
+    this.#audio.muted = initialState.muted || initialTarget === 0;
 
     try {
       await this.#audio.play();
-      if (token !== this.#playToken) return;
-      this.#animateVolume(token, 0, targetVolume, FADE_DURATION_MS);
+      if (token !== this.#playToken || this.#pendingPause) return;
+
+      const latestState = usePlayerStore.getState();
+      const latestTarget = latestState.muted ? 0 : latestState.volume;
+      this.#audio.muted = latestState.muted || latestTarget === 0;
+
+      // If user adjusted volume or muted while play() was resolving, yield immediately to user's volume
+      if (startRevision !== this.#volumeRevision || latestTarget === 0) {
+        this.#audio.volume = latestTarget;
+      } else {
+        this.#animateVolume(token, this.#volumeRevision, fromVolume, latestTarget, FADE_DURATION_MS);
+      }
+
+      if (!this.#audio.paused && !this.#pendingPause && !usePlayerStore.getState().isPlaying) {
+        usePlayerStore.getState().setStatePatch({ isPlaying: true, isLoading: false, playerError: null });
+      }
     } catch {
-      if (token !== this.#playToken) return;
-      this.#audio.volume = targetVolume;
+      if (token !== this.#playToken || this.#pendingPause) return;
+      const latestState = usePlayerStore.getState();
+      const latestTarget = latestState.muted ? 0 : latestState.volume;
+      this.#audio.volume = latestTarget;
+      this.#audio.muted = latestState.muted || latestTarget === 0;
+
+      const preservedError =
+        latestState.playerError ??
+        options?.fallbackError ??
+        "浏览器阻止了自动播放或音频流暂不可用，请点击播放重试。";
       usePlayerStore.getState().setStatePatch({
         isPlaying: false,
         isLoading: false,
-        playerError: "浏览器阻止了自动播放或音频流暂不可用，请点击播放重试。",
+        playerError: preservedError,
       });
     }
   }
@@ -208,20 +454,79 @@ export class AudioEngine {
     }
   }
 
-  #persistRemoteState(): void {
+  #buildPersistPayload(keepalive = false): PlayerState {
+    const state = usePlayerStore.getState();
+    const { currentTime } = usePlaybackClockStore.getState();
+    const base: PlayerState = {
+      currentTrack: state.currentTrack,
+      playQueue: serializeQueueWindow(state.queue, state.currentTrack, MAX_PERSISTED_QUEUE_LENGTH),
+      playbackSeconds: Math.floor(currentTime),
+      volume: state.muted ? 0 : state.volume,
+      playbackMode: state.playbackMode,
+    };
+    return keepalive ? buildBoundedKeepalivePlayerState(base) : base;
+  }
+
+  #persistRemoteState(options?: { keepalive?: boolean }): void {
+    this.#clearPersistDebounce();
     const state = usePlayerStore.getState();
     if (!state.hydrated) return;
     this.#lastPersistAt = Date.now();
-    const { currentTime } = usePlaybackClockStore.getState();
+    const payload = this.#buildPersistPayload(Boolean(options?.keepalive));
     void api
-      .savePlayerState({
-        currentTrack: state.currentTrack,
-        playQueue: state.queue.slice(0, 200),
-        playbackSeconds: Math.floor(currentTime),
-        volume: state.volume,
-        playbackMode: state.playbackMode,
-      })
+      .savePlayerState(payload, options?.keepalive ? { keepalive: true } : undefined)
       .catch(() => undefined);
+  }
+
+  #schedulePersistRemoteState(delayMs = PERSIST_DEBOUNCE_MS): void {
+    if (!usePlayerStore.getState().hydrated) return;
+    this.#clearPersistDebounce();
+    this.#persistDebounceId = globalThis.setTimeout(() => {
+      this.#persistDebounceId = null;
+      this.#persistRemoteState();
+    }, delayMs);
+  }
+
+  #abortFmFetch(): void {
+    if (this.#fmAbortController) {
+      this.#fmAbortController.abort();
+      this.#fmAbortController = null;
+    }
+    if (this.#fmFetching) {
+      this.#fmFetching = false;
+      usePlayerStore.getState().setStatePatch({ fmLoading: false });
+    }
+  }
+
+  cancelPendingFmFetch(): void {
+    this.#abortFmFetch();
+  }
+
+  /**
+   * Synchronizes user's default playback quality preference from settings.
+   * Rebuilds `#audio.src` if hydrated and paused without a per-track override (fixes hydrate vs settings race).
+   */
+  syncDefaultPlaybackQuality(level: PreferenceQualityLevel): void {
+    const state = usePlayerStore.getState();
+    state.setStatePatch({ defaultPlaybackQuality: level });
+
+    if (
+      state.currentTrack &&
+      !state.activeQualityOverride &&
+      this.#audio.paused &&
+      !state.isPlaying &&
+      !this.#pendingPause
+    ) {
+      const nextUrl = api.buildStreamUrl(state.currentTrack, level);
+      const currentSrc = this.#audio.getAttribute("src") || this.#audio.src;
+      if (currentSrc !== nextUrl && !currentSrc.endsWith(nextUrl)) {
+        const resumeAt = usePlaybackClockStore.getState().currentTime;
+        if (resumeAt > 0 && this.#pendingSeek === null) {
+          this.#pendingSeek = resumeAt;
+        }
+        this.#audio.src = nextUrl;
+      }
+    }
   }
 
   hydrate(input: {
@@ -238,13 +543,21 @@ export class AudioEngine {
       return;
     }
 
-    this.#audio.volume = Math.min(1, Math.max(0, input.volume));
+    const clampedVolume = Math.min(1, Math.max(0, Number.isFinite(input.volume) ? input.volume : 0.85));
+    const isMuted = clampedVolume === 0;
+    this.#audio.volume = clampedVolume;
+    this.#audio.muted = isMuted;
     this.#pendingSeek = input.playbackSeconds > 0 ? input.playbackSeconds : null;
+    this.#pendingHistorySong = null;
+    this.#recordedHistoryForCurrentPlay = false;
 
     store.setStatePatch({
       currentTrack: input.currentTrack,
       queue: input.playQueue,
-      volume: input.volume,
+      priorityQueue: [],
+      volume: clampedVolume,
+      muted: isMuted,
+      lastNonZeroVolume: clampedVolume > 0 ? clampedVolume : 0.8,
       playbackMode: input.playbackMode,
       hydrated: true,
     });
@@ -255,7 +568,7 @@ export class AudioEngine {
     });
 
     if (input.currentTrack) {
-      const level = store.defaultPlaybackQuality;
+      const level = store.activeQualityOverride ?? store.defaultPlaybackQuality;
       this.#audio.src = api.buildStreamUrl(input.currentTrack, level);
       this.#updateMediaSession(input.currentTrack);
     }
@@ -263,27 +576,48 @@ export class AudioEngine {
 
   async playTrack(
     song: Song,
-    options?: { queue?: Song[]; level?: QualityLevel; startAtSeconds?: number },
+    options?: {
+      queue?: Song[];
+      level?: QualityLevel;
+      startAtSeconds?: number;
+      recordHistory?: boolean;
+      fm?: boolean;
+    },
   ): Promise<void> {
     const token = ++this.#playToken;
     this.#cancelFade();
+    this.#pendingPause = false;
+
+    const isFm = Boolean(options?.fm);
+    if (!isFm) {
+      this.#abortFmFetch();
+    }
 
     const state = usePlayerStore.getState();
+    const songKey = getSongKey(song);
     const nextQueue = options?.queue
       ? options.queue
-      : state.queue.some((item) => getSongKey(item) === getSongKey(song))
+      : state.queue.some((item) => getSongKey(item) === songKey)
         ? state.queue
         : [...state.queue, song];
+    const nextPriorityQueue = state.priorityQueue.filter((item) => getSongKey(item) !== songKey);
 
     const level = options?.level ?? state.defaultPlaybackQuality;
     this.#pendingSeek = options?.startAtSeconds ?? null;
 
+    if (options?.recordHistory !== false) {
+      this.#pendingHistorySong = { token, song };
+      this.#recordedHistoryForCurrentPlay = false;
+    }
+
     state.setStatePatch({
       currentTrack: song,
       queue: nextQueue,
+      priorityQueue: nextPriorityQueue,
       activeQualityOverride: options?.level ?? null,
       isLoading: true,
       playerError: null,
+      fmMode: isFm,
     });
     usePlaybackClockStore.getState().setClock({
       currentTime: options?.startAtSeconds ?? 0,
@@ -294,46 +628,173 @@ export class AudioEngine {
     this.#audio.src = api.buildStreamUrl(song, level);
     this.#audio.load();
     this.#updateMediaSession(song);
-    void api
-      .recordPlayHistory(song)
-      .then((res) => {
-        if (token === this.#playToken) {
-          this.#onPlayHistoryRecorded?.(res);
-        }
-      })
-      .catch(() => undefined);
     this.#persistRemoteState();
 
     await this.#startAudioWithFade(token);
   }
 
-  async switchPlaybackQuality(level: QualityLevel): Promise<void> {
-    const { currentTrack } = usePlayerStore.getState();
-    if (!currentTrack) return;
-    const resumeAt = usePlaybackClockStore.getState().currentTime;
-    await this.playTrack(currentTrack, { level, startAtSeconds: resumeAt });
+  async playFmTrack(song: Song, options?: { queue?: Song[]; startAtSeconds?: number }): Promise<void> {
+    const queue = options?.queue ?? usePlayerStore.getState().fmQueue;
+    await this.playTrack(song, {
+      queue: queue.length > 0 ? queue : [song],
+      startAtSeconds: options?.startAtSeconds,
+      fm: true,
+    });
   }
 
-  async togglePlay(): Promise<void> {
-    const { currentTrack } = usePlayerStore.getState();
+  async loadFmBatch(options?: { autoPlay?: boolean }): Promise<Song[]> {
+    if (this.#fmFetching) {
+      return usePlayerStore.getState().fmQueue;
+    }
+
+    this.#abortFmFetch();
+    const controller = new AbortController();
+    this.#fmAbortController = controller;
+    this.#fmFetching = true;
+    const requestToken = this.#playToken;
+
+    usePlayerStore.getState().setStatePatch({ fmLoading: true, fmError: null });
+
+    try {
+      const res = await api.getPersonalFm(controller.signal);
+      if (controller.signal.aborted) {
+        return [];
+      }
+      if (options?.autoPlay && requestToken !== this.#playToken) {
+        return [];
+      }
+
+      const songs = res.songs ?? [];
+      usePlayerStore.getState().setStatePatch({
+        fmQueue: songs,
+        fmLoading: false,
+        fmError: null,
+      });
+
+      if (options?.autoPlay && songs.length > 0) {
+        const first = songs.find((item) => this.#isPlayable(item)) ?? songs[0];
+        if (first) {
+          await this.playFmTrack(first, { queue: songs });
+        }
+      }
+      return songs;
+    } catch (err) {
+      if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
+        return [];
+      }
+      const message = err instanceof Error ? err.message : "加载私人漫游失败";
+      usePlayerStore.getState().setStatePatch({
+        fmLoading: false,
+        fmError: message,
+      });
+      throw err;
+    } finally {
+      if (this.#fmAbortController === controller) {
+        this.#fmAbortController = null;
+        this.#fmFetching = false;
+        usePlayerStore.getState().setStatePatch({ fmLoading: false });
+      }
+    }
+  }
+
+  async nextFmTrack(): Promise<void> {
+    const { fmQueue, currentTrack, fmMode } = usePlayerStore.getState();
+    const currentIdx =
+      fmMode && currentTrack
+        ? fmQueue.findIndex((item) => getSongKey(item) === getSongKey(currentTrack))
+        : -1;
+
+    for (let idx = currentIdx + 1; idx < fmQueue.length; idx += 1) {
+      const candidate = fmQueue[idx];
+      if (this.#isPlayable(candidate)) {
+        await this.playFmTrack(candidate, { queue: fmQueue });
+        return;
+      }
+    }
+
+    await this.loadFmBatch({ autoPlay: true }).catch(() => undefined);
+  }
+
+  async switchPlaybackQuality(level: QualityLevel): Promise<void> {
+    const state = usePlayerStore.getState();
+    const { currentTrack } = state;
     if (!currentTrack) return;
 
-    if (this.#audio.paused) {
-      const token = ++this.#playToken;
-      if (!this.#audio.src) {
-        const level =
-          usePlayerStore.getState().activeQualityOverride ?? usePlayerStore.getState().defaultPlaybackQuality;
-        this.#audio.src = api.buildStreamUrl(currentTrack, level);
-      }
-      await this.#startAudioWithFade(token);
+    const resumeAt = usePlaybackClockStore.getState().currentTime;
+    const wasPlaying = state.isPlaying && !this.#audio.paused && !this.#pendingPause;
+
+    if (!wasPlaying) {
+      this.#playToken += 1;
+      this.#cancelFade();
+      this.#pendingPause = false;
+      this.#pendingSeek = resumeAt > 0 ? resumeAt : null;
+      state.setStatePatch({
+        activeQualityOverride: level,
+        isLoading: false,
+        isPlaying: false,
+        playerError: null,
+      });
+      this.#audio.src = api.buildStreamUrl(currentTrack, level);
+      this.#audio.load();
       return;
     }
 
+    await this.playTrack(currentTrack, {
+      level,
+      startAtSeconds: resumeAt,
+      recordHistory: false,
+      fm: state.fmMode,
+    });
+  }
+
+  async togglePlay(): Promise<void> {
+    const state = usePlayerStore.getState();
+    const { currentTrack, queue } = state;
+    if (!currentTrack) {
+      if (queue.length === 0) return;
+      const first = queue.find((item) => this.#isPlayable(item)) ?? queue[0];
+      if (first) {
+        await this.playTrack(first);
+      }
+      return;
+    }
+
+    if (this.#audio.paused || this.#pendingPause) {
+      const wasPendingPause = this.#pendingPause;
+      this.#pendingPause = false;
+      const token = ++this.#playToken;
+      this.#cancelFade();
+
+      const previousError = state.playerError;
+      const shouldReload = !this.#audio.src || Boolean(previousError) || Boolean(this.#audio.error);
+      if (shouldReload) {
+        const level = state.activeQualityOverride ?? state.defaultPlaybackQuality;
+        state.setStatePatch({ isLoading: true });
+        this.#audio.src = api.buildStreamUrl(currentTrack, level);
+        this.#audio.load();
+      }
+
+      if (!this.#recordedHistoryForCurrentPlay) {
+        this.#pendingHistorySong = { token, song: currentTrack };
+      }
+
+      await this.#startAudioWithFade(token, {
+        fromVolume: wasPendingPause ? this.#audio.volume : 0,
+        fallbackError: previousError ?? undefined,
+      });
+      return;
+    }
+
+    // Optimistic pause state + pendingPause guard eliminates 140ms double-click / volume-drag races
+    this.#pendingPause = true;
     const token = ++this.#playToken;
-    this.#animateVolume(token, this.#audio.volume, 0, 140, () => {
-      if (token !== this.#playToken) return;
-      this.#audio.pause();
-      this.#audio.volume = usePlayerStore.getState().volume;
+    const pauseRev = this.#volumeRevision;
+    state.setStatePatch({ isPlaying: false, isLoading: false });
+
+    this.#animateVolume(token, pauseRev, this.#audio.volume, 0, PAUSE_FADE_DURATION_MS, () => {
+      if (this.#pendingPause && token === this.#playToken) {
+        this.#completePendingPause();
+      }
     });
   }
 
@@ -352,9 +813,55 @@ export class AudioEngine {
 
   setVolume(volume: number): void {
     const clamped = Math.min(1, Math.max(0, Number.isFinite(volume) ? volume : 0.85));
+    this.#volumeRevision += 1;
     this.#cancelFade();
+
+    // Never allow a volume change during pause fade-out to cancel the user's pause intent
+    if (this.#pendingPause) {
+      this.#completePendingPause();
+    }
+
+    const isMuted = clamped === 0;
     this.#audio.volume = clamped;
-    usePlayerStore.getState().setStatePatch({ volume: clamped });
+    this.#audio.muted = isMuted;
+
+    usePlayerStore.getState().setStatePatch({
+      volume: clamped,
+      muted: isMuted,
+      ...(clamped > 0 ? { lastNonZeroVolume: clamped } : {}),
+    });
+    this.#schedulePersistRemoteState();
+  }
+
+  toggleMute(): void {
+    const { volume, muted, lastNonZeroVolume } = usePlayerStore.getState();
+    if (muted || volume === 0) {
+      const restored = lastNonZeroVolume > 0 ? lastNonZeroVolume : 0.8;
+      this.setVolume(restored);
+      return;
+    }
+    usePlayerStore.getState().setStatePatch({ lastNonZeroVolume: volume });
+    this.setVolume(0);
+  }
+
+  addToQueue(song: Song): void {
+    usePlayerStore.getState().addToQueue(song);
+    this.#schedulePersistRemoteState();
+  }
+
+  insertNextInQueue(song: Song): void {
+    usePlayerStore.getState().insertNextInQueue(song);
+    this.#schedulePersistRemoteState();
+  }
+
+  removeFromQueue(songKey: string): void {
+    usePlayerStore.getState().removeFromQueue(songKey);
+    this.#schedulePersistRemoteState();
+  }
+
+  clearQueue(): void {
+    usePlayerStore.getState().clearQueue();
+    this.#schedulePersistRemoteState();
   }
 
   cyclePlaybackMode(): void {
@@ -366,53 +873,98 @@ export class AudioEngine {
   }
 
   async playNext(): Promise<void> {
-    const { queue, currentTrack, playbackMode } = usePlayerStore.getState();
+    const { queue, priorityQueue, currentTrack, playbackMode, fmMode } = usePlayerStore.getState();
+
+    if (fmMode) {
+      await this.nextFmTrack();
+      return;
+    }
+
+    if (priorityQueue.length > 0) {
+      const remaining = [...priorityQueue];
+      while (remaining.length > 0) {
+        const nextPriority = remaining.shift();
+        if (this.#isPlayable(nextPriority)) {
+          usePlayerStore.getState().setStatePatch({ priorityQueue: remaining });
+          await this.playTrack(nextPriority);
+          return;
+        }
+      }
+      usePlayerStore.getState().setStatePatch({ priorityQueue: [] });
+    }
+
     if (queue.length === 0) return;
 
-    if (playbackMode === "shuffle" && queue.length > 1) {
-      const candidates = queue.filter(
-        (item) => !currentTrack || getSongKey(item) !== getSongKey(currentTrack),
+    if (playbackMode === "shuffle") {
+      const playableOthers = queue.filter(
+        (item) => this.#isPlayable(item) && (!currentTrack || getSongKey(item) !== getSongKey(currentTrack)),
       );
-      const pick = candidates[Math.floor(Math.random() * candidates.length)];
-      if (pick) await this.playTrack(pick);
-      return;
+      if (playableOthers.length > 0) {
+        const pick = playableOthers[Math.floor(Math.random() * playableOthers.length)];
+        if (pick) {
+          await this.playTrack(pick);
+          return;
+        }
+      }
+      const anyPlayable = queue.filter((item) => this.#isPlayable(item));
+      if (anyPlayable.length > 0) {
+        const pick = anyPlayable[Math.floor(Math.random() * anyPlayable.length)];
+        if (pick) {
+          await this.playTrack(pick);
+          return;
+        }
+      }
     }
 
     const currentIdx = currentTrack
       ? queue.findIndex((item) => getSongKey(item) === getSongKey(currentTrack))
       : -1;
     for (let step = 1; step <= queue.length; step += 1) {
-      const candidate = queue[(currentIdx + step) % queue.length];
-      if (candidate && !candidate.availability?.playback.locked) {
+      const candidate = queue[positiveMod(currentIdx + step, queue.length)];
+      if (this.#isPlayable(candidate)) {
         await this.playTrack(candidate);
         return;
       }
     }
-    const fallback = queue[(currentIdx + 1) % queue.length];
+    const fallback = queue[positiveMod(currentIdx + 1, queue.length)];
     if (fallback) await this.playTrack(fallback);
   }
 
   async playPrevious(): Promise<void> {
     const { queue, currentTrack } = usePlayerStore.getState();
     if (queue.length === 0) return;
-    if (usePlaybackClockStore.getState().currentTime > 4) {
+    if (currentTrack && usePlaybackClockStore.getState().currentTime > 4) {
       this.seek(0);
       return;
     }
 
     const currentIdx = currentTrack
       ? queue.findIndex((item) => getSongKey(item) === getSongKey(currentTrack))
-      : 0;
-    const prevIdx = (currentIdx - 1 + queue.length) % queue.length;
-    const target = queue[prevIdx];
-    if (target) await this.playTrack(target);
+      : -1;
+    const baseIdx = currentIdx >= 0 ? currentIdx : 0;
+
+    for (let step = 1; step <= queue.length; step += 1) {
+      const candidate = queue[positiveMod(baseIdx - step, queue.length)];
+      if (this.#isPlayable(candidate)) {
+        await this.playTrack(candidate);
+        return;
+      }
+    }
+    const fallback = queue[positiveMod(baseIdx - 1, queue.length)];
+    if (fallback) await this.playTrack(fallback);
   }
 
   stop(): void {
     this.#playToken += 1;
+    this.#volumeRevision += 1;
+    this.#pendingPause = false;
     this.#cancelFade();
+    this.#clearPersistDebounce();
+    this.#abortFmFetch();
     this.#pendingSeek = null;
     this.#lastPersistAt = 0;
+    this.#pendingHistorySong = null;
+    this.#recordedHistoryForCurrentPlay = false;
 
     // Reset store BEFORE pausing/clearing src so pause/error/pagehide listeners never persist stale state
     usePlayerStore.getState().reset();
@@ -426,6 +978,7 @@ export class AudioEngine {
       // Ignore in test environments where load() is not implemented
     }
     this.#audio.volume = 0.85;
+    this.#audio.muted = false;
 
     if (typeof navigator !== "undefined" && "mediaSession" in navigator) {
       try {

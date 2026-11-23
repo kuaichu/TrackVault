@@ -1,10 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Heart, Maximize2, Pause, Play, RefreshCw, SkipForward } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
-import { type Song, getSongKey, sanitizeCssUrl } from "#shared";
+import { getSongKey, sanitizeCssUrl } from "#shared";
 import { AlbumLink, ArtistLinks } from "../../entities/music/EntityLinks.js";
 import { api } from "../../shared/api/endpoints.js";
+import { useLikedIdsQuery, useToggleLikeMutation } from "../../shared/hooks/use-toggle-like.js";
 import { toast } from "../../shared/store/toast-store.js";
 import { CoverArt, EmptyState } from "../../shared/ui/primitives.js";
 import { LyricScroller } from "../player/components/LyricScroller.js";
@@ -12,76 +13,52 @@ import { audioEngine } from "../player/engine/audio-engine.js";
 import { usePlayerStore } from "../player/store/player-store.js";
 
 export function PersonalFmPage() {
-  const queryClient = useQueryClient();
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const fmMode = usePlayerStore((s) => s.fmMode);
+  const fmQueue = usePlayerStore((s) => s.fmQueue);
+  const fmLoading = usePlayerStore((s) => s.fmLoading);
+  const fmError = usePlayerStore((s) => s.fmError);
   const setFullscreenOpen = usePlayerStore((s) => s.setFullscreenOpen);
 
-  const [fmList, setFmList] = useState<Song[]>([]);
-  const [fmIndex, setFmIndex] = useState(0);
-
-  const fmQuery = useQuery({
-    queryKey: ["personal-fm"],
-    queryFn: () => api.getPersonalFm(),
-    staleTime: 0,
-  });
-
   useEffect(() => {
-    const incoming = fmQuery.data?.songs ?? [];
-    if (incoming.length > 0 && fmList.length === 0) {
-      setFmList(incoming);
-      setFmIndex(0);
+    const state = usePlayerStore.getState();
+    if (state.fmQueue.length === 0 && !state.fmLoading) {
+      void audioEngine.loadFmBatch({ autoPlay: false }).catch(() => undefined);
     }
-  }, [fmQuery.data?.songs, fmList.length]);
+    return () => {
+      // Cancel in-flight preview/refresh fetches when leaving FM page if FM is not actively playing
+      if (!usePlayerStore.getState().fmMode) {
+        audioEngine.cancelPendingFmFetch();
+      }
+    };
+  }, []);
 
-  const activeSong = fmList[fmIndex] ?? fmList[0] ?? null;
+  // Single source of truth: follow AudioEngine's active track while in FM mode, else preview first candidate
+  const activeSong = fmMode && currentTrack ? currentTrack : (fmQueue[0] ?? null);
   const isCurrentActive = Boolean(
     activeSong && currentTrack && getSongKey(activeSong) === getSongKey(currentTrack),
   );
 
-  const { data: lyricData, isLoading: lyricsLoading } = useQuery({
+  const lyricQuery = useQuery({
     queryKey: ["lyrics", activeSong?.platform, activeSong?.id],
     queryFn: () =>
       activeSong ? api.getLyrics(activeSong.platform, activeSong.id, activeSong.mediaId) : null,
     enabled: Boolean(activeSong),
   });
 
-  const { data: likedIdsData } = useQuery({
-    queryKey: ["liked-ids", "netease"],
-    queryFn: () => api.getLikedSongIds("netease"),
-    staleTime: 60_000,
-  });
+  const canLike = activeSong?.platform === "netease";
+  const { data: likedIdsData } = useLikedIdsQuery(activeSong?.platform, canLike);
+  const likeMutation = useToggleLikeMutation();
 
   const likedSet = new Set(likedIdsData?.ids ?? []);
   const isLiked = activeSong ? likedSet.has(activeSong.id) : false;
 
-  const likeMutation = useMutation({
-    mutationFn: () => {
-      if (!activeSong) throw new Error("无当前歌曲");
-      return api.toggleSongLike("netease", activeSong.id, !isLiked);
-    },
-    onSuccess: (res) => {
-      toast.success(res.liked ? "已喜欢" : "已取消喜欢");
-      void queryClient.invalidateQueries({ queryKey: ["liked-ids", "netease"] });
-      if (activeSong) {
-        queryClient.setQueryData(["song-like", "netease", activeSong.id], res);
-      }
-    },
-    onError: (err) => toast.error(err instanceof Error ? err.message : "操作失败"),
-  });
-
-  const fetchMoreFm = async (autoPlayFirst = false) => {
+  const handleRefreshBatch = async (autoPlay = true) => {
     try {
-      const res = await api.getPersonalFm();
-      const nextBatch = res.songs;
+      const nextBatch = await audioEngine.loadFmBatch({ autoPlay });
       if (nextBatch.length === 0) {
         toast.info("暂时没有更多推荐歌曲");
-        return;
-      }
-      setFmList(nextBatch);
-      setFmIndex(0);
-      if (autoPlayFirst && nextBatch[0]) {
-        void audioEngine.playTrack(nextBatch[0], { queue: nextBatch });
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "加载下一批 FM 失败");
@@ -93,18 +70,30 @@ export function PersonalFmPage() {
     if (isCurrentActive) {
       void audioEngine.togglePlay();
     } else {
-      void audioEngine.playTrack(activeSong, { queue: fmList });
+      void audioEngine.playFmTrack(activeSong, { queue: fmQueue });
     }
   };
 
   const handleNext = () => {
-    const nextIdx = fmIndex + 1;
-    if (nextIdx < fmList.length) {
-      setFmIndex(nextIdx);
-      const nextSong = fmList[nextIdx];
-      if (nextSong) void audioEngine.playTrack(nextSong, { queue: fmList });
+    if (isCurrentActive && fmMode) {
+      void audioEngine.nextFmTrack();
+      return;
+    }
+    const nextCandidate = fmQueue[1];
+    if (nextCandidate) {
+      void audioEngine.playFmTrack(nextCandidate, { queue: fmQueue });
+      return;
+    }
+    void handleRefreshBatch(true);
+  };
+
+  const handleLyricLineClick = (time: number) => {
+    if (!activeSong) return;
+    if (isCurrentActive) {
+      audioEngine.seek(time);
     } else {
-      void fetchMoreFm(true);
+      // Decision #4: clicking a lyric line on an unplayed FM candidate starts playing it and seeks to that timestamp
+      void audioEngine.playFmTrack(activeSong, { queue: fmQueue, startAtSeconds: time });
     }
   };
 
@@ -116,30 +105,54 @@ export function PersonalFmPage() {
         <h1 className="text-[28px] font-bold tracking-tight text-[var(--tv-text)]">私人漫游</h1>
         <button
           type="button"
-          onClick={() => void fetchMoreFm(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--tv-surface)] px-3 py-1.5 text-xs font-medium text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-text)]"
+          disabled={fmLoading}
+          onClick={() => void handleRefreshBatch(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--tv-surface)] px-3 py-1.5 text-xs font-medium text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-text)] disabled:opacity-50"
         >
-          <RefreshCw className="h-3.5 w-3.5" />
+          <RefreshCw className={`h-3.5 w-3.5 ${fmLoading ? "animate-spin" : ""}`} />
           换一批
         </button>
       </div>
 
-      {fmQuery.isLoading && !activeSong ? (
+      {fmLoading && !activeSong ? (
         <div className="h-[420px] animate-pulse rounded-2xl bg-[var(--tv-surface)]" />
-      ) : fmQuery.isError && !activeSong ? (
+      ) : fmError && !activeSong ? (
         <EmptyState
           title="开启私人漫游需要绑定网易云账号"
-          description={fmQuery.error instanceof Error ? fmQuery.error.message : "请先在设置中扫码登录网易云"}
+          description={fmError}
           action={
-            <Link
-              to="/settings"
-              className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)]"
-            >
-              前往绑定
-            </Link>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleRefreshBatch(false)}
+                className="inline-flex items-center rounded-lg bg-[var(--tv-surface-active)] px-4 py-2 text-xs font-medium text-[var(--tv-text)]"
+              >
+                重试
+              </button>
+              <Link
+                to="/settings"
+                className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)]"
+              >
+                前往绑定
+              </Link>
+            </div>
           }
         />
-      ) : activeSong ? (
+      ) : !activeSong ? (
+        <EmptyState
+          title="暂无私人漫游推荐"
+          description="暂时没有获取到可播放的推荐曲目，请稍后重试。"
+          action={
+            <button
+              type="button"
+              onClick={() => void handleRefreshBatch(true)}
+              className="inline-flex items-center rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)]"
+            >
+              重新获取
+            </button>
+          }
+        />
+      ) : (
         <section className="relative grid gap-6 overflow-hidden rounded-2xl bg-[#161619] p-5 text-white sm:gap-8 sm:p-8 md:grid-cols-[320px_minmax(0,1fr)]">
           {backdrop && (
             <div
@@ -191,25 +204,35 @@ export function PersonalFmPage() {
 
               <button
                 type="button"
+                disabled={fmLoading}
                 onClick={handleNext}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/12 text-white transition-colors hover:bg-white/20"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/12 text-white transition-colors hover:bg-white/20 disabled:opacity-50"
                 title="下一首"
                 aria-label="下一首"
               >
                 <SkipForward className="h-4 w-4 fill-current" />
               </button>
 
-              <button
-                type="button"
-                onClick={() => likeMutation.mutate()}
-                className={`inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/12 transition-colors hover:bg-white/20 ${
-                  isLiked ? "text-[#fa2d48]" : "text-white/80"
-                }`}
-                title={isLiked ? "取消喜欢" : "红心喜欢"}
-                aria-label={isLiked ? "取消喜欢" : "红心喜欢"}
-              >
-                <Heart className={`h-4 w-4 ${isLiked ? "fill-current" : ""}`} />
-              </button>
+              {canLike && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    likeMutation.mutate({
+                      platform: activeSong.platform,
+                      songId: activeSong.id,
+                      nextLiked: !isLiked,
+                      songTitle: activeSong.title,
+                    })
+                  }
+                  className={`inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/12 transition-colors hover:bg-white/20 ${
+                    isLiked ? "text-[#fa2d48]" : "text-white/80"
+                  }`}
+                  title={isLiked ? "取消喜欢" : "红心喜欢"}
+                  aria-label={isLiked ? "取消喜欢" : "红心喜欢"}
+                >
+                  <Heart className={`h-4 w-4 ${isLiked ? "fill-current" : ""}`} />
+                </button>
+              )}
 
               {isCurrentActive && (
                 <button
@@ -226,10 +249,24 @@ export function PersonalFmPage() {
           </div>
 
           <div className="relative h-[260px] overflow-hidden sm:h-[320px] md:h-[380px]">
-            <LyricScroller lines={lyricData?.lyrics.lines ?? []} loading={lyricsLoading} large />
+            <LyricScroller
+              lines={lyricQuery.data?.lyrics.lines ?? []}
+              loading={lyricQuery.isLoading}
+              error={
+                lyricQuery.isError
+                  ? lyricQuery.error instanceof Error
+                    ? lyricQuery.error.message
+                    : "歌词加载失败"
+                  : null
+              }
+              onRetry={() => void lyricQuery.refetch()}
+              large
+              syncWithClock={isCurrentActive}
+              onLineClick={handleLyricLineClick}
+            />
           </div>
         </section>
-      ) : null}
+      )}
     </div>
   );
 }

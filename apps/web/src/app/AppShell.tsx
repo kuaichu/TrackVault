@@ -25,7 +25,6 @@ import { FullscreenPlayer } from "../features/player/components/FullscreenPlayer
 import { PlayerBar } from "../features/player/components/PlayerBar.js";
 import { RightDrawer } from "../features/player/components/RightDrawer.js";
 import { audioEngine } from "../features/player/engine/audio-engine.js";
-import { usePlayerStore } from "../features/player/store/player-store.js";
 import { api } from "../shared/api/endpoints.js";
 import { useJobEvents } from "../shared/hooks/use-job-events.js";
 import { useThemeStore } from "../shared/store/theme-store.js";
@@ -81,7 +80,6 @@ export function AppShell({
   const [quickQuery, setQuickQuery] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const setPlayerPatch = usePlayerStore((s) => s.setStatePatch);
   const resolvedTheme = useThemeStore((s) => s.resolved);
   const toggleLightDark = useThemeStore((s) => s.toggleLightDark);
 
@@ -128,11 +126,9 @@ export function AppShell({
 
   useEffect(() => {
     if (settingsQuery.data?.settings.defaultPlaybackQuality) {
-      setPlayerPatch({
-        defaultPlaybackQuality: settingsQuery.data.settings.defaultPlaybackQuality,
-      });
+      audioEngine.syncDefaultPlaybackQuality(settingsQuery.data.settings.defaultPlaybackQuality);
     }
-  }, [settingsQuery.data?.settings.defaultPlaybackQuality, setPlayerPatch]);
+  }, [settingsQuery.data?.settings.defaultPlaybackQuality]);
 
   useEffect(() => {
     if (playerStateQuery.data?.state) {

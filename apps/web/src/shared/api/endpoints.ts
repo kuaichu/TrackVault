@@ -111,7 +111,7 @@ export const api = {
     apiRequest<{ artist: ArtistDetail }>(`/api/artists/${platform}/${encodeURIComponent(id)}`),
   getAlbumDetail: (platform: MusicPlatform, id: string) =>
     apiRequest<{ album: AlbumDetail }>(`/api/albums/${platform}/${encodeURIComponent(id)}`),
-  getPersonalFm: () => apiRequest<{ songs: Song[] }>("/api/fm"),
+  getPersonalFm: (signal?: AbortSignal) => apiRequest<{ songs: Song[] }>("/api/fm", { signal }),
   getDailyRecommend: () => apiRequest<{ songs: Song[] }>("/api/recommend/daily"),
   getCloudSongs: (params?: { offset?: number; limit?: number }) => {
     const qs = new URLSearchParams();
@@ -246,8 +246,12 @@ export const api = {
   updateSettings: (patch: UpdateUserSettingsInput) =>
     apiRequest<{ settings: UserSettings }>("/api/settings", { method: "PATCH", body: patch }),
   getPlayerState: () => apiRequest<{ state: PlayerState }>("/api/player-state"),
-  savePlayerState: (state: PlayerState) =>
-    apiRequest<{ state: PlayerState }>("/api/player-state", { method: "PUT", body: state }),
+  savePlayerState: (state: PlayerState, options?: { keepalive?: boolean }) =>
+    apiRequest<{ state: PlayerState }>("/api/player-state", {
+      method: "PUT",
+      body: state,
+      keepalive: options?.keepalive,
+    }),
   getPlayHistory: () => apiRequest<{ items: Song[] }>("/api/history/play"),
   recordPlayHistory: (song: Song) =>
     apiRequest<{ items: Song[] }>("/api/history/play", { method: "POST", body: { song } }),

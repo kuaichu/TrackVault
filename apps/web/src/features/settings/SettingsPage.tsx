@@ -14,7 +14,7 @@ import { type ThemePreference, useThemeStore } from "../../shared/store/theme-st
 import { toast } from "../../shared/store/toast-store.js";
 import { SegmentedTabs } from "../../shared/ui/primitives.js";
 import { BindingsPanel } from "../auth/BindingsPanel.js";
-import { usePlayerStore } from "../player/store/player-store.js";
+import { audioEngine } from "../player/engine/audio-engine.js";
 
 function SettingRow({
   label,
@@ -253,7 +253,6 @@ function AdminConsole() {
 
 export function SettingsPage({ user }: { user: UserSummary }) {
   const queryClient = useQueryClient();
-  const setPlayerPatch = usePlayerStore((s) => s.setStatePatch);
   const themePref = useThemeStore((s) => s.preference);
   const setThemePref = useThemeStore((s) => s.setPreference);
 
@@ -266,7 +265,7 @@ export function SettingsPage({ user }: { user: UserSummary }) {
     mutationFn: api.updateSettings,
     onSuccess: (res) => {
       queryClient.setQueryData(["settings"], res);
-      setPlayerPatch({ defaultPlaybackQuality: res.settings.defaultPlaybackQuality });
+      audioEngine.syncDefaultPlaybackQuality(res.settings.defaultPlaybackQuality);
       toast.success("已保存设置");
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "保存失败"),

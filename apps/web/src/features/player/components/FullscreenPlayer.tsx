@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   ChevronDown,
   Heart,
@@ -16,15 +16,14 @@ import { useEffect, useState } from "react";
 import { type QualityLevel, getQualityLabel, sanitizeCssUrl } from "#shared";
 import { AlbumLink, ArtistLinks } from "../../../entities/music/EntityLinks.js";
 import { api } from "../../../shared/api/endpoints.js";
-import { toast } from "../../../shared/store/toast-store.js";
+import { useToggleLikeMutation } from "../../../shared/hooks/use-toggle-like.js";
 import { CoverArt, PlatformBadge } from "../../../shared/ui/primitives.js";
-import { audioEngine } from "../engine/audio-engine.js";
+import { audioEngine, resolveEffectivePlaybackQuality } from "../engine/audio-engine.js";
 import { usePlayerStore } from "../store/player-store.js";
 import { LyricScroller } from "./LyricScroller.js";
 import { PlaybackProgressBar } from "./PlaybackProgressBar.js";
 
 export function FullscreenPlayer() {
-  const queryClient = useQueryClient();
   const open = usePlayerStore((s) => s.fullscreenOpen);
   const setOpen = usePlayerStore((s) => s.setFullscreenOpen);
   const setDrawerTab = usePlayerStore((s) => s.setDrawerTab);
@@ -45,7 +44,13 @@ export function FullscreenPlayer() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, setOpen]);
 
-  const { data: lyricData, isLoading } = useQuery({
+  const {
+    data: lyricData,
+    isLoading,
+    isError: lyricIsError,
+    error: lyricError,
+    refetch: refetchLyrics,
+  } = useQuery({
     queryKey: ["lyrics", currentTrack?.platform, currentTrack?.id],
     queryFn: () =>
       currentTrack ? api.getLyrics(currentTrack.platform, currentTrack.id, currentTrack.mediaId) : null,
@@ -60,30 +65,16 @@ export function FullscreenPlayer() {
     enabled: Boolean(open && currentTrack && canLike),
   });
 
-  const likeMutation = useMutation({
-    mutationFn: (nextLiked: boolean) => {
-      if (!currentTrack) throw new Error("无播放曲目");
-      return api.toggleSongLike(currentTrack.platform, currentTrack.id, nextLiked);
-    },
-    onSuccess: (res) => {
-      queryClient.setQueryData(["song-like", currentTrack?.platform, currentTrack?.id], res);
-      if (currentTrack?.platform === "netease") {
-        queryClient.setQueryData<{ ids: string[] }>(["liked-ids", "netease"], (prev) => {
-          const next = new Set(prev?.ids ?? []);
-          if (res.liked) next.add(currentTrack.id);
-          else next.delete(currentTrack.id);
-          return { ids: [...next] };
-        });
-      }
-      toast.success(res.liked ? "已喜欢" : "已取消喜欢");
-    },
-    onError: (err) => toast.error(err instanceof Error ? err.message : "操作失败"),
-  });
+  const likeMutation = useToggleLikeMutation();
 
   if (!open || !currentTrack) return null;
 
   const safeBgUrl = sanitizeCssUrl(currentTrack.coverUrl);
-  const activeQuality = activeQualityOverride ?? defaultPlaybackQuality;
+  const activeQuality = resolveEffectivePlaybackQuality(
+    currentTrack,
+    activeQualityOverride,
+    defaultPlaybackQuality,
+  );
   const availableQualities =
     currentTrack.availableQualities.length > 0
       ? currentTrack.availableQualities
@@ -221,7 +212,13 @@ export function FullscreenPlayer() {
             {canLike && (
               <button
                 type="button"
-                onClick={() => likeMutation.mutate(!likeData?.liked)}
+                onClick={() =>
+                  likeMutation.mutate({
+                    platform: currentTrack.platform,
+                    songId: currentTrack.id,
+                    nextLiked: !likeData?.liked,
+                  })
+                }
                 className={`mt-1 shrink-0 rounded-full p-2 transition-colors hover:bg-white/10 ${
                   likeData?.liked ? "text-[#fa2d48]" : "text-white/70"
                 }`}
@@ -239,6 +236,13 @@ export function FullscreenPlayer() {
               <button
                 type="button"
                 onClick={() => audioEngine.cyclePlaybackMode()}
+                title={
+                  playbackMode === "repeat-one"
+                    ? "单曲循环"
+                    : playbackMode === "shuffle"
+                      ? "随机播放"
+                      : "列表循环"
+                }
                 className="rounded-full p-2 text-white/65 transition-colors hover:bg-white/10 hover:text-white"
                 aria-label="切换播放模式"
               >
@@ -301,7 +305,15 @@ export function FullscreenPlayer() {
           }`}
         >
           <div className="min-h-0 flex-1 overflow-hidden">
-            <LyricScroller lines={lyricData?.lyrics.lines ?? []} loading={isLoading} large />
+            <LyricScroller
+              lines={lyricData?.lyrics.lines ?? []}
+              loading={isLoading}
+              error={
+                lyricIsError ? (lyricError instanceof Error ? lyricError.message : "歌词加载失败") : null
+              }
+              onRetry={() => void refetchLyrics()}
+              large
+            />
           </div>
 
           {/* Mobile compact bottom transport while viewing lyrics */}

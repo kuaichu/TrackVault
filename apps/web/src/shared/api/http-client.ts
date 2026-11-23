@@ -37,6 +37,7 @@ export async function apiRequest<T>(
     body?: unknown;
     signal?: AbortSignal;
     timeoutMs?: number;
+    keepalive?: boolean;
   } = {},
 ): Promise<T> {
   const timeoutMs = options.timeoutMs ?? 25_000;
@@ -75,6 +76,7 @@ export async function apiRequest<T>(
       headers,
       body: serializedBody,
       signal: controller.signal,
+      ...(options.keepalive ? { keepalive: true } : {}),
     });
   } catch (error) {
     if (callerSignal?.aborted && !timedOut) {

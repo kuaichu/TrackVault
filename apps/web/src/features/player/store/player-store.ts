@@ -12,9 +12,13 @@ export type RightDrawerTab = "queue" | "lyrics" | "comments";
 interface PlayerStateStore {
   currentTrack: Song | null;
   queue: Song[];
+  /** Tracks explicitly scheduled via "下一首播放", prioritized over shuffle selection. */
+  priorityQueue: Song[];
   isPlaying: boolean;
   isLoading: boolean;
   volume: number;
+  muted: boolean;
+  lastNonZeroVolume: number;
   playbackMode: PlaybackMode;
   /** Playback quality preference synced from server settings; strictly isolated from download quality. */
   defaultPlaybackQuality: PreferenceQualityLevel;
@@ -25,6 +29,11 @@ interface PlayerStateStore {
   drawerOpen: boolean;
   drawerTab: RightDrawerTab;
   hydrated: boolean;
+  /** Personal FM session state driven centrally by AudioEngine. */
+  fmMode: boolean;
+  fmQueue: Song[];
+  fmLoading: boolean;
+  fmError: string | null;
 
   setStatePatch(patch: Partial<PlayerStateStore>): void;
   addToQueue(song: Song): void;
@@ -41,9 +50,12 @@ interface PlayerStateStore {
 const INITIAL_PLAYER_STATE = {
   currentTrack: null as Song | null,
   queue: [] as Song[],
+  priorityQueue: [] as Song[],
   isPlaying: false,
   isLoading: false,
   volume: 0.85,
+  muted: false,
+  lastNonZeroVolume: 0.85,
   playbackMode: "sequential" as PlaybackMode,
   defaultPlaybackQuality: "exhigh" as PreferenceQualityLevel,
   activeQualityOverride: null as QualityLevel | null,
@@ -52,6 +64,10 @@ const INITIAL_PLAYER_STATE = {
   drawerOpen: false,
   drawerTab: "queue" as RightDrawerTab,
   hydrated: false,
+  fmMode: false,
+  fmQueue: [] as Song[],
+  fmLoading: false,
+  fmError: null as string | null,
 };
 
 /**
@@ -78,29 +94,33 @@ export const usePlayerStore = create<PlayerStateStore>((set) => ({
   insertNextInQueue(song) {
     set((state) => {
       const targetKey = getSongKey(song);
-      const filtered = state.queue.filter((item) => getSongKey(item) !== targetKey);
+      const filteredQueue = state.queue.filter((item) => getSongKey(item) !== targetKey);
+      const filteredPriority = state.priorityQueue.filter((item) => getSongKey(item) !== targetKey);
+      const nextPriority = [song, ...filteredPriority];
+
       if (!state.currentTrack) {
-        return { queue: [song, ...filtered] };
+        return { queue: [song, ...filteredQueue], priorityQueue: nextPriority };
       }
       const curKey = getSongKey(state.currentTrack);
-      const curIdx = filtered.findIndex((item) => getSongKey(item) === curKey);
+      const curIdx = filteredQueue.findIndex((item) => getSongKey(item) === curKey);
       if (curIdx < 0) {
-        return { queue: [song, ...filtered] };
+        return { queue: [song, ...filteredQueue], priorityQueue: nextPriority };
       }
-      const next = [...filtered];
-      next.splice(curIdx + 1, 0, song);
-      return { queue: next };
+      const nextQueue = [...filteredQueue];
+      nextQueue.splice(curIdx + 1, 0, song);
+      return { queue: nextQueue, priorityQueue: nextPriority };
     });
   },
 
   removeFromQueue(songKey) {
     set((state) => ({
       queue: state.queue.filter((item) => getSongKey(item) !== songKey),
+      priorityQueue: state.priorityQueue.filter((item) => getSongKey(item) !== songKey),
     }));
   },
 
   clearQueue() {
-    set({ queue: [] });
+    set({ queue: [], priorityQueue: [], fmMode: false });
   },
 
   setFullscreenOpen(open) {
@@ -125,7 +145,7 @@ export const usePlayerStore = create<PlayerStateStore>((set) => ({
   },
 
   reset() {
-    set({ ...INITIAL_PLAYER_STATE, queue: [] });
+    set({ ...INITIAL_PLAYER_STATE, queue: [], priorityQueue: [], fmQueue: [] });
   },
 }));
 

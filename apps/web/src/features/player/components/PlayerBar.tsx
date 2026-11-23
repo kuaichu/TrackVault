@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   ChevronUp,
   Heart,
@@ -19,18 +19,19 @@ import { useEffect, useState } from "react";
 import { type QualityLevel, getQualityLabel } from "#shared";
 import { ArtistLinks } from "../../../entities/music/EntityLinks.js";
 import { api } from "../../../shared/api/endpoints.js";
-import { toast } from "../../../shared/store/toast-store.js";
+import { useToggleLikeMutation } from "../../../shared/hooks/use-toggle-like.js";
 import { CoverArt, PlatformBadge } from "../../../shared/ui/primitives.js";
-import { audioEngine } from "../engine/audio-engine.js";
+import { audioEngine, resolveEffectivePlaybackQuality } from "../engine/audio-engine.js";
 import { usePlayerStore } from "../store/player-store.js";
 import { MiniProgressStripe, PlaybackProgressBar } from "./PlaybackProgressBar.js";
 
 export function PlayerBar() {
-  const queryClient = useQueryClient();
   const currentTrack = usePlayerStore((s) => s.currentTrack);
+  const hasQueue = usePlayerStore((s) => s.queue.length > 0);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const isLoading = usePlayerStore((s) => s.isLoading);
   const volume = usePlayerStore((s) => s.volume);
+  const muted = usePlayerStore((s) => s.muted);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
   const defaultPlaybackQuality = usePlayerStore((s) => s.defaultPlaybackQuality);
   const activeQualityOverride = usePlayerStore((s) => s.activeQualityOverride);
@@ -57,27 +58,15 @@ export function PlayerBar() {
     enabled: Boolean(currentTrack && canLike),
   });
 
-  const likeMutation = useMutation({
-    mutationFn: (nextLiked: boolean) => {
-      if (!currentTrack) throw new Error("无播放曲目");
-      return api.toggleSongLike(currentTrack.platform, currentTrack.id, nextLiked);
-    },
-    onSuccess: (res) => {
-      queryClient.setQueryData(["song-like", currentTrack?.platform, currentTrack?.id], res);
-      if (currentTrack?.platform === "netease") {
-        queryClient.setQueryData<{ ids: string[] }>(["liked-ids", "netease"], (prev) => {
-          const next = new Set(prev?.ids ?? []);
-          if (res.liked) next.add(currentTrack.id);
-          else next.delete(currentTrack.id);
-          return { ids: [...next] };
-        });
-      }
-      toast.success(res.liked ? "已喜欢" : "已取消喜欢");
-    },
-    onError: (err) => toast.error(err instanceof Error ? err.message : "操作失败"),
-  });
+  const likeMutation = useToggleLikeMutation();
 
-  const activeQuality = activeQualityOverride ?? defaultPlaybackQuality;
+  const canControl = Boolean(currentTrack) || hasQueue;
+  const effectiveVolume = muted ? 0 : volume;
+  const activeQuality = resolveEffectivePlaybackQuality(
+    currentTrack,
+    activeQualityOverride,
+    defaultPlaybackQuality,
+  );
   const availableQualities =
     currentTrack && currentTrack.availableQualities.length > 0
       ? currentTrack.availableQualities
@@ -125,10 +114,16 @@ export function PlayerBar() {
         )}
 
         <div className="flex shrink-0 items-center gap-1">
-          {canLike && (
+          {canLike && currentTrack && (
             <button
               type="button"
-              onClick={() => likeMutation.mutate(!likeData?.liked)}
+              onClick={() =>
+                likeMutation.mutate({
+                  platform: currentTrack.platform,
+                  songId: currentTrack.id,
+                  nextLiked: !likeData?.liked,
+                })
+              }
               className={`rounded-full p-2 transition-colors ${
                 likeData?.liked ? "text-[var(--tv-accent)]" : "text-[var(--tv-text-muted)]"
               }`}
@@ -141,7 +136,7 @@ export function PlayerBar() {
           <button
             type="button"
             onClick={() => void audioEngine.togglePlay()}
-            disabled={!currentTrack}
+            disabled={!canControl}
             aria-label={isPlaying ? "暂停" : "播放"}
             className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--tv-contrast-bg)] text-[var(--tv-contrast-fg)] active:scale-95 disabled:opacity-35"
           >
@@ -157,7 +152,7 @@ export function PlayerBar() {
           <button
             type="button"
             onClick={() => void audioEngine.playNext()}
-            disabled={!currentTrack}
+            disabled={!canControl}
             className="rounded-full p-2 text-[var(--tv-text)] disabled:opacity-35"
             aria-label="下一首"
           >
@@ -229,7 +224,13 @@ export function PlayerBar() {
               {canLike && (
                 <button
                   type="button"
-                  onClick={() => likeMutation.mutate(!likeData?.liked)}
+                  onClick={() =>
+                    likeMutation.mutate({
+                      platform: currentTrack.platform,
+                      songId: currentTrack.id,
+                      nextLiked: !likeData?.liked,
+                    })
+                  }
                   className={`rounded-full p-1.5 transition-colors ${
                     likeData?.liked
                       ? "text-[var(--tv-accent)]"
@@ -282,7 +283,8 @@ export function PlayerBar() {
             <button
               type="button"
               onClick={() => void audioEngine.playPrevious()}
-              className="rounded-full p-1.5 text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)]"
+              disabled={!canControl}
+              className="rounded-full p-1.5 text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)] disabled:opacity-35"
               aria-label="上一首"
             >
               <SkipBack className="h-4 w-4 fill-current" />
@@ -291,7 +293,7 @@ export function PlayerBar() {
             <button
               type="button"
               onClick={() => void audioEngine.togglePlay()}
-              disabled={!currentTrack}
+              disabled={!canControl}
               aria-label={isPlaying ? "暂停" : "播放"}
               className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--tv-contrast-bg)] text-[var(--tv-contrast-fg)] transition-transform hover:scale-105 hover:bg-[var(--tv-contrast-bg-hover)] active:scale-95 disabled:opacity-35"
             >
@@ -307,7 +309,8 @@ export function PlayerBar() {
             <button
               type="button"
               onClick={() => void audioEngine.playNext()}
-              className="rounded-full p-1.5 text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)]"
+              disabled={!canControl}
+              className="rounded-full p-1.5 text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)] disabled:opacity-35"
               aria-label="下一首"
             >
               <SkipForward className="h-4 w-4 fill-current" />
@@ -406,22 +409,26 @@ export function PlayerBar() {
           <div className="ml-2 flex items-center gap-1.5">
             <button
               type="button"
-              onClick={() => audioEngine.setVolume(volume > 0 ? 0 : 0.85)}
+              onClick={() => audioEngine.toggleMute()}
               className="rounded-md p-1.5 text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
-              aria-label="静音切换"
+              aria-label={muted || effectiveVolume === 0 ? "取消静音" : "静音切换"}
             >
-              {volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+              {muted || effectiveVolume === 0 ? (
+                <VolumeX className="h-4 w-4" />
+              ) : (
+                <Volume2 className="h-4 w-4" />
+              )}
             </button>
             <div className="group relative flex h-5 w-20 items-center lg:w-24">
               <div className="relative h-[4px] w-full overflow-hidden rounded-full bg-[var(--tv-border-strong)]">
                 <div
                   className="absolute inset-y-0 left-0 rounded-full bg-[var(--tv-text-muted)] transition-colors group-hover:bg-[var(--tv-accent)]"
-                  style={{ width: `${Math.round(volume * 100)}%` }}
+                  style={{ width: `${Math.round(effectiveVolume * 100)}%` }}
                 />
               </div>
               <div
                 className="pointer-events-none absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--tv-text)] opacity-0 shadow-sm transition-opacity duration-150 group-hover:opacity-100"
-                style={{ left: `${Math.round(volume * 100)}%` }}
+                style={{ left: `${Math.round(effectiveVolume * 100)}%` }}
               />
               <input
                 type="range"
@@ -429,7 +436,7 @@ export function PlayerBar() {
                 min={0}
                 max={1}
                 step={0.02}
-                value={volume}
+                value={effectiveVolume}
                 onChange={(e) => audioEngine.setVolume(Number(e.target.value))}
                 className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
               />

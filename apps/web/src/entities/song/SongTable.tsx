@@ -18,6 +18,7 @@ import { type DownloadMode, type QualityLevel, type Song, getQualityLabel, getSo
 import { audioEngine } from "../../features/player/engine/audio-engine.js";
 import { usePlayerStore } from "../../features/player/store/player-store.js";
 import { api } from "../../shared/api/endpoints.js";
+import { useLikedIdsQuery, useToggleLikeMutation } from "../../shared/hooks/use-toggle-like.js";
 import { toast } from "../../shared/store/toast-store.js";
 import { CoverArt, EmptyState, EqualizerBars, PlatformBadge } from "../../shared/ui/primitives.js";
 import { AlbumLink, ArtistLinks } from "../music/EntityLinks.js";
@@ -43,8 +44,6 @@ export function SongTable({
   const queryClient = useQueryClient();
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
-  const addToQueue = usePlayerStore((s) => s.addToQueue);
-  const insertNextInQueue = usePlayerStore((s) => s.insertNextInQueue);
 
   const hasNeteaseSongs = songs.some((s) => s.platform === "netease");
 
@@ -53,13 +52,7 @@ export function SongTable({
     queryFn: () => api.getSettings(),
   });
 
-  const { data: likedIdsData } = useQuery({
-    queryKey: ["liked-ids", "netease"],
-    queryFn: () => api.getLikedSongIds("netease"),
-    enabled: hasNeteaseSongs,
-    staleTime: 60_000,
-    retry: false,
-  });
+  const { data: likedIdsData } = useLikedIdsQuery("netease", hasNeteaseSongs);
 
   const [downloadMode, setDownloadMode] = useState<DownloadMode>("tagged_server");
   const [openMenuKey, setOpenMenuKey] = useState<string | null>(null);
@@ -100,21 +93,7 @@ export function SongTable({
     },
   });
 
-  const likeMutation = useMutation({
-    mutationFn: (vars: { song: Song; nextLiked: boolean }) =>
-      api.toggleSongLike(vars.song.platform, vars.song.id, vars.nextLiked),
-    onSuccess: (res, vars) => {
-      toast.success(res.liked ? `已喜欢「${vars.song.title}」` : `已取消喜欢「${vars.song.title}」`);
-      queryClient.setQueryData<{ ids: string[] }>(["liked-ids", "netease"], (prev) => {
-        const next = new Set(prev?.ids ?? []);
-        if (res.liked) next.add(vars.song.id);
-        else next.delete(vars.song.id);
-        return { ids: [...next] };
-      });
-      queryClient.setQueryData(["song-like", vars.song.platform, vars.song.id], res);
-    },
-    onError: (err) => toast.error(err instanceof Error ? err.message : "操作失败"),
-  });
+  const likeMutation = useToggleLikeMutation();
 
   const addToPlaylistMutation = useMutation({
     mutationFn: (vars: { playlistId: string; playlistName: string; song: Song }) =>
@@ -300,7 +279,14 @@ export function SongTable({
                 {song.platform === "netease" && (
                   <button
                     type="button"
-                    onClick={() => likeMutation.mutate({ song, nextLiked: !isLiked })}
+                    onClick={() =>
+                      likeMutation.mutate({
+                        platform: song.platform,
+                        songId: song.id,
+                        nextLiked: !isLiked,
+                        songTitle: song.title,
+                      })
+                    }
                     title={isLiked ? "取消喜欢" : "红心喜欢"}
                     aria-label={isLiked ? "取消喜欢" : "红心喜欢"}
                     className={`rounded-md p-1.5 transition-all ${
@@ -363,7 +349,7 @@ export function SongTable({
                           <button
                             type="button"
                             onClick={() => {
-                              insertNextInQueue(song);
+                              audioEngine.insertNextInQueue(song);
                               toast.info(`已设为下一首播放：${song.title}`);
                               setOpenMenuKey(null);
                             }}
@@ -376,7 +362,7 @@ export function SongTable({
                           <button
                             type="button"
                             onClick={() => {
-                              addToQueue(song);
+                              audioEngine.addToQueue(song);
                               toast.info(`已添加到播放队列：${song.title}`);
                               setOpenMenuKey(null);
                             }}
@@ -404,7 +390,12 @@ export function SongTable({
                             <button
                               type="button"
                               onClick={() => {
-                                likeMutation.mutate({ song, nextLiked: !isLiked });
+                                likeMutation.mutate({
+                                  platform: song.platform,
+                                  songId: song.id,
+                                  nextLiked: !isLiked,
+                                  songTitle: song.title,
+                                });
                                 setOpenMenuKey(null);
                               }}
                               className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] hover:bg-[var(--tv-surface-hover)] sm:hidden"
