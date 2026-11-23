@@ -176,8 +176,13 @@ export class CredentialRepository {
       ? this.#vault.encrypt(input.cookie.trim())
       : (existing?.encrypted_cookie ?? "");
 
+    if (!encrypted) {
+      this.#sqlite.db.prepare("DELETE FROM system_fallback_credentials WHERE platform = ?").run(platform);
+      return { platform, configured: false, enabled: false, updatedAt: null };
+    }
+
     const updatedAt = Date.now();
-    const effectiveEnabled = Boolean(input.enabled) && Boolean(encrypted);
+    const effectiveEnabled = Boolean(input.enabled);
 
     this.#sqlite.db
       .prepare(

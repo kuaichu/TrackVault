@@ -169,6 +169,15 @@ export class QqMusicAdapter implements MusicProviderAdapter {
     this.#qrAuth = new QqQrAuthManager(http);
   }
 
+  invalidateScope(scopeKey: string): void {
+    this.#discoverCache.invalidateScope(scopeKey);
+    this.#recommendedPlaylistsCache.invalidateScope(scopeKey);
+    this.#chartDetailCache.invalidateScope(scopeKey);
+    this.#artistCache.invalidateScope(scopeKey);
+    this.#albumCache.invalidateScope(scopeKey);
+    this.#playlistCache.invalidateScope(scopeKey);
+  }
+
   #parseCookie(auth: ProviderAuthContext): Record<string, string> | undefined {
     if (!auth.cookie?.trim()) return undefined;
     const parsed = parseQqCookie(auth.cookie);

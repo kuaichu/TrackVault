@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Moon, Sun } from "lucide-react";
 import { type FormEvent, useState } from "react";
+import type { AuthStatus } from "#shared";
 import { api } from "../../shared/api/endpoints.js";
 import { useThemeStore } from "../../shared/store/theme-store.js";
 import { toast } from "../../shared/store/toast-store.js";
@@ -24,8 +25,13 @@ export function AuthGatePage({ initialized }: { initialized: boolean }) {
       }
       return api.login({ username, password });
     },
-    onSuccess: () => {
+    onSuccess: (res) => {
       toast.success(initialized ? "欢迎回来" : "管理员账号已就绪");
+      queryClient.setQueryData<AuthStatus>(["auth-status"], {
+        initialized: true,
+        authenticated: true,
+        user: res.user,
+      });
       void queryClient.invalidateQueries({ queryKey: ["auth-status"] });
     },
     onError: (err) => {

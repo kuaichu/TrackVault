@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import type { UserSummary } from "#shared";
+import type { AuthStatus, UserSummary } from "#shared";
 import { FullscreenPlayer } from "../features/player/components/FullscreenPlayer.js";
 import { PlayerBar } from "../features/player/components/PlayerBar.js";
 import { RightDrawer } from "../features/player/components/RightDrawer.js";
@@ -65,7 +65,15 @@ const MOBILE_TABS = [
   { to: "/playlists", label: "歌单", icon: ListMusic },
 ] as const;
 
-export function AppShell({ user, children }: { user: UserSummary; children: ReactNode }) {
+export function AppShell({
+  user,
+  children,
+  onSessionCleared,
+}: {
+  user: UserSummary;
+  children: ReactNode;
+  onSessionCleared?: () => void;
+}) {
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -87,6 +95,16 @@ export function AppShell({ user, children }: { user: UserSummary; children: Reac
 
   // Connect single SSE stream for real-time job progress updates
   useJobEvents(true);
+
+  // Bind play-history listener strictly to the active per-user QueryClient lifecycle
+  useEffect(() => {
+    audioEngine.setPlayHistoryListener((res) => {
+      queryClient.setQueryData(["play-history"], res);
+    });
+    return () => {
+      audioEngine.setPlayHistoryListener(null);
+    };
+  }, [queryClient]);
 
   const settingsQuery = useQuery({
     queryKey: ["settings"],
@@ -158,10 +176,22 @@ export function AppShell({ user, children }: { user: UserSummary; children: Reac
   const logoutMutation = useMutation({
     mutationFn: () => api.logout(),
     onSuccess: () => {
-      audioEngine.stop();
-      queryClient.clear();
       toast.info("已退出登录");
+      if (onSessionCleared) {
+        onSessionCleared();
+        return;
+      }
+      audioEngine.stop();
+      queryClient.setQueryData<AuthStatus>(["auth-status"], (prev) => ({
+        initialized: prev?.initialized ?? true,
+        authenticated: false,
+        user: null,
+      }));
+      queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth-status" });
       void queryClient.invalidateQueries({ queryKey: ["auth-status"] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "退出登录失败，请重试");
     },
   });
 

@@ -52,7 +52,7 @@ export class AesGcmCredentialVault implements CredentialVault {
 
   encrypt(plaintext: string): string {
     const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv("aes-256-gcm", this.#key, iv);
+    const cipher = crypto.createCipheriv("aes-256-gcm", this.#key, iv, { authTagLength: 16 });
     const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
     const authTag = cipher.getAuthTag();
     return `${PREFIX}${iv.toString("base64url")}.${authTag.toString("base64url")}.${encrypted.toString("base64url")}`;
@@ -68,14 +68,17 @@ export class AesGcmCredentialVault implements CredentialVault {
       throw new Error("Malformed encrypted credential payload");
     }
     const [ivB64, tagB64, dataB64] = parts;
-    if (!ivB64 || !tagB64 || !dataB64) {
+    if (!ivB64 || !tagB64 || dataB64 === undefined) {
       throw new Error("Incomplete encrypted credential payload");
     }
     const iv = Buffer.from(ivB64, "base64url");
     const authTag = Buffer.from(tagB64, "base64url");
+    if (iv.length !== 12 || authTag.length !== 16) {
+      throw new Error("Invalid encrypted credential IV or auth tag length");
+    }
     const data = Buffer.from(dataB64, "base64url");
 
-    const decipher = crypto.createDecipheriv("aes-256-gcm", this.#key, iv);
+    const decipher = crypto.createDecipheriv("aes-256-gcm", this.#key, iv, { authTagLength: 16 });
     decipher.setAuthTag(authTag);
     const decrypted = Buffer.concat([decipher.update(data), decipher.final()]);
     return decrypted.toString("utf8");

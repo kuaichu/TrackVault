@@ -1,4 +1,10 @@
-export const ALLOWED_COVER_HOST_SUFFIXES = ["music.126.net", "gtimg.cn", "qpic.cn", "y.qq.com"] as const;
+export const ALLOWED_COVER_HOST_SUFFIXES = [
+  "music.126.net",
+  "gtimg.cn",
+  "qpic.cn",
+  "y.qq.com",
+  "qlogo.cn",
+] as const;
 
 export function parseSafeHttpUrl(raw: string | null | undefined): URL | null {
   if (!raw) return null;
@@ -34,10 +40,14 @@ export function isAllowedCoverHost(hostname: string): boolean {
 export function normalizeCoverUrl(raw: string | null | undefined, size = 400): string | undefined {
   const parsed = parseSafeHttpUrl(raw);
   if (!parsed) return undefined;
+  if (!isAllowedCoverHost(parsed.hostname)) {
+    return undefined;
+  }
   if (parsed.protocol === "http:") {
     parsed.protocol = "https:";
   }
-  if (parsed.hostname.toLowerCase().endsWith("music.126.net")) {
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  if (host === "music.126.net" || host.endsWith(".music.126.net")) {
     parsed.searchParams.set("param", `${size}y${size}`);
   }
   return parsed.toString();

@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import type { AuthStatus, UserSummary } from "#shared";
 import { AlbumDetailPage } from "../features/album/AlbumDetailPage.js";
 import { ArtistDetailPage } from "../features/artist/ArtistDetailPage.js";
 import { AuthGatePage } from "../features/auth/AuthGatePage.js";
@@ -10,84 +11,165 @@ import { DownloadsPage } from "../features/downloads/DownloadsPage.js";
 import { PersonalFmPage } from "../features/fm/PersonalFmPage.js";
 import { CloudPage, HistoryPage } from "../features/library/CloudAndHistoryPage.js";
 import { PlaylistDetailPage, PlaylistsPage } from "../features/library/PlaylistsPage.js";
+import { audioEngine } from "../features/player/engine/audio-engine.js";
 import { SearchPage } from "../features/search/SearchPage.js";
 import { SettingsPage } from "../features/settings/SettingsPage.js";
 import { TransferPage } from "../features/transfer/TransferPage.js";
 import { api } from "../shared/api/endpoints.js";
-import { setUnauthorizedHandler } from "../shared/api/http-client.js";
+import { ApiClientError, setUnauthorizedHandler } from "../shared/api/http-client.js";
 import { ToastContainer } from "../shared/ui/primitives.js";
 import { AppShell } from "./AppShell.js";
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 30_000,
-      retry: 1,
-      refetchOnWindowFocus: false,
+export function createAppQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 30_000,
+        retry: (failureCount, error) => {
+          if (error instanceof ApiClientError && error.status >= 400 && error.status < 500) {
+            return false;
+          }
+          return failureCount < 1;
+        },
+        refetchOnWindowFocus: false,
+      },
     },
-  },
-});
+  });
+}
 
-function AuthenticatedApp() {
-  const qc = useQueryClient();
+function UserSessionBoundary({
+  user,
+  onSessionCleared,
+}: {
+  user: UserSummary;
+  onSessionCleared: () => void;
+}) {
+  const [userQueryClient] = useState(() => createAppQueryClient());
 
   useEffect(() => {
-    setUnauthorizedHandler(() => {
-      void qc.invalidateQueries({ queryKey: ["auth-status"] });
-    });
+    return () => {
+      void userQueryClient.cancelQueries();
+      userQueryClient.clear();
+    };
+  }, [userQueryClient]);
+
+  return (
+    <QueryClientProvider client={userQueryClient}>
+      <AppShell user={user} onSessionCleared={onSessionCleared}>
+        <Routes>
+          <Route path="/discover" element={<DiscoverPage />} />
+          <Route path="/charts" element={<ChartsPage />} />
+          <Route path="/charts/:platform/:id" element={<ChartDetailPage />} />
+          <Route path="/fm" element={<PersonalFmPage />} />
+          <Route path="/search" element={<SearchPage />} />
+          <Route path="/artist/:platform/:id" element={<ArtistDetailPage />} />
+          <Route path="/album/:platform/:id" element={<AlbumDetailPage />} />
+          <Route path="/playlists" element={<PlaylistsPage />} />
+          <Route path="/playlists/:platform/:id" element={<PlaylistDetailPage />} />
+          <Route path="/cloud" element={<CloudPage />} />
+          <Route path="/history" element={<HistoryPage />} />
+          <Route path="/downloads" element={<DownloadsPage />} />
+          <Route path="/transfer" element={<TransferPage />} />
+          <Route path="/settings" element={<SettingsPage user={user} />} />
+          <Route path="*" element={<Navigate to="/discover" replace />} />
+        </Routes>
+      </AppShell>
+    </QueryClientProvider>
+  );
+}
+
+function AuthenticatedApp() {
+  const authQueryClient = useQueryClient();
+  const prevUserIdRef = useRef<string | null>(null);
+
+  const clearAuthSession = useCallback(() => {
+    audioEngine.stop();
+    authQueryClient.setQueryData<AuthStatus>(["auth-status"], (prev) => ({
+      initialized: prev?.initialized ?? true,
+      authenticated: false,
+      user: null,
+    }));
+    void authQueryClient.invalidateQueries({ queryKey: ["auth-status"] });
+  }, [authQueryClient]);
+
+  useEffect(() => {
+    setUnauthorizedHandler(clearAuthSession);
     return () => setUnauthorizedHandler(null);
-  }, [qc]);
+  }, [clearAuthSession]);
 
   const authQuery = useQuery({
     queryKey: ["auth-status"],
-    queryFn: () => api.getAuthStatus(),
+    queryFn: ({ signal }) => api.getAuthStatus(signal),
     staleTime: 60_000,
     retry: false,
   });
 
+  const activeUserId = authQuery.data?.authenticated ? (authQuery.data.user?.id ?? null) : null;
+  useEffect(() => {
+    const prev = prevUserIdRef.current;
+    if (prev !== null && prev !== activeUserId) {
+      audioEngine.stop();
+    }
+    prevUserIdRef.current = activeUserId;
+  }, [activeUserId]);
+
   if (authQuery.isLoading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-[var(--tv-bg)] text-sm text-[var(--tv-text-muted)]">
+      <div className="flex h-[100dvh] items-center justify-center bg-[var(--tv-bg)] text-sm text-[var(--tv-text-muted)]">
         正在载入曲库...
       </div>
     );
   }
 
-  const status = authQuery.data;
-  if (!status || !status.authenticated || !status.user) {
-    return <AuthGatePage initialized={Boolean(status?.initialized)} />;
+  if (authQuery.isError || !authQuery.data) {
+    const message = authQuery.error instanceof Error ? authQuery.error.message : "无法获取服务认证状态。";
+    return (
+      <div className="flex h-[100dvh] flex-col items-center justify-center gap-4 bg-[var(--tv-bg)] px-6 text-center">
+        <div className="space-y-1.5">
+          <h1 className="text-base font-semibold text-[var(--tv-text)]">无法连接 TrackVault 服务</h1>
+          <p className="max-w-sm text-xs text-[var(--tv-text-muted)]">{message}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void authQuery.refetch()}
+          className="rounded-lg bg-[var(--tv-accent)] px-4 py-2 text-xs font-medium text-[var(--tv-accent-fg)] transition-colors hover:bg-[var(--tv-accent-hover)]"
+        >
+          重试连接
+        </button>
+      </div>
+    );
   }
 
+  const status = authQuery.data;
+  if (!status.authenticated || !status.user) {
+    return <AuthGatePage initialized={status.initialized} />;
+  }
+
+  return <UserSessionBoundary key={status.user.id} user={status.user} onSessionCleared={clearAuthSession} />;
+}
+
+export function AppContent() {
+  const [authQueryClient] = useState(() => createAppQueryClient());
+
+  useEffect(() => {
+    return () => {
+      void authQueryClient.cancelQueries();
+      authQueryClient.clear();
+    };
+  }, [authQueryClient]);
+
   return (
-    <AppShell user={status.user}>
-      <Routes>
-        <Route path="/discover" element={<DiscoverPage />} />
-        <Route path="/charts" element={<ChartsPage />} />
-        <Route path="/charts/:platform/:id" element={<ChartDetailPage />} />
-        <Route path="/fm" element={<PersonalFmPage />} />
-        <Route path="/search" element={<SearchPage />} />
-        <Route path="/artist/:platform/:id" element={<ArtistDetailPage />} />
-        <Route path="/album/:platform/:id" element={<AlbumDetailPage />} />
-        <Route path="/playlists" element={<PlaylistsPage />} />
-        <Route path="/playlists/:platform/:id" element={<PlaylistDetailPage />} />
-        <Route path="/cloud" element={<CloudPage />} />
-        <Route path="/history" element={<HistoryPage />} />
-        <Route path="/downloads" element={<DownloadsPage />} />
-        <Route path="/transfer" element={<TransferPage />} />
-        <Route path="/settings" element={<SettingsPage user={status.user} />} />
-        <Route path="*" element={<Navigate to="/discover" replace />} />
-      </Routes>
-    </AppShell>
+    <QueryClientProvider client={authQueryClient}>
+      <AuthenticatedApp />
+      <ToastContainer />
+    </QueryClientProvider>
   );
 }
 
 export function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <AuthenticatedApp />
-        <ToastContainer />
-      </BrowserRouter>
-    </QueryClientProvider>
+    <BrowserRouter>
+      <AppContent />
+    </BrowserRouter>
   );
 }

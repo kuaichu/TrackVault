@@ -44,7 +44,7 @@ import { apiRequest } from "./http-client.js";
 
 export const api = {
   // Auth & Members
-  getAuthStatus: () => apiRequest<AuthStatus>("/api/auth/status"),
+  getAuthStatus: (signal?: AbortSignal) => apiRequest<AuthStatus>("/api/auth/status", { signal }),
   setupAdmin: (input: SetupAdminInput) =>
     apiRequest<{ user: UserSummary }>("/api/auth/setup", { method: "POST", body: input }),
   login: (input: LoginInput) =>

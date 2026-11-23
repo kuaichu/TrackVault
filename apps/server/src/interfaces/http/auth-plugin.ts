@@ -26,18 +26,19 @@ export function requireAdminActor(request: FastifyRequest): ActorContext {
   return actor;
 }
 
+function resolveCookieSecure(request: FastifyRequest, config: ServerConfig): boolean {
+  if (config.cookieSecure === "true") return true;
+  if (config.cookieSecure === "false") return false;
+  return request.protocol === "https";
+}
+
 export function setSessionCookie(
   reply: FastifyReply,
   request: FastifyRequest,
   token: string,
   config: ServerConfig,
 ): void {
-  const isSecure =
-    config.cookieSecure === "true"
-      ? true
-      : config.cookieSecure === "false"
-        ? false
-        : request.protocol === "https";
+  const isSecure = resolveCookieSecure(request, config);
 
   reply.setCookie(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
@@ -48,10 +49,11 @@ export function setSessionCookie(
   });
 }
 
-export function clearSessionCookie(reply: FastifyReply): void {
+export function clearSessionCookie(reply: FastifyReply, request: FastifyRequest, config: ServerConfig): void {
   reply.clearCookie(SESSION_COOKIE_NAME, {
     httpOnly: true,
     sameSite: "lax",
+    secure: resolveCookieSecure(request, config),
     path: "/",
   });
 }

@@ -18,6 +18,18 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
   unauthorizedHandler = handler;
 }
 
+function createAbortError(reason?: unknown): Error {
+  if (reason instanceof Error && reason.name === "AbortError") {
+    return reason;
+  }
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("The operation was aborted.", "AbortError");
+  }
+  const err = new Error("The operation was aborted.");
+  err.name = "AbortError";
+  return err;
+}
+
 export async function apiRequest<T>(
   url: string,
   options: {
@@ -28,8 +40,25 @@ export async function apiRequest<T>(
   } = {},
 ): Promise<T> {
   const timeoutMs = options.timeoutMs ?? 25_000;
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+  const controller = new AbortController();
+  let timedOut = false;
+
+  const callerSignal = options.signal;
+  const onCallerAbort = () => {
+    controller.abort(callerSignal?.reason);
+  };
+
+  if (callerSignal) {
+    if (callerSignal.aborted) {
+      throw createAbortError(callerSignal.reason);
+    }
+    callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+  }
+
+  const timeoutId = globalThis.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
 
   const headers: Record<string, string> = {};
   let serializedBody: string | undefined;
@@ -45,13 +74,24 @@ export async function apiRequest<T>(
       credentials: "include",
       headers,
       body: serializedBody,
-      signal,
+      signal: controller.signal,
     });
   } catch (error) {
-    if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-      throw new ApiClientError("UPSTREAM_TIMEOUT", "请求超时或已取消。", 504);
+    if (callerSignal?.aborted && !timedOut) {
+      throw createAbortError(callerSignal.reason ?? error);
+    }
+    if (
+      timedOut ||
+      (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError"))
+    ) {
+      throw new ApiClientError("UPSTREAM_TIMEOUT", "请求超时，请稍后重试。", 504);
     }
     throw new ApiClientError("UPSTREAM_ERROR", "网络连接失败，请检查服务是否在线。", 0);
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+    if (callerSignal) {
+      callerSignal.removeEventListener("abort", onCallerAbort);
+    }
   }
 
   const text = await response.text();
@@ -75,7 +115,9 @@ export async function apiRequest<T>(
           : "INTERNAL_ERROR";
     const message = parsedErr.success ? parsedErr.data.error.message : `请求失败 (HTTP ${response.status})`;
 
-    if (response.status === 401 && !url.startsWith("/api/auth/")) {
+    // Only local TrackVault session expiration (UNAUTHORIZED) should clear login state —
+    // never log the user out on third-party platform cookie errors (401 CREDENTIAL_INVALID).
+    if (code === "UNAUTHORIZED" && !url.startsWith("/api/auth/")) {
       unauthorizedHandler?.();
     }
     throw new ApiClientError(code, message, response.status);

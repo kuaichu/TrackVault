@@ -35,26 +35,31 @@ interface PlayerStateStore {
   setDrawerOpen(open: boolean): void;
   setDrawerTab(tab: RightDrawerTab): void;
   toggleDrawerTab(tab: RightDrawerTab): void;
+  reset(): void;
 }
+
+const INITIAL_PLAYER_STATE = {
+  currentTrack: null as Song | null,
+  queue: [] as Song[],
+  isPlaying: false,
+  isLoading: false,
+  volume: 0.85,
+  playbackMode: "sequential" as PlaybackMode,
+  defaultPlaybackQuality: "exhigh" as PreferenceQualityLevel,
+  activeQualityOverride: null as QualityLevel | null,
+  playerError: null as string | null,
+  fullscreenOpen: false,
+  drawerOpen: false,
+  drawerTab: "queue" as RightDrawerTab,
+  hydrated: false,
+};
 
 /**
  * Low-frequency player metadata store.
  * NEVER holds `currentTime` or `bufferedTime` so 4Hz timeupdate events NEVER re-render the app shell or song lists.
  */
 export const usePlayerStore = create<PlayerStateStore>((set) => ({
-  currentTrack: null,
-  queue: [],
-  isPlaying: false,
-  isLoading: false,
-  volume: 0.85,
-  playbackMode: "sequential",
-  defaultPlaybackQuality: "exhigh",
-  activeQualityOverride: null,
-  playerError: null,
-  fullscreenOpen: false,
-  drawerOpen: false,
-  drawerTab: "queue",
-  hydrated: false,
+  ...INITIAL_PLAYER_STATE,
 
   setStatePatch(patch) {
     set(patch);
@@ -117,6 +122,10 @@ export const usePlayerStore = create<PlayerStateStore>((set) => ({
       }
       return { drawerOpen: true, drawerTab: tab };
     });
+  },
+
+  reset() {
+    set({ ...INITIAL_PLAYER_STATE, queue: [] });
   },
 }));
 

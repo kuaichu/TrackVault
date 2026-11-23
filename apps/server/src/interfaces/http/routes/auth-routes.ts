@@ -35,10 +35,14 @@ export function registerAuthRoutes(
 
   app.post(
     "/api/auth/setup",
-    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    {
+      config: {
+        rateLimit: { max: 10, timeWindow: "1 minute", keyGenerator: (req) => `ip:${req.ip}` },
+      },
+    },
     async (request, reply) => {
       const input = SetupAdminInputSchema.parse(request.body);
-      const { user, sessionToken } = authService.setupInitialAdmin(input);
+      const { user, sessionToken } = await authService.setupInitialAdmin(input);
       setSessionCookie(reply, request, sessionToken, config);
       return reply.code(201).send({ user });
     },
@@ -46,10 +50,14 @@ export function registerAuthRoutes(
 
   app.post(
     "/api/auth/login",
-    { config: { rateLimit: { max: 15, timeWindow: "1 minute" } } },
+    {
+      config: {
+        rateLimit: { max: 15, timeWindow: "1 minute", keyGenerator: (req) => `ip:${req.ip}` },
+      },
+    },
     async (request, reply) => {
       const input = LoginInputSchema.parse(request.body);
-      const { user, sessionToken } = authService.login(input);
+      const { user, sessionToken } = await authService.login(input);
       setSessionCookie(reply, request, sessionToken, config);
       return { user };
     },
@@ -57,7 +65,7 @@ export function registerAuthRoutes(
 
   app.post("/api/auth/logout", async (request, reply) => {
     authService.logout(request.cookies[SESSION_COOKIE_NAME]);
-    clearSessionCookie(reply);
+    clearSessionCookie(reply, request, config);
     return { ok: true };
   });
 
@@ -114,7 +122,7 @@ export function registerAuthRoutes(
   app.post("/api/admin/members", async (request, reply) => {
     const actor = requireAdminActor(request);
     const input = CreateMemberInputSchema.parse(request.body);
-    const member = authService.createMember(actor, input);
+    const member = await authService.createMember(actor, input);
     return reply.code(201).send({ member });
   });
 
@@ -122,7 +130,7 @@ export function registerAuthRoutes(
     const actor = requireAdminActor(request);
     const { id } = MemberParamSchema.parse(request.params);
     const input = UpdateMemberInputSchema.parse(request.body);
-    return { member: authService.updateMember(actor, id, input) };
+    return { member: await authService.updateMember(actor, id, input) };
   });
 
   app.delete("/api/admin/members/:id", async (request) => {
@@ -141,6 +149,6 @@ export function registerAuthRoutes(
     const actor = requireAdminActor(request);
     const { platform } = PlatformParamSchema.parse(request.params);
     const input = UpdateSystemFallbackInputSchema.parse(request.body);
-    return { fallback: authService.saveSystemFallback(actor, platform, input) };
+    return { fallback: await authService.saveSystemFallback(actor, platform, input) };
   });
 }

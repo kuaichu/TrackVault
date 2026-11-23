@@ -14,6 +14,7 @@ const EnvSchema = z.object({
   NETEASE_REAL_IP: z.string().trim().optional(),
   SESSION_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(14),
   COOKIE_SECURE: z.enum(["true", "false", "auto"]).default("auto"),
+  TRUST_PROXY: z.string().trim().default("false"),
   MAX_COVER_BYTES: z.coerce
     .number()
     .int()
@@ -44,11 +45,23 @@ export interface ServerConfig {
   neteaseRealIp?: string;
   sessionTtlMs: number;
   cookieSecure: "true" | "false" | "auto";
+  trustProxy: boolean | number;
   maxCoverBytes: number;
   maxDownloadAudioBytes: number;
   globalMaxConcurrentDownloads: number;
   globalMaxConcurrentJobs: number;
   upstreamTimeoutMs: number;
+}
+
+function parseTrustProxy(raw: string): boolean | number {
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized || normalized === "false" || normalized === "0") return false;
+  if (normalized === "true") return true;
+  if (/^\d+$/.test(normalized)) {
+    const hops = Number(normalized);
+    if (Number.isSafeInteger(hops) && hops > 0) return hops;
+  }
+  return false;
 }
 
 export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -71,6 +84,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     neteaseRealIp: parsed.NETEASE_REAL_IP || undefined,
     sessionTtlMs: parsed.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000,
     cookieSecure: parsed.COOKIE_SECURE,
+    trustProxy: parseTrustProxy(parsed.TRUST_PROXY),
     maxCoverBytes: parsed.MAX_COVER_BYTES,
     maxDownloadAudioBytes: parsed.MAX_DOWNLOAD_AUDIO_BYTES,
     globalMaxConcurrentDownloads: parsed.GLOBAL_MAX_CONCURRENT_DOWNLOADS,

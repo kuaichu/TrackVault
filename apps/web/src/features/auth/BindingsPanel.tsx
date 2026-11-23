@@ -20,13 +20,25 @@ function PlatformCard({
   const label = platform === "netease" ? "网易云音乐" : "QQ 音乐";
   const dotClass = platform === "netease" ? "bg-[var(--tv-netease)]" : "bg-[var(--tv-qq)]";
 
+  const invalidateAccountCaches = () => {
+    void queryClient.invalidateQueries({ queryKey: ["bindings"] });
+    void queryClient.invalidateQueries({ queryKey: ["playlists"] });
+    void queryClient.invalidateQueries({ queryKey: ["playlist-tracks"] });
+    void queryClient.invalidateQueries({ queryKey: ["liked-ids"] });
+    void queryClient.invalidateQueries({ queryKey: ["song-like"] });
+    void queryClient.invalidateQueries({ queryKey: ["discover"] });
+    void queryClient.invalidateQueries({ queryKey: ["daily-recommend"] });
+    void queryClient.invalidateQueries({ queryKey: ["personal-fm"] });
+    void queryClient.invalidateQueries({ queryKey: ["cloud-songs"] });
+  };
+
   const bindMutation = useMutation({
     mutationFn: () => api.bindPlatformCookie(platform, cookieDraft),
     onSuccess: (res) => {
       setCookieDraft("");
       setShowManualCookie(false);
       toast.success(res.binding.message ?? `${label}已连接`);
-      void queryClient.invalidateQueries({ queryKey: ["bindings"] });
+      invalidateAccountCaches();
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : `${label}绑定失败`),
   });
@@ -35,8 +47,9 @@ function PlatformCard({
     mutationFn: () => api.unbindPlatform(platform),
     onSuccess: () => {
       toast.info(`已解绑${label}`);
-      void queryClient.invalidateQueries({ queryKey: ["bindings"] });
+      invalidateAccountCaches();
     },
+    onError: (err) => toast.error(err instanceof Error ? err.message : `解绑${label}失败`),
   });
 
   const startQrMutation = useMutation({
@@ -58,6 +71,14 @@ function PlatformCard({
             setQrState(null);
             toast.success(res.message);
             void queryClient.invalidateQueries({ queryKey: ["bindings"] });
+            void queryClient.invalidateQueries({ queryKey: ["playlists"] });
+            void queryClient.invalidateQueries({ queryKey: ["playlist-tracks"] });
+            void queryClient.invalidateQueries({ queryKey: ["liked-ids"] });
+            void queryClient.invalidateQueries({ queryKey: ["song-like"] });
+            void queryClient.invalidateQueries({ queryKey: ["discover"] });
+            void queryClient.invalidateQueries({ queryKey: ["daily-recommend"] });
+            void queryClient.invalidateQueries({ queryKey: ["personal-fm"] });
+            void queryClient.invalidateQueries({ queryKey: ["cloud-songs"] });
           } else if (res.status === "expired" || res.status === "error") {
             setQrState(null);
             toast.error(res.message);

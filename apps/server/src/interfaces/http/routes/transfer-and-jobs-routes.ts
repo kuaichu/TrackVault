@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   CompareStatusSchema,
@@ -11,8 +11,16 @@ import {
 } from "#shared";
 import type { BackgroundJobManager } from "../../../application/jobs/background-job-manager.js";
 import type { TransferService } from "../../../application/transfer/transfer-service.js";
+import { AppError } from "../../../domain/errors.js";
 import { toJobView } from "../../../infrastructure/db/repositories/job-repository.js";
 import { requireActor } from "../auth-plugin.js";
+
+const MAX_SSE_CONNECTIONS_PER_USER = 8;
+
+export interface SseConnectionRegistry {
+  closeUserConnections(userId: string): void;
+  closeAllConnections(): void;
+}
 
 function buildContentDisposition(filename: string): string {
   const asciiFallback = filename.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "_");
@@ -21,9 +29,29 @@ function buildContentDisposition(filename: string): string {
 
 export function registerTransferAndJobRoutes(
   app: FastifyInstance,
-  deps: { jobs: BackgroundJobManager; transferService: TransferService },
-): void {
-  const { jobs, transferService } = deps;
+  deps: {
+    jobs: BackgroundJobManager;
+    transferService: TransferService;
+    isAllowedOrigin: (origin: string, request: FastifyRequest) => boolean;
+  },
+): SseConnectionRegistry {
+  const { jobs, transferService, isAllowedOrigin } = deps;
+  const activeSseByUser = new Map<string, Set<() => void>>();
+
+  const closeUserConnections = (userId: string) => {
+    const set = activeSseByUser.get(userId);
+    if (!set) return;
+    for (const closeFn of [...set]) {
+      closeFn();
+    }
+    activeSseByUser.delete(userId);
+  };
+
+  const closeAllConnections = () => {
+    for (const userId of [...activeSseByUser.keys()]) {
+      closeUserConnections(userId);
+    }
+  };
 
   // --- Unified Owner-Scoped Background Jobs ---
 
@@ -69,14 +97,19 @@ export function registerTransferAndJobRoutes(
 
   app.get("/api/events", async (request, reply) => {
     const actor = requireActor(request);
+    const origin = typeof request.headers.origin === "string" ? request.headers.origin.trim() : "";
+    if (origin && !isAllowedOrigin(origin, request)) {
+      throw new AppError("FORBIDDEN", "不允许的跨域事件流来源。");
+    }
+
     reply.hijack();
 
-    const origin = request.headers.origin;
     reply.raw.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
+      Vary: "Origin",
       ...(origin
         ? { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true" }
         : {}),
@@ -87,20 +120,38 @@ export function registerTransferAndJobRoutes(
       reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
     };
 
-    writeEvent({ type: "heartbeat", timestamp: Date.now() });
+    const userConns = activeSseByUser.get(actor.userId) ?? new Set<() => void>();
+    activeSseByUser.set(actor.userId, userConns);
+    while (userConns.size >= MAX_SSE_CONNECTIONS_PER_USER) {
+      const oldestClose = userConns.values().next().value;
+      if (!oldestClose) break;
+      oldestClose();
+    }
+
+    let closed = false;
     const unsubscribe = jobs.subscribe(actor.userId, writeEvent);
     const heartbeat = setInterval(() => {
       writeEvent({ type: "heartbeat", timestamp: Date.now() });
     }, 25_000);
     heartbeat.unref();
 
-    request.raw.once("close", () => {
+    const closeConnection = () => {
+      if (closed) return;
+      closed = true;
       clearInterval(heartbeat);
       unsubscribe();
+      userConns.delete(closeConnection);
+      if (userConns.size === 0) {
+        activeSseByUser.delete(actor.userId);
+      }
       if (!reply.raw.writableEnded) {
         reply.raw.end();
       }
-    });
+    };
+
+    userConns.add(closeConnection);
+    writeEvent({ type: "heartbeat", timestamp: Date.now() });
+    request.raw.once("close", closeConnection);
   });
 
   // --- Playlist Transfer / Import Audit / Compare ---
@@ -163,4 +214,9 @@ export function registerTransferAndJobRoutes(
 
     return transferService.importTransferResultToPlatform(actor, id, body);
   });
+
+  return {
+    closeUserConnections,
+    closeAllConnections,
+  };
 }

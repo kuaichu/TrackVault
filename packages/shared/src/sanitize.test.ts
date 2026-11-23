@@ -20,11 +20,12 @@ test("sanitizeExternalUrl rejects javascript:, data:, file: and embedded credent
 test("isAllowedCoverHost matches exact and subdomain suffixes only", () => {
   assert.equal(isAllowedCoverHost("p1.music.126.net"), true);
   assert.equal(isAllowedCoverHost("y.gtimg.cn"), true);
+  assert.equal(isAllowedCoverHost("thirdqq.qlogo.cn"), true);
   assert.equal(isAllowedCoverHost("evilmusic.126.net"), false);
   assert.equal(isAllowedCoverHost("127.0.0.1"), false);
 });
 
-test("normalizeCoverUrl upgrades http and sets param without duplicating query strings", () => {
+test("normalizeCoverUrl upgrades http, validates host whitelist, and sets param safely", () => {
   assert.equal(
     normalizeCoverUrl("http://p1.music.126.net/abc.jpg?foo=1", 600),
     "https://p1.music.126.net/abc.jpg?foo=1&param=600y600",
@@ -33,6 +34,9 @@ test("normalizeCoverUrl upgrades http and sets param without duplicating query s
     normalizeCoverUrl("https://p2.music.126.net/abc.jpg?param=100y100", 500),
     "https://p2.music.126.net/abc.jpg?param=500y500",
   );
+  assert.equal(normalizeCoverUrl("http://thirdqq.qlogo.cn/g?b=sdk", 300), "https://thirdqq.qlogo.cn/g?b=sdk");
+  assert.equal(normalizeCoverUrl("https://evilmusic.126.net/a.jpg", 400), undefined);
+  assert.equal(normalizeCoverUrl("https://evil.example.com/a.jpg", 400), undefined);
 });
 
 test("sanitizeDownloadFilename strips traversal, control chars, and Windows reserved names", () => {

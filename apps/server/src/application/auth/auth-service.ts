@@ -15,31 +15,41 @@ import type {
 import type { ActorContext } from "../../domain/context.js";
 import { AppError } from "../../domain/errors.js";
 import type { ProviderRegistry } from "../../domain/ports/music-provider.js";
+import type { SqliteClient } from "../../infrastructure/db/client.js";
 import type { CredentialRepository } from "../../infrastructure/db/repositories/credential-repository.js";
 import type { UserRepository } from "../../infrastructure/db/repositories/user-repository.js";
 import {
   generateSessionToken,
   hashPassword,
   hashSessionToken,
-  verifyPassword,
+  verifyPasswordTimingSafe,
 } from "../../infrastructure/security/password.js";
 
 export class AuthService {
+  readonly #sqlite: SqliteClient;
   readonly #users: UserRepository;
   readonly #credentials: CredentialRepository;
   readonly #providers: ProviderRegistry;
   readonly #sessionTtlMs: number;
+  readonly #onUserRevoked?: (userId: string) => void;
+  readonly #onUserDeleted?: (userId: string) => void;
 
   constructor(deps: {
+    sqlite: SqliteClient;
     users: UserRepository;
     credentials: CredentialRepository;
     providers: ProviderRegistry;
     sessionTtlMs: number;
+    onUserRevoked?: (userId: string) => void;
+    onUserDeleted?: (userId: string) => void;
   }) {
+    this.#sqlite = deps.sqlite;
     this.#users = deps.users;
     this.#credentials = deps.credentials;
     this.#providers = deps.providers;
     this.#sessionTtlMs = deps.sessionTtlMs;
+    this.#onUserRevoked = deps.onUserRevoked;
+    this.#onUserDeleted = deps.onUserDeleted;
   }
 
   getAuthStatus(sessionToken: string | undefined): AuthStatus {
@@ -67,29 +77,40 @@ export class AuthService {
     };
   }
 
-  setupInitialAdmin(input: SetupAdminInput): { user: UserSummary; sessionToken: string } {
+  async setupInitialAdmin(input: SetupAdminInput): Promise<{ user: UserSummary; sessionToken: string }> {
     if (this.#users.countUsers() > 0) {
       throw new AppError("CONFLICT", "系统已完成初始化，请直接登录。");
     }
 
-    const user = this.#users.createUser({
-      username: input.username,
-      passwordHash: hashPassword(input.password),
-      role: "admin",
-      trustedFallback: true,
-    });
+    const passwordHash = await hashPassword(input.password);
     const { token, tokenHash } = generateSessionToken();
-    this.#users.createSession(tokenHash, user.id, this.#sessionTtlMs);
+
+    // Re-check inside an IMMEDIATE write transaction so concurrent async setup requests cannot race
+    const user = this.#sqlite.immediateTransaction(() => {
+      if (this.#users.countUsers() > 0) {
+        throw new AppError("CONFLICT", "系统已完成初始化，请直接登录。");
+      }
+      const created = this.#users.createUser({
+        username: input.username,
+        passwordHash,
+        role: "admin",
+        trustedFallback: true,
+      });
+      this.#users.createSession(tokenHash, created.id, this.#sessionTtlMs);
+      return created;
+    });
+
     return { user, sessionToken: token };
   }
 
-  login(input: LoginInput): { user: UserSummary; sessionToken: string } {
+  async login(input: LoginInput): Promise<{ user: UserSummary; sessionToken: string }> {
     if (this.#users.countUsers() === 0) {
       throw new AppError("SETUP_REQUIRED", "系统尚未初始化，请先创建管理员账号。");
     }
 
     const record = this.#users.findByUsername(input.username);
-    if (!record || !verifyPassword(input.password, record.passwordHash)) {
+    const valid = await verifyPasswordTimingSafe(input.password, record?.passwordHash);
+    if (!record || !valid) {
       throw new AppError("UNAUTHORIZED", "用户名或密码错误。");
     }
 
@@ -121,34 +142,46 @@ export class AuthService {
     return this.#users.listUsers();
   }
 
-  createMember(actor: ActorContext, input: CreateMemberInput): UserSummary {
+  async createMember(actor: ActorContext, input: CreateMemberInput): Promise<UserSummary> {
     this.#assertAdmin(actor);
     if (this.#users.findByUsername(input.username)) {
       throw new AppError("CONFLICT", `用户名已存在：${input.username}`);
     }
-    return this.#users.createUser({
-      username: input.username,
-      passwordHash: hashPassword(input.password),
-      role: input.role,
-      trustedFallback: input.trustedFallback,
+    const passwordHash = await hashPassword(input.password);
+    return this.#sqlite.immediateTransaction(() => {
+      if (this.#users.findByUsername(input.username)) {
+        throw new AppError("CONFLICT", `用户名已存在：${input.username}`);
+      }
+      return this.#users.createUser({
+        username: input.username,
+        passwordHash,
+        role: input.role,
+        trustedFallback: input.trustedFallback,
+      });
     });
   }
 
-  updateMember(actor: ActorContext, memberId: string, input: UpdateMemberInput): UserSummary {
+  async updateMember(actor: ActorContext, memberId: string, input: UpdateMemberInput): Promise<UserSummary> {
     this.#assertAdmin(actor);
     if (memberId === actor.userId && input.role && input.role !== "admin") {
       throw new AppError("VALIDATION_ERROR", "不能撤销当前登录管理员自身的管理员权限。");
     }
+
+    const passwordHash = input.password ? await hashPassword(input.password) : undefined;
     const updated = this.#users.updateUser(memberId, {
       role: input.role,
       trustedFallback: input.trustedFallback,
-      passwordHash: input.password ? hashPassword(input.password) : undefined,
+      passwordHash,
     });
     if (!updated) {
       throw new AppError("NOT_FOUND", "成员账号不存在。");
     }
+
     if (input.password) {
       this.#users.deleteUserSessions(memberId);
+    }
+    if (input.password || input.trustedFallback === false || input.role === "member") {
+      this.#onUserRevoked?.(memberId);
     }
     return updated;
   }
@@ -158,9 +191,12 @@ export class AuthService {
     if (memberId === actor.userId) {
       throw new AppError("VALIDATION_ERROR", "不能删除当前登录账号。");
     }
+    this.#users.deleteUserSessions(memberId);
     if (!this.#users.deleteUser(memberId)) {
       throw new AppError("NOT_FOUND", "成员账号不存在。");
     }
+    this.#invalidateAllProviderScopes(memberId);
+    this.#onUserDeleted?.(memberId);
   }
 
   // --- Platform credential bindings (never exposes raw cookies to frontend) ---
@@ -189,11 +225,13 @@ export class AuthService {
       vipEnabled: verification.vipEnabled,
       vipExpireAt: verification.vipExpireAt,
     });
+    adapter.invalidateScope?.(actor.userId);
     return { ...saved, message: verification.message };
   }
 
   unbindPlatform(actor: ActorContext, platform: MusicPlatform): PlatformBindingView {
     this.#credentials.deleteBinding(actor.userId, platform);
+    this.#providers.get(platform).invalidateScope?.(actor.userId);
     return this.#credentials.getBindingView(actor.userId, platform);
   }
 
@@ -231,6 +269,7 @@ export class AuthService {
         vipEnabled: verification.vipEnabled,
         vipExpireAt: verification.vipExpireAt,
       });
+      adapter.invalidateScope?.(actor.userId);
 
       // Return ONLY desensitized binding view — rawCookie is never sent over HTTP
       return {
@@ -258,13 +297,51 @@ export class AuthService {
     };
   }
 
-  saveSystemFallback(
+  async saveSystemFallback(
     actor: ActorContext,
     platform: MusicPlatform,
     input: UpdateSystemFallbackInput,
-  ): SystemFallbackView {
+  ): Promise<SystemFallbackView> {
     this.#assertAdmin(actor);
-    return this.#credentials.saveSystemFallback(platform, input);
+    const adapter = this.#providers.get(platform);
+
+    if (input.clearCookie) {
+      const cleared = this.#credentials.saveSystemFallback(platform, { enabled: false, clearCookie: true });
+      adapter.invalidateScope?.("system-fallback");
+      return cleared;
+    }
+
+    const rawCookie = input.cookie?.trim();
+    let normalizedCookie: string | undefined;
+    if (rawCookie) {
+      const verification = await adapter.verifyCredential(rawCookie);
+      if (!verification.ok) {
+        throw new AppError("CREDENTIAL_INVALID", verification.message);
+      }
+      normalizedCookie = verification.normalizedCookie ?? rawCookie;
+    } else {
+      const existing = this.#credentials.getSystemFallbackView(platform);
+      if (!existing.configured && input.enabled) {
+        throw new AppError("VALIDATION_ERROR", "请先提供有效的保底 Cookie 后再启用。");
+      }
+    }
+
+    const saved = this.#credentials.saveSystemFallback(platform, {
+      cookie: normalizedCookie,
+      enabled: input.enabled,
+    });
+    adapter.invalidateScope?.("system-fallback");
+    return saved;
+  }
+
+  #invalidateAllProviderScopes(scopeKey: string): void {
+    for (const platform of ["netease", "qq"] as const) {
+      try {
+        this.#providers.get(platform).invalidateScope?.(scopeKey);
+      } catch {
+        // Ignore unregistered platform in isolated unit tests
+      }
+    }
   }
 
   #assertAdmin(actor: ActorContext): void {

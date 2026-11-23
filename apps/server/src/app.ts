@@ -6,7 +6,7 @@ import fastifyCors from "@fastify/cors";
 import fastifyHelmet from "@fastify/helmet";
 import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 import { AuthService } from "./application/auth/auth-service.js";
 import { CatalogService } from "./application/catalog/catalog-service.js";
@@ -14,7 +14,7 @@ import { BackgroundJobManager } from "./application/jobs/background-job-manager.
 import { MediaService } from "./application/media/media-service.js";
 import { TransferService } from "./application/transfer/transfer-service.js";
 import type { ServerConfig } from "./config/env.js";
-import { isAppError } from "./domain/errors.js";
+import { AppError, isAppError } from "./domain/errors.js";
 import { ProviderRegistry } from "./domain/ports/music-provider.js";
 import { SqliteClient } from "./infrastructure/db/client.js";
 import { CredentialRepository } from "./infrastructure/db/repositories/credential-repository.js";
@@ -29,11 +29,16 @@ import { SESSION_COOKIE_NAME } from "./interfaces/http/auth-plugin.js";
 import { registerAuthRoutes } from "./interfaces/http/routes/auth-routes.js";
 import { registerCatalogRoutes } from "./interfaces/http/routes/catalog-routes.js";
 import { registerMediaRoutes } from "./interfaces/http/routes/media-routes.js";
-import { registerTransferAndJobRoutes } from "./interfaces/http/routes/transfer-and-jobs-routes.js";
+import {
+  type SseConnectionRegistry,
+  registerTransferAndJobRoutes,
+} from "./interfaces/http/routes/transfer-and-jobs-routes.js";
 import { registerUserStateRoutes } from "./interfaces/http/routes/user-state-routes.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const STATIC_ASSET_PATH_RE = /\.[a-z0-9]{1,8}(?:\?.*)?$/i;
 
 export interface BuildAppOptions {
   config: ServerConfig;
@@ -84,11 +89,22 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
   });
   jobs.startPeriodicCleanup();
 
+  let sseRegistry: SseConnectionRegistry | null = null;
+
   const authService = new AuthService({
+    sqlite,
     users: userRepo,
     credentials: credentialRepo,
     providers,
     sessionTtlMs: config.sessionTtlMs,
+    onUserRevoked: (userId) => {
+      jobs.cancelJobsForUser(userId);
+      sseRegistry?.closeUserConnections(userId);
+    },
+    onUserDeleted: (userId) => {
+      jobs.cancelJobsForUser(userId, { removeArtifactsDir: true });
+      sseRegistry?.closeUserConnections(userId);
+    },
   });
   const catalogService = new CatalogService({
     providers,
@@ -111,13 +127,39 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
   });
 
   // 3) Interface layer (Fastify 5)
+  const trustProxyOption =
+    typeof config.trustProxy === "number"
+      ? (
+          (maxHops: number) => (_address: string, hop: number) =>
+            hop < maxHops
+        )(config.trustProxy)
+      : config.trustProxy;
+
   const app = Fastify({
     logger: config.nodeEnv === "production" ? { level: "info" } : false,
     bodyLimit: 2 * 1024 * 1024,
+    trustProxy: trustProxyOption,
   });
 
+  const allowedOriginSet = new Set(config.allowedOrigins);
+  const isAllowedOrigin = (origin: string, request: FastifyRequest): boolean => {
+    if (allowedOriginSet.has(origin)) return true;
+    const host = request.headers.host;
+    if (!host) return false;
+    return origin === `${request.protocol}://${host}`;
+  };
+
   await app.register(fastifyCookie);
+
+  // Attach verified ActorContext in onRequest (after fastifyCookie, BEFORE rate-limit keyGenerator)
+  app.decorateRequest("actor", null);
+  app.addHook("onRequest", async (request) => {
+    const token = request.cookies?.[SESSION_COOKIE_NAME];
+    request.actor = authService.resolveActorFromToken(token);
+  });
+
   await app.register(fastifyHelmet, {
+    crossOriginResourcePolicy: { policy: "cross-origin" },
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
@@ -130,7 +172,9 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
           "https://*.music.126.net",
           "https://*.gtimg.cn",
           "https://*.qpic.cn",
-          "https://qpic.y.qq.com",
+          "https://*.y.qq.com",
+          "https://y.qq.com",
+          "https://*.qlogo.cn",
         ],
         mediaSrc: ["'self'", "blob:"],
         connectSrc: ["'self'"],
@@ -142,7 +186,6 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
     referrerPolicy: { policy: "no-referrer" },
   });
 
-  const allowedOriginSet = new Set(config.allowedOrigins);
   await app.register(fastifyCors, {
     credentials: true,
     origin: (origin, callback) => {
@@ -163,20 +206,46 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
     await app.register(fastifyRateLimit, {
       max: 240,
       timeWindow: "1 minute",
-      errorResponseBuilder: () => ({
-        error: {
-          code: "RATE_LIMITED",
-          message: "请求过于频繁，请稍后再试。",
-        },
-      }),
+      allowList: (request) => !request.url.startsWith("/api/"),
+      keyGenerator: (request) => (request.actor ? `user:${request.actor.userId}` : `ip:${request.ip}`),
+      errorResponseBuilder: (_request, context) =>
+        new AppError(
+          context.statusCode === 403 ? "FORBIDDEN" : "RATE_LIMITED",
+          "请求过于频繁，请稍后再试。",
+          { statusCode: context.statusCode },
+        ),
     });
   }
 
-  // Attach verified ActorContext from HttpOnly session cookie on every request
-  app.decorateRequest("actor", null);
+  // CSRF guard on mutating API routes (preserves non-browser/inject tests without Origin/Sec-Fetch-Site)
   app.addHook("preHandler", async (request) => {
-    const token = request.cookies[SESSION_COOKIE_NAME];
-    request.actor = authService.resolveActorFromToken(token);
+    const method = request.method.toUpperCase();
+    if (method === "GET" || method === "HEAD" || method === "OPTIONS") return;
+    if (!request.url.startsWith("/api/")) return;
+
+    const origin = typeof request.headers.origin === "string" ? request.headers.origin.trim() : "";
+    if (origin && !isAllowedOrigin(origin, request)) {
+      throw new AppError("FORBIDDEN", "不允许的跨站写请求来源。");
+    }
+
+    const secFetchSite = request.headers["sec-fetch-site"];
+    if (typeof secFetchSite === "string" && secFetchSite.trim().toLowerCase() === "cross-site") {
+      throw new AppError("FORBIDDEN", "跨站写请求已被拦截。");
+    }
+
+    if (request.cookies?.[SESSION_COOKIE_NAME]) {
+      const rawContentType = request.headers["content-type"];
+      if (typeof rawContentType === "string") {
+        const mime = rawContentType.split(";")[0]?.trim().toLowerCase() ?? "";
+        if (
+          mime === "text/plain" ||
+          mime === "application/x-www-form-urlencoded" ||
+          mime === "multipart/form-data"
+        ) {
+          throw new AppError("FORBIDDEN", "不支持该内容类型的写请求。");
+        }
+      }
+    }
   });
 
   // Unified structured error handler (catches all async throws cleanly)
@@ -225,34 +294,47 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
   registerAuthRoutes(app, { authService, config });
   registerCatalogRoutes(app, { catalogService, providers });
   registerMediaRoutes(app, { mediaService });
-  registerTransferAndJobRoutes(app, { jobs, transferService });
+  sseRegistry = registerTransferAndJobRoutes(app, { jobs, transferService, isAllowedOrigin });
   registerUserStateRoutes(app, { userStateRepo });
 
   // Serve built frontend bundle when present (self-hosted single-container / production mode)
   const webDistDir = path.resolve(__dirname, "../../web/dist");
-  if (options.serveStaticWeb !== false && fs.existsSync(webDistDir)) {
+  const hasStaticWeb = options.serveStaticWeb !== false && fs.existsSync(webDistDir);
+  if (hasStaticWeb) {
     await app.register(fastifyStatic, {
       root: webDistDir,
       prefix: "/",
       wildcard: false,
     });
-
-    app.setNotFoundHandler((request, reply) => {
-      if (request.url.startsWith("/api/")) {
-        return reply.code(404).send({
-          error: { code: "NOT_FOUND", message: "接口不存在。" },
-        });
-      }
-      return reply.sendFile("index.html");
-    });
   }
+
+  // Unconditional unified 404 handler (never serve index.html for /api, non-GET, or missing static assets)
+  app.setNotFoundHandler((request, reply) => {
+    const pathname = request.url.split("?")[0] ?? request.url;
+    const isApiPath = pathname === "/api" || pathname.startsWith("/api/");
+    const method = request.method.toUpperCase();
+    const isReadMethod = method === "GET" || method === "HEAD";
+
+    if (isApiPath || !hasStaticWeb || !isReadMethod || STATIC_ASSET_PATH_RE.test(pathname)) {
+      return reply.code(404).send({
+        error: {
+          code: "NOT_FOUND",
+          message: isApiPath ? "接口不存在。" : "资源不存在。",
+        },
+      });
+    }
+
+    return reply.sendFile("index.html");
+  });
 
   return {
     app,
     sqlite,
     jobs,
     async close() {
+      sseRegistry?.closeAllConnections();
       jobs.stop();
+      httpClient.close();
       await app.close();
       sqlite.close();
     },

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { mergeLyricTranslations, parseLrc, parseYrc } from "#audio-tags";
 import {
@@ -245,6 +246,22 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     this.#realIp = options?.realIp;
   }
 
+  invalidateScope(scopeKey: string): void {
+    this.#discoverCache.invalidateScope(scopeKey);
+    this.#recommendedPlaylistsCache.invalidateScope(scopeKey);
+    this.#artistCache.invalidateScope(scopeKey);
+    this.#albumCache.invalidateScope(scopeKey);
+    this.#playlistDetailCache.invalidateScope(scopeKey);
+    this.#likeSetCache.invalidateScope(scopeKey);
+    this.#uidCache.invalidateScope(scopeKey);
+  }
+
+  #cookieCacheKey(cookie: string): string {
+    const normalized = normalizeNeteaseCookie(cookie);
+    const digest = crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 16);
+    return `uid:${digest}`;
+  }
+
   #baseParams(auth?: ProviderAuthContext, extra: Record<string, unknown> = {}): Record<string, unknown> {
     const normalizedCookie = auth?.cookie ? normalizeNeteaseCookie(auth.cookie) : "";
     return {
@@ -266,14 +283,15 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       return auth.accountUid.trim();
     }
     const cookie = this.#assertAuthed(auth);
-    const cached = this.#uidCache.get(auth.scopeKey, "uid");
+    const uidKey = this.#cookieCacheKey(cookie);
+    const cached = this.#uidCache.get(auth.scopeKey, uidKey);
     if (cached) return cached;
 
     const verified = await this.verifyCredential(cookie);
     if (!verified.ok || !verified.accountUid) {
       throw new AppError("CREDENTIAL_INVALID", "网易云登录态已失效，请重新绑定。");
     }
-    this.#uidCache.set(auth.scopeKey, "uid", verified.accountUid);
+    this.#uidCache.set(auth.scopeKey, uidKey, verified.accountUid);
     return verified.accountUid;
   }
 
@@ -1198,14 +1216,15 @@ export class NeteaseAdapter implements MusicProviderAdapter {
   }
 
   async #getLikeSet(auth: ProviderAuthContext): Promise<Set<string>> {
-    const cached = this.#likeSetCache.get(auth.scopeKey, "likes");
+    const uid = await this.#resolveUid(auth);
+    const cacheKey = `likes:${uid}`;
+    const cached = this.#likeSetCache.get(auth.scopeKey, cacheKey);
     if (cached) return cached;
 
-    const uid = await this.#resolveUid(auth);
     const response = await neteaseApi.likelist(this.#baseParams(auth, { uid }));
     const ids = ((response.body.ids as Array<number | string> | undefined) ?? []).map(String);
     const set = new Set(ids);
-    this.#likeSetCache.set(auth.scopeKey, "likes", set);
+    this.#likeSetCache.set(auth.scopeKey, cacheKey, set);
     return set;
   }
 
@@ -1226,16 +1245,21 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     liked: boolean,
     auth: ProviderAuthContext,
   ): Promise<{ liked: boolean }> {
-    this.#assertAuthed(auth);
+    const cookie = this.#assertAuthed(auth);
     const response = await neteaseApi.like(this.#baseParams(auth, { id: songId, like: liked }));
     const code = Number(response.body.code ?? 200);
     if (code !== 200) {
       throw new AppError("UPSTREAM_ERROR", `红心操作失败 (code ${code})`);
     }
-    const existing = this.#likeSetCache.get(auth.scopeKey, "likes");
-    if (existing) {
-      if (liked) existing.add(songId);
-      else existing.delete(songId);
+    const uid = auth.accountUid?.trim() || this.#uidCache.get(auth.scopeKey, this.#cookieCacheKey(cookie));
+    if (uid) {
+      const existing = this.#likeSetCache.get(auth.scopeKey, `likes:${uid}`);
+      if (existing) {
+        if (liked) existing.add(songId);
+        else existing.delete(songId);
+      }
+    } else {
+      this.#likeSetCache.invalidateScope(auth.scopeKey);
     }
     return { liked };
   }

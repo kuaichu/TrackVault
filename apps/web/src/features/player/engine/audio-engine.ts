@@ -18,11 +18,20 @@ export class AudioEngine {
   #pendingSeek: number | null = null;
   #lastPersistAt = 0;
   #listenersBound = false;
+  #onPlayHistoryRecorded: ((res: { items: Song[] }) => void) | null = null;
 
   constructor(audioElement?: HTMLAudioElement) {
     this.#audio = audioElement ?? new Audio();
     this.#audio.preload = "metadata";
     this.#bindEvents();
+  }
+
+  /**
+   * Dynamically bound/unbound by the active `<UserSessionBoundary>` so this singleton
+   * never holds a stale QueryClient reference across account switches.
+   */
+  setPlayHistoryListener(listener: ((res: { items: Song[] }) => void) | null): void {
+    this.#onPlayHistoryRecorded = listener;
   }
 
   #bindEvents(): void {
@@ -62,8 +71,11 @@ export class AudioEngine {
     });
 
     this.#audio.addEventListener("pause", () => {
-      usePlayerStore.getState().setStatePatch({ isPlaying: false, isLoading: false });
-      this.#persistRemoteState();
+      const state = usePlayerStore.getState();
+      state.setStatePatch({ isPlaying: false, isLoading: false });
+      if (state.hydrated && state.currentTrack) {
+        this.#persistRemoteState();
+      }
     });
 
     this.#audio.addEventListener("waiting", () => {
@@ -84,6 +96,9 @@ export class AudioEngine {
     });
 
     this.#audio.addEventListener("error", () => {
+      // Ignore synthetic MEDIA_ERR_SRC_NOT_SUPPORTED fired when stop() clears audio src
+      if (!usePlayerStore.getState().currentTrack) return;
+
       const errorToken = this.#playToken;
       const failedSrc = this.#audio.currentSrc || this.#audio.src;
       const fallbackMessage = "音频加载失败，请检查平台账号绑定、会员权限或切换其他音质。";
@@ -279,7 +294,14 @@ export class AudioEngine {
     this.#audio.src = api.buildStreamUrl(song, level);
     this.#audio.load();
     this.#updateMediaSession(song);
-    void api.recordPlayHistory(song).catch(() => undefined);
+    void api
+      .recordPlayHistory(song)
+      .then((res) => {
+        if (token === this.#playToken) {
+          this.#onPlayHistoryRecorded?.(res);
+        }
+      })
+      .catch(() => undefined);
     this.#persistRemoteState();
 
     await this.#startAudioWithFade(token);
@@ -389,10 +411,29 @@ export class AudioEngine {
   stop(): void {
     this.#playToken += 1;
     this.#cancelFade();
+    this.#pendingSeek = null;
+    this.#lastPersistAt = 0;
+
+    // Reset store BEFORE pausing/clearing src so pause/error/pagehide listeners never persist stale state
+    usePlayerStore.getState().reset();
+    usePlaybackClockStore.getState().setClock({ currentTime: 0, duration: 0, bufferedTime: 0 });
+
     this.#audio.pause();
     this.#audio.removeAttribute("src");
-    usePlayerStore.getState().setStatePatch({ currentTrack: null, isPlaying: false, isLoading: false });
-    usePlaybackClockStore.getState().setClock({ currentTime: 0, duration: 0, bufferedTime: 0 });
+    try {
+      this.#audio.load();
+    } catch {
+      // Ignore in test environments where load() is not implemented
+    }
+    this.#audio.volume = 0.85;
+
+    if (typeof navigator !== "undefined" && "mediaSession" in navigator) {
+      try {
+        navigator.mediaSession.metadata = null;
+      } catch {
+        // Ignore MediaSession errors on unsupported platforms
+      }
+    }
   }
 }
 

@@ -147,6 +147,8 @@ export interface MusicProviderAdapter {
     scopeKey: string,
     key: string,
   ): Promise<QrCheckResult & { rawCookie?: string; verification?: CredentialVerificationResult }>;
+  /** Clears all per-user scoped caches (e.g., on bind/unbind/account switch/member deletion). */
+  invalidateScope?(scopeKey: string): void;
 }
 
 export class ProviderRegistry {

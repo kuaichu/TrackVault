@@ -84,10 +84,12 @@ export class TransferService {
   }
 
   #buildAuth(actor: ActorContext, platform: MusicPlatform): ProviderAuthContext {
+    const binding = this.#credentials.getBindingView(actor.userId, platform);
     return {
       platform,
       cookie: this.#credentials.getDecryptedCookie(actor.userId, platform),
       scopeKey: actor.userId,
+      accountUid: binding.accountUid,
     };
   }
 

@@ -147,10 +147,13 @@ export class UserStateRepository {
     return songs;
   }
 
-  recordPlayHistory(userId: string, song: Song): Song[] {
+  recordPlayHistory(userId: string, song: Song, playedAt?: number): Song[] {
     const sanitized = SongSchema.parse(song);
     const songKey = getSongKey(sanitized);
-    const now = Date.now();
+    const now =
+      typeof playedAt === "number" && Number.isFinite(playedAt) && playedAt > 0
+        ? Math.floor(playedAt)
+        : Date.now();
 
     this.#sqlite.transaction(() => {
       this.#sqlite.db
@@ -187,11 +190,14 @@ export class UserStateRepository {
     return rows.map((row) => row.keyword);
   }
 
-  addSearchHistory(userId: string, keyword: string): string[] {
+  addSearchHistory(userId: string, keyword: string, updatedAt?: number): string[] {
     const trimmed = keyword.trim().slice(0, 120);
     if (!trimmed) return this.getSearchHistory(userId);
 
-    const now = Date.now();
+    const now =
+      typeof updatedAt === "number" && Number.isFinite(updatedAt) && updatedAt > 0
+        ? Math.floor(updatedAt)
+        : Date.now();
     this.#sqlite.transaction(() => {
       this.#sqlite.db
         .prepare(

@@ -195,6 +195,43 @@ export class BackgroundJobManager {
     return toJobView(record);
   }
 
+  cancelJobsForUser(userId: string, options?: { removeArtifactsDir?: boolean }): void {
+    for (let i = this.#queue.length - 1; i >= 0; i -= 1) {
+      const queued = this.#queue[i];
+      if (!queued || queued.record.userId !== userId) continue;
+      this.#queue.splice(i, 1);
+      const updated = this.#repo.update(queued.record.id, {
+        status: "cancelled",
+        subtitle: "账号权限变更，任务已取消",
+      });
+      if (updated) {
+        this.#emit(userId, { type: "job_updated", job: toJobView(updated), timestamp: Date.now() });
+      }
+    }
+
+    for (const [jobId, running] of this.#runningControllers.entries()) {
+      if (running.userId !== userId) continue;
+      running.controller.abort();
+      const updated = this.#repo.update(jobId, {
+        status: "cancelled",
+        subtitle: "账号权限变更，任务已取消",
+      });
+      if (updated) {
+        this.#emit(userId, { type: "job_updated", job: toJobView(updated), timestamp: Date.now() });
+      }
+    }
+
+    if (options?.removeArtifactsDir) {
+      const safeUser = userId.replace(/[^a-zA-Z0-9_-]/g, "");
+      if (safeUser) {
+        const userDir = path.resolve(this.#tmpDownloadsDir, safeUser);
+        if (userDir.startsWith(this.#tmpDownloadsDir + path.sep)) {
+          void fs.rm(userDir, { recursive: true, force: true }).catch(() => undefined);
+        }
+      }
+    }
+  }
+
   clearFinished(actor: ActorContext, kind?: JobKind): number {
     const removedIds = this.#repo.clearFinished(actor.userId, kind);
     for (const id of removedIds) {

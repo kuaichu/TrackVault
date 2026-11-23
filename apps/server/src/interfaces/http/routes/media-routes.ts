@@ -33,56 +33,60 @@ export function registerMediaRoutes(app: FastifyInstance, deps: { mediaService: 
       .send(Buffer.from(bytes));
   });
 
-  app.get("/api/media/stream", async (request, reply) => {
-    const actor = requireActor(request);
-    const query = z
-      .object({
-        platform: MusicPlatformSchema.default("netease"),
-        id: z.string().min(1).max(128),
-        mediaId: z.string().max(128).optional(),
-        level: QualityLevelSchema.default("exhigh"),
-        durationSeconds: z.coerce.number().nonnegative().optional(),
-      })
-      .parse(request.query);
+  app.get(
+    "/api/media/stream",
+    { config: { rateLimit: { max: 600, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const actor = requireActor(request);
+      const query = z
+        .object({
+          platform: MusicPlatformSchema.default("netease"),
+          id: z.string().min(1).max(128),
+          mediaId: z.string().max(128).optional(),
+          level: QualityLevelSchema.default("exhigh"),
+          durationSeconds: z.coerce.number().nonnegative().optional(),
+        })
+        .parse(request.query);
 
-    const abortController = new AbortController();
-    request.raw.once("close", () => {
-      if (!reply.raw.writableEnded) {
-        abortController.abort();
+      const abortController = new AbortController();
+      request.raw.once("close", () => {
+        if (!reply.raw.writableEnded) {
+          abortController.abort();
+        }
+      });
+
+      const range = typeof request.headers.range === "string" ? request.headers.range : undefined;
+      const { response, resolved } = await mediaService.openAudioStream(
+        actor,
+        query.platform,
+        { id: query.id, mediaId: query.mediaId, durationSeconds: query.durationSeconds },
+        query.level,
+        range,
+        abortController.signal,
+      );
+
+      const forwardHeaders = ["accept-ranges", "content-length", "content-range"] as const;
+      for (const key of forwardHeaders) {
+        const value = response.headers.get(key);
+        if (value) reply.header(key, value);
       }
-    });
 
-    const range = typeof request.headers.range === "string" ? request.headers.range : undefined;
-    const { response, resolved } = await mediaService.openAudioStream(
-      actor,
-      query.platform,
-      { id: query.id, mediaId: query.mediaId, durationSeconds: query.durationSeconds },
-      query.level,
-      range,
-      abortController.signal,
-    );
+      reply
+        .code(response.status)
+        .header("Content-Type", mimeForAudioFormat(resolved.format))
+        .header("Cache-Control", "no-store");
 
-    const forwardHeaders = ["accept-ranges", "content-length", "content-range"] as const;
-    for (const key of forwardHeaders) {
-      const value = response.headers.get(key);
-      if (value) reply.header(key, value);
-    }
+      if (!response.body) {
+        return reply.send();
+      }
 
-    reply
-      .code(response.status)
-      .header("Content-Type", mimeForAudioFormat(resolved.format))
-      .header("Cache-Control", "no-store");
-
-    if (!response.body) {
-      return reply.send();
-    }
-
-    const nodeStream = Readable.fromWeb(response.body as never);
-    nodeStream.on("error", () => {
-      abortController.abort();
-    });
-    return reply.send(nodeStream);
-  });
+      const nodeStream = Readable.fromWeb(response.body as never);
+      nodeStream.on("error", () => {
+        abortController.abort();
+      });
+      return reply.send(nodeStream);
+    },
+  );
 
   app.post("/api/media/probe", async (request) => {
     const actor = requireActor(request);

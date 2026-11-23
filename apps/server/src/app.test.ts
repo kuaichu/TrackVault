@@ -407,3 +407,206 @@ test("TrackVault v2 end-to-end security, isolation, encryption, download tagging
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("Phase 1 security suite: 429 rate-limit, CSRF, SSE CORS, trustProxy cookies, fallback validation, cache invalidation, and member revocation", async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tv2-p1-test-"));
+  const invalidatedScopes: string[] = [];
+
+  const createTrackingAdapter = (platform: MusicPlatform): MusicProviderAdapter => {
+    const base = createMockAdapter(platform);
+    return {
+      ...base,
+      invalidateScope(scopeKey: string) {
+        invalidatedScopes.push(`${platform}:${scopeKey}`);
+      },
+    };
+  };
+
+  const providers = new ProviderRegistry();
+  providers.register(createTrackingAdapter("netease"));
+  providers.register(createTrackingAdapter("qq"));
+
+  const config = loadServerConfig({
+    NODE_ENV: "test",
+    DATA_DIR: tmpDir,
+    ALLOWED_ORIGINS: "http://localhost:5173",
+    COOKIE_SECURE: "auto",
+    TRUST_PROXY: "true",
+  });
+
+  const server = await buildServer({
+    config,
+    dbPathOverride: ":memory:",
+    providersOverride: providers,
+    disableRateLimit: false,
+    serveStaticWeb: false,
+  });
+
+  try {
+    // 1. Helmet CORP + CSP qlogo.cn + structured API 404 (C007/C008/C013)
+    const health = await server.app.inject({ method: "GET", url: "/api/health" });
+    assert.equal(health.headers["cross-origin-resource-policy"], "cross-origin");
+    assert.ok(String(health.headers["content-security-policy"] ?? "").includes("https://*.qlogo.cn"));
+
+    const api404 = await server.app.inject({ method: "GET", url: "/api/does-not-exist" });
+    assert.equal(api404.statusCode, 404);
+    assert.equal(api404.json().error.code, "NOT_FOUND");
+
+    const apiRoot404 = await server.app.inject({ method: "GET", url: "/api" });
+    assert.equal(apiRoot404.statusCode, 404);
+    assert.equal(apiRoot404.json().error.code, "NOT_FOUND");
+
+    // 2. Concurrent setupInitialAdmin creates strictly 1 admin (C009/C010) + Secure cookie under TRUST_PROXY=true (C003/B26)
+    const [s1, s2] = await Promise.all([
+      server.app.inject({
+        method: "POST",
+        url: "/api/auth/setup",
+        headers: { "x-forwarded-proto": "https" },
+        payload: { username: "admin1", password: "Password123!" },
+      }),
+      server.app.inject({
+        method: "POST",
+        url: "/api/auth/setup",
+        headers: { "x-forwarded-proto": "https" },
+        payload: { username: "admin2", password: "Password123!" },
+      }),
+    ]);
+    const codes = [s1.statusCode, s2.statusCode].sort();
+    assert.deepEqual(codes, [201, 409]);
+    const winner = s1.statusCode === 201 ? s1 : s2;
+    const rawSetCookie = Array.isArray(winner.headers["set-cookie"])
+      ? winner.headers["set-cookie"].join(";")
+      : String(winner.headers["set-cookie"]);
+    assert.ok(rawSetCookie.toLowerCase().includes("secure"));
+    const adminCookie = extractCookieHeader(winner.headers["set-cookie"]);
+
+    // 3. CSRF blocks cross-origin Origin, Sec-Fetch-Site: cross-site, and text/plain authenticated write (C002)
+    const csrfOrigin = await server.app.inject({
+      method: "POST",
+      url: "/api/auth/logout",
+      headers: { cookie: adminCookie, origin: "https://evil.example.com" },
+    });
+    assert.equal(csrfOrigin.statusCode, 403);
+    assert.equal(csrfOrigin.json().error.code, "FORBIDDEN");
+
+    const csrfSecFetch = await server.app.inject({
+      method: "POST",
+      url: "/api/auth/logout",
+      headers: { cookie: adminCookie, "sec-fetch-site": "cross-site" },
+    });
+    assert.equal(csrfSecFetch.statusCode, 403);
+
+    const csrfTextPlain = await server.app.inject({
+      method: "POST",
+      url: "/api/history/search",
+      headers: { cookie: adminCookie, "content-type": "text/plain" },
+      payload: "keyword=evil",
+    });
+    assert.equal(csrfTextPlain.statusCode, 403);
+
+    // 4. SSE /api/events rejects unlisted Origin with 403 (B24/C001)
+    const evilSse = await server.app.inject({
+      method: "GET",
+      url: "/api/events",
+      headers: { cookie: adminCookie, origin: "https://evil.example.com" },
+    });
+    assert.equal(evilSse.statusCode, 403);
+    assert.equal(evilSse.json().error.code, "FORBIDDEN");
+
+    // 5. System fallback validates cookies and rejects empty unconfigured enable (C016)
+    const emptyFallback = await server.app.inject({
+      method: "PUT",
+      url: "/api/admin/fallbacks/netease",
+      headers: { cookie: adminCookie },
+      payload: { enabled: true },
+    });
+    assert.equal(emptyFallback.statusCode, 400);
+    assert.equal(emptyFallback.json().error.code, "VALIDATION_ERROR");
+
+    const invalidFallback = await server.app.inject({
+      method: "PUT",
+      url: "/api/admin/fallbacks/netease",
+      headers: { cookie: adminCookie },
+      payload: { cookie: "BAD_COOKIE", enabled: true },
+    });
+    assert.equal(invalidFallback.statusCode, 401);
+    assert.equal(invalidFallback.json().error.code, "CREDENTIAL_INVALID");
+
+    // 6. Bind & unbind invalidate provider cache scopes (A03/C038)
+    const bindOk = await server.app.inject({
+      method: "POST",
+      url: "/api/bindings/netease/cookie",
+      headers: { cookie: adminCookie },
+      payload: { cookie: "MUSIC_U=VALID_ACCOUNT_A" },
+    });
+    assert.equal(bindOk.statusCode, 200);
+    assert.ok(invalidatedScopes.some((entry) => entry.startsWith("netease:")));
+
+    // 7. Rate limit returns HTTP 429 RATE_LIMITED instead of 500 (A04)
+    let hit429 = false;
+    for (let i = 0; i < 18; i += 1) {
+      const attempt = await server.app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: { username: "admin1", password: "wrong-password" },
+      });
+      if (attempt.statusCode === 429) {
+        assert.equal(attempt.json().error.code, "RATE_LIMITED");
+        hit429 = true;
+        break;
+      }
+      assert.equal(attempt.statusCode, 401);
+    }
+    assert.equal(hit429, true);
+
+    // 8. Deleting a member cancels their running/queued jobs (C022)
+    const createBob = await server.app.inject({
+      method: "POST",
+      url: "/api/admin/members",
+      headers: { cookie: adminCookie },
+      payload: {
+        username: "bob_revoked",
+        password: "BobPassword123!",
+        role: "member",
+        trustedFallback: false,
+      },
+    });
+    assert.equal(createBob.statusCode, 201);
+    const bobId = createBob.json().member.id as string;
+    let aborted = false;
+    server.jobs.enqueue({
+      actor: { userId: bobId, username: "bob_revoked", role: "member", trustedFallback: false },
+      kind: "transfer",
+      title: "long-running",
+      runner: (handle) =>
+        new Promise((_resolve, reject) => {
+          handle.signal.addEventListener("abort", () => {
+            aborted = true;
+            reject(new Error("aborted"));
+          });
+        }),
+    });
+    const delBob = await server.app.inject({
+      method: "DELETE",
+      url: `/api/admin/members/${bobId}`,
+      headers: { cookie: adminCookie },
+    });
+    assert.equal(delBob.statusCode, 200);
+    assert.equal(aborted, true);
+
+    // 9. Logout clears cookie with matching Secure attribute under TRUST_PROXY=true (B29/C012)
+    const logoutRes = await server.app.inject({
+      method: "POST",
+      url: "/api/auth/logout",
+      headers: { cookie: adminCookie, "x-forwarded-proto": "https" },
+    });
+    assert.equal(logoutRes.statusCode, 200);
+    const rawClearCookie = Array.isArray(logoutRes.headers["set-cookie"])
+      ? logoutRes.headers["set-cookie"].join(";")
+      : String(logoutRes.headers["set-cookie"]);
+    assert.ok(rawClearCookie.toLowerCase().includes("secure"));
+  } finally {
+    await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
