@@ -91,6 +91,8 @@ function songToCandidate(song: Song): ProviderCandidateTrack {
 interface LoadedSourceBundle {
   tracks: TransferTrack[];
   sourceTotal: number;
+  playlistTotal?: number;
+  selectedMode?: boolean;
   truncated: boolean;
   sourceMetaByKey: Map<string, { availability: TransferAvailability; mediaId?: string }>;
 }
@@ -98,6 +100,7 @@ interface LoadedSourceBundle {
 interface LoadedProviderPlaylist {
   songs: Song[];
   sourceTotal: number;
+  rawSlotTotal?: number;
   truncated: boolean;
 }
 
@@ -105,13 +108,21 @@ function buildTransferSubtitle(
   summary: TransferResult["summary"],
   sourceTotal?: number,
   truncated?: boolean,
+  playlistTotal?: number,
 ): string {
-  if (summary.total === 0 && truncated && sourceTotal && sourceTotal > 0) {
-    return `所选 ${sourceTotal} 首超出前 ${MAX_SELECTED_SCAN_TRACKS} 首扫描范围（未处理 ${sourceTotal} 首）`;
+  if (summary.total === 0 && sourceTotal && sourceTotal > 0) {
+    if (truncated) {
+      const playlistPrefix = playlistTotal !== undefined ? `源歌单共 ${playlistTotal} 首，` : "";
+      return `${playlistPrefix}所选 ${sourceTotal} 首超出前 ${MAX_SELECTED_SCAN_TRACKS} 首扫描范围（未处理 ${sourceTotal} 首）`;
+    }
+    return `所选 ${sourceTotal} 首未获取到有效曲目详情（未处理 ${sourceTotal} 首）`;
   }
   const base = `共 ${summary.total} 首 · 匹配 ${summary.matched} · 待确认 ${summary.manualReview}`;
   if (truncated && sourceTotal && sourceTotal > summary.total) {
     return `${base}（已截取前 ${summary.total}/${sourceTotal} 首）`;
+  }
+  if (!truncated && sourceTotal && sourceTotal > summary.total) {
+    return `${base}（未处理 ${sourceTotal - summary.total} 首）`;
   }
   return base;
 }
@@ -181,11 +192,13 @@ export class TransferService {
     const fetched = await adapter.getAllPlaylistTracks(playlistId, auth, cap + 1);
     const songs = fetched.slice(0, cap);
     let sourceTotal = fetched.length;
+    let rawSlotTotal: number | undefined;
 
     if (typeof adapter.getPlaylistTracks === "function") {
       try {
         const page = await adapter.getPlaylistTracks(playlistId, { page: 1, limit: 1 }, auth);
         if (typeof page.total === "number" && Number.isFinite(page.total)) {
+          rawSlotTotal = page.total;
           sourceTotal = Math.max(sourceTotal, page.total);
         }
       } catch {
@@ -193,10 +206,13 @@ export class TransferService {
       }
     }
 
+    const truncated = fetched.length > cap || (rawSlotTotal !== undefined && rawSlotTotal > cap);
+
     return {
       songs,
       sourceTotal,
-      truncated: sourceTotal > songs.length,
+      rawSlotTotal,
+      truncated,
     };
   }
 
@@ -249,20 +265,30 @@ export class TransferService {
     checkAvailability: boolean,
   ): Promise<TransferTrackResult> {
     const working = candidates.map((c) => ({ ...c }));
-    let matched = matchTransferTrack(track, working);
+    const initialMatched = matchTransferTrack(track, working);
 
     if (!checkAvailability || typeof targetAdapter.resolveAudio !== "function") {
-      return matched;
+      return initialMatched;
     }
 
-    const probedIds = new Set<string>();
+    const highConfidenceIds = initialMatched.candidates
+      .filter((c) => c.confidenceScore >= 85)
+      .map((c) => c.targetTrackId);
+
+    if (highConfidenceIds.length === 0) {
+      return initialMatched;
+    }
+
+    const verifiedPlayableIds = new Set<string>();
     const probeErrorsById = new Map<string, string>();
 
-    const probeCandidateById = async (targetId: string): Promise<boolean> => {
-      if (probedIds.has(targetId)) return false;
-      probedIds.add(targetId);
+    // T09: Probe high-confidence (>= 85) candidates in ranked order until we find a verified playable stream.
+    // If the top candidate's probe times out or degrades, continue probing high-confidence alternatives (including
+    // statically VIP-marked ones) so a genuinely playable edition is selected.
+    for (const targetId of highConfidenceIds) {
       const candidate = working.find((c) => c.id === targetId);
-      if (!candidate) return false;
+      if (!candidate) continue;
+
       const outcome = await this.#probeTrackAvailability(
         targetAdapter,
         {
@@ -273,57 +299,38 @@ export class TransferService {
         },
         targetAuth,
       );
+
       if (outcome.kind === "resolved") {
-        if (outcome.availability !== candidate.availability) {
-          candidate.availability = outcome.availability;
-          return true;
+        candidate.availability = outcome.availability;
+        if (outcome.availability === "playable") {
+          verifiedPlayableIds.add(targetId);
+          break;
         }
-        return false;
-      }
-      if (outcome.kind === "error") {
+      } else if (outcome.kind === "error") {
         probeErrorsById.set(targetId, outcome.message);
         if (candidate.availability === "playable" || candidate.availability === undefined) {
           candidate.availability = "unknown";
-          return true;
-        }
-      }
-      return false;
-    };
-
-    // 1. Verify statically playable selected candidates (downgrade if actually trial/unavailable or unverified on probe error)
-    while (matched.status === "matched" && matched.selectedCandidate) {
-      const targetId = matched.selectedCandidate.targetTrackId;
-      if (probedIds.has(targetId)) break;
-      const changed = await probeCandidateById(targetId);
-      if (!changed) break;
-      matched = matchTransferTrack(track, working);
-      if (matched.status === "matched" && matched.selectedCandidate?.targetTrackId === targetId) {
-        break;
-      }
-    }
-
-    // 2. T09: Also probe high-confidence (>= 85) statically locked/unavailable candidates when checkAvailability === true
-    if (matched.status !== "matched" && matched.selectedCandidate) {
-      const highConfidenceIds = matched.candidates
-        .filter((c) => c.confidenceScore >= 85)
-        .map((c) => c.targetTrackId);
-      for (const targetId of highConfidenceIds) {
-        const changed = await probeCandidateById(targetId);
-        if (changed) {
-          matched = matchTransferTrack(track, working);
-          if (
-            matched.status === "matched" &&
-            matched.selectedCandidate &&
-            !probeErrorsById.has(matched.selectedCandidate.targetTrackId)
-          ) {
-            break;
-          }
         }
       }
     }
 
-    // 3. T09: If the chosen candidate's stream probe threw a transient/timeout error (and no alternative candidate
-    // was verified playable), surface manual_review with explicit probe failure reason instead of claiming verified match.
+    const matched = matchTransferTrack(track, working);
+
+    // 1. Prefer a probe-verified playable high-confidence candidate over any unverified/probe-errored candidate
+    const verifiedBest = matched.candidates.find(
+      (c) =>
+        c.confidenceScore >= 85 && c.availability === "playable" && verifiedPlayableIds.has(c.targetTrackId),
+    );
+    if (verifiedBest) {
+      return {
+        sourceTrack: track,
+        status: "matched",
+        candidates: matched.candidates,
+        selectedCandidate: verifiedBest,
+      };
+    }
+
+    // 2. If the chosen candidate was statically playable/unknown and its probe errored, require manual review
     if (matched.status === "matched" && matched.selectedCandidate) {
       const probeErr = probeErrorsById.get(matched.selectedCandidate.targetTrackId);
       if (probeErr) {
@@ -332,6 +339,19 @@ export class TransferService {
           status: "manual_review",
           candidates: matched.candidates,
           reason: `音源实测未完成（${probeErr}），请人工确认可用性`,
+        };
+      }
+      return matched;
+    }
+
+    // 3. If only statically locked/unavailable candidates remain and probing the chosen candidate also errored,
+    // preserve the locked status while explicitly disclosing the probe failure in `reason`.
+    if (matched.selectedCandidate) {
+      const probeErr = probeErrorsById.get(matched.selectedCandidate.targetTrackId);
+      if (probeErr) {
+        return {
+          ...matched,
+          reason: `音源实测未完成（${probeErr}）：${matched.reason ?? "目标平台曲目受限"}`,
         };
       }
     }
@@ -361,10 +381,14 @@ export class TransferService {
             filtered.push(item);
           }
         }
+        const hitTransferCap =
+          selectedSet.size > MAX_TRANSFER_TRACKS && filtered.length >= MAX_TRANSFER_TRACKS;
         return {
           tracks: filtered,
           sourceTotal: selectedSet.size,
-          truncated: filtered.length < selectedSet.size,
+          playlistTotal: input.sourceTracks.length,
+          selectedMode: true,
+          truncated: hitTransferCap,
           sourceMetaByKey,
         };
       }
@@ -419,7 +443,12 @@ export class TransferService {
           MAX_SELECTED_SCAN_TRACKS,
         );
         filteredSongs = collectSelected(deepScanned);
-        scanExhaustedPlaylist = loaded.sourceTotal <= deepScanned.length;
+        // T11: Compare raw slot total against the 10,000 scan ceiling so missing song_detail entries
+        // inside a <=10,000 playlist are NEVER misreported as exceeding the 10,000-track scan limit.
+        scanExhaustedPlaylist =
+          loaded.rawSlotTotal !== undefined
+            ? loaded.rawSlotTotal <= MAX_SELECTED_SCAN_TRACKS
+            : deepScanned.length < MAX_SELECTED_SCAN_TRACKS;
       }
 
       for (const song of filteredSongs) {
@@ -429,10 +458,16 @@ export class TransferService {
         });
       }
 
+      const hitTransferCap =
+        selectedSet.size > MAX_TRANSFER_TRACKS && filteredSongs.length >= MAX_TRANSFER_TRACKS;
+      const truncatedByScan = filteredSongs.length < selectedSet.size && !scanExhaustedPlaylist;
+
       return {
         tracks: filteredSongs.map(songToTransferTrack),
         sourceTotal: selectedSet.size,
-        truncated: filteredSongs.length < selectedSet.size && !scanExhaustedPlaylist,
+        playlistTotal: loaded.sourceTotal,
+        selectedMode: true,
+        truncated: hitTransferCap || truncatedByScan,
         sourceMetaByKey,
       };
     }
@@ -466,29 +501,35 @@ export class TransferService {
         const {
           tracks: sourceTracks,
           sourceTotal,
+          playlistTotal,
+          selectedMode,
           truncated,
           sourceMetaByKey,
         } = await this.#loadSourceTracks(actor, input, handle.signal);
 
         if (sourceTracks.length === 0) {
-          // T11: If the user explicitly selected track IDs beyond the 10,000 scan ceiling, disclose truncation
-          // accurately instead of falsely claiming the playlist contained no valid tracks.
-          if (truncated && sourceTotal > 0) {
+          // T11: Disclose either beyond-10,000 scan truncation OR selected track IDs whose upstream song_detail
+          // was missing within an existing playlist, without conflating the two or reporting playlist size as 1.
+          if (
+            (truncated && sourceTotal > 0) ||
+            (selectedMode && sourceTotal > 0 && (playlistTotal ?? 0) > 0)
+          ) {
             const emptySummary = summarizeTransferResults([]);
-            const truncatedResult: TransferResult = {
+            const emptySelectedResult: TransferResult = {
               sourceProvider: input.sourceProvider,
               targetProvider: input.targetProvider,
               playlistName,
               summary: emptySummary,
               results: [],
               sourceTotal,
+              ...(playlistTotal !== undefined ? { playlistTotal } : {}),
               processedCount: 0,
               unprocessedCount: sourceTotal,
-              truncated: true,
+              truncated,
             };
             return {
-              result: truncatedResult,
-              subtitle: buildTransferSubtitle(emptySummary, sourceTotal, true),
+              result: emptySelectedResult,
+              subtitle: buildTransferSubtitle(emptySummary, sourceTotal, truncated, playlistTotal),
             };
           }
           throw new AppError("VALIDATION_ERROR", "源歌单或文本中没有解析到有效歌曲。");
@@ -572,6 +613,7 @@ export class TransferService {
           summary,
           results,
           sourceTotal,
+          ...(playlistTotal !== undefined ? { playlistTotal } : {}),
           processedCount,
           unprocessedCount,
           truncated,
@@ -579,7 +621,7 @@ export class TransferService {
 
         return {
           result,
-          subtitle: buildTransferSubtitle(summary, sourceTotal, truncated),
+          subtitle: buildTransferSubtitle(summary, sourceTotal, truncated, playlistTotal),
         };
       },
     });
@@ -649,7 +691,12 @@ export class TransferService {
 
     return this.#jobs.updateOwnedJobResult(actor, jobId, {
       result: nextResult,
-      subtitle: buildTransferSubtitle(nextSummary, nextResult.sourceTotal, nextResult.truncated),
+      subtitle: buildTransferSubtitle(
+        nextSummary,
+        nextResult.sourceTotal,
+        nextResult.truncated,
+        nextResult.playlistTotal,
+      ),
     });
   }
 

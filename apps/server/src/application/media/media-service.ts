@@ -259,6 +259,56 @@ async function finishWriteStream(
   });
 }
 
+const MAX_WAV_CHUNKS = 64;
+
+async function verifyWavContainer(handle: fsPromises.FileHandle, fileSize: number): Promise<boolean> {
+  if (fileSize < 44) return false;
+
+  let offset = 12;
+  let seenFmt = false;
+  let blockAlign = 1;
+  const chunkHeader = Buffer.alloc(8);
+  const fmtBuf = Buffer.alloc(16);
+
+  for (let hop = 0; hop < MAX_WAV_CHUNKS && offset + 8 <= fileSize; hop += 1) {
+    const { bytesRead } = await handle.read(chunkHeader, 0, 8, offset);
+    if (bytesRead < 8) return false;
+
+    const id = chunkHeader.toString("ascii", 0, 4);
+    const chunkSize = chunkHeader.readUInt32LE(4);
+
+    if (id === "fmt ") {
+      if (chunkSize < 16 || offset + 8 + chunkSize > fileSize) return false;
+      const fmtRead = await handle.read(fmtBuf, 0, 16, offset + 8);
+      if (fmtRead.bytesRead < 16) return false;
+      const audioFormat = fmtBuf.readUInt16LE(0);
+      const channels = fmtBuf.readUInt16LE(2);
+      const sampleRate = fmtBuf.readUInt32LE(4);
+      const align = fmtBuf.readUInt16LE(12);
+      if (audioFormat === 0 || channels < 1 || channels > 32 || sampleRate === 0 || align < 1) {
+        return false;
+      }
+      seenFmt = true;
+      blockAlign = align;
+    } else if (id === "data") {
+      if (!seenFmt) return false;
+      if (chunkSize === 0xffffffff) {
+        return offset + 8 + blockAlign <= fileSize;
+      }
+      if (chunkSize < blockAlign || offset + 8 + chunkSize > fileSize) {
+        return false;
+      }
+      return true;
+    } else if (offset + 8 + chunkSize > fileSize) {
+      return false;
+    }
+
+    offset += 8 + chunkSize + (chunkSize & 1);
+  }
+
+  return false;
+}
+
 function isPlausiblePostMpegBoundary(bytes: Uint8Array, offset: number): boolean {
   if (offset + 4 > bytes.length) return true;
   if (isMpegAudioFrameSync(bytes, offset)) return true;
@@ -330,19 +380,26 @@ export async function verifyDownloadedAudioFile(filePath: string, knownFileSize?
         return ftypSize >= 8 && ftypSize <= remainingTotal;
       }
 
-      // 3. WAV: "RIFF" ... "WAVE" + minimal fmt/data chunk headers >= 44 bytes
-      if (
-        windowBytes.length >= 12 &&
+      // 3. WAV: "RIFF"/"RF64" ... "WAVE" + verified complete fmt & data chunks within fileSize
+      const isRiff =
         windowBytes[0] === 0x52 &&
         windowBytes[1] === 0x49 &&
         windowBytes[2] === 0x46 &&
-        windowBytes[3] === 0x46 &&
+        windowBytes[3] === 0x46;
+      const isRf64 =
+        windowBytes[0] === 0x52 &&
+        windowBytes[1] === 0x46 &&
+        windowBytes[2] === 0x36 &&
+        windowBytes[3] === 0x34;
+      if (
+        windowBytes.length >= 12 &&
+        (isRiff || isRf64) &&
         windowBytes[8] === 0x57 &&
         windowBytes[9] === 0x41 &&
         windowBytes[10] === 0x56 &&
         windowBytes[11] === 0x45
       ) {
-        return remainingTotal >= 44;
+        return await verifyWavContainer(handle, fileSize);
       }
 
       // 4. OGG: "OggS" 27-byte page header + segment table
@@ -853,7 +910,7 @@ export class MediaService {
 
         const finalStat = await fsPromises.stat(filePath);
         return {
-          subtitle: `${getQualityLabel(resolved.level, resolved.bitrate)} · ${(finalStat.size / 1024 / 1024).toFixed(1)} MB`,
+          subtitle: `${getQualityLabel(resolved.level, resolved.bitrate, resolved.format)} · ${(finalStat.size / 1024 / 1024).toFixed(1)} MB`,
           artifactFilename: filename,
           metadata: {
             songId: input.song.id,

@@ -337,11 +337,11 @@ describe("Phase 6 · Responsive layout, safe-area, focus trap, keyboard a11y, an
     // No React duplicate key warnings even with duplicate songs
     expect(consoleErrorSpy.mock.calls.some((args) => String(args[0]).includes("same key"))).toBe(false);
 
-    // Rapid double click sequence (click + click + dblclick) invokes playTrack only once within 350ms (P15)
+    // Rapid double click sequence (click detail=1 + click detail=2 + dblclick) invokes playTrack only once (P15)
     const firstTitleBtn = screen.getAllByRole("button", { name: "重复曲目" })[0] as HTMLElement;
-    fireEvent.click(firstTitleBtn);
-    fireEvent.click(firstTitleBtn);
-    fireEvent.doubleClick(firstTitleBtn);
+    fireEvent.click(firstTitleBtn, { detail: 1 });
+    fireEvent.click(firstTitleBtn, { detail: 2 });
+    fireEvent.doubleClick(firstTitleBtn, { detail: 2 });
     expect(playSpy).toHaveBeenCalledTimes(1);
 
     // Locked song disables download button with clear reason title

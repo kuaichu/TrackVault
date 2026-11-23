@@ -74,10 +74,30 @@ test("Phase 8 · J01: verifyDownloadedAudioFile requires complete first frame / 
     assert.equal(await writeCheck("full.flac", fullFlac), true);
     assert.equal(await writeCheck("trunc.flac", fullFlac.subarray(0, 20)), false);
 
-    // 4. WAV: >= 44 bytes passes; 16 bytes fails
-    const fullWav = Buffer.alloc(44);
-    fullWav.set([0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45]);
+    // 4. WAV: valid RIFF/WAVE with fmt + data chunks passes; 60B JUNK-truncated before fmt/data or mid-data truncated fails
+    const makeChunk = (type: string, body: Buffer) => {
+      const hdr = Buffer.alloc(8);
+      hdr.write(type, 0, "ascii");
+      hdr.writeUInt32LE(body.length, 4);
+      return Buffer.concat([hdr, body]);
+    };
+    const wavFmt = Buffer.alloc(16);
+    wavFmt.writeUInt16LE(1, 0);
+    wavFmt.writeUInt16LE(1, 2);
+    wavFmt.writeUInt32LE(8000, 4);
+    wavFmt.writeUInt32LE(16000, 8);
+    wavFmt.writeUInt16LE(2, 12);
+    wavFmt.writeUInt16LE(16, 14);
+    const wavBody = Buffer.concat([
+      Buffer.from("WAVE"),
+      makeChunk("JUNK", Buffer.alloc(128)),
+      makeChunk("fmt ", wavFmt),
+      makeChunk("data", Buffer.alloc(32)),
+    ]);
+    const fullWav = makeChunk("RIFF", wavBody);
     assert.equal(await writeCheck("full.wav", fullWav), true);
+    assert.equal(await writeCheck("trunc-60.wav", fullWav.subarray(0, 60)), false);
+    assert.equal(await writeCheck("trunc-mid-data.wav", fullWav.subarray(0, fullWav.length - 4)), false);
     assert.equal(await writeCheck("trunc.wav", fullWav.subarray(0, 16)), false);
 
     // 5. OGG: >= 27-byte page header + segment table passes; 12 bytes fails
@@ -317,4 +337,155 @@ test("Phase 8 · T06 + T09: bidirectional permutation invariance across all comp
   assert.equal(transferRes.result.summary.matched, 0);
   assert.equal(transferRes.result.summary.manualReview, 1);
   assert.ok(transferRes.result.results[0]?.reason?.includes("音源实测未完成"));
+
+  // 3. T09 follow-up: primary candidate probe times out while second high-confidence VIP-flagged candidate resolves playable
+  const altProvider = {
+    getAllPlaylistTracks: async () => [makeSong("netease", "n-1", "Echo", false)],
+    searchTracks: async () => [
+      makeSong("qq", "first-timeout", "Echo", false),
+      makeSong("qq", "alt-playable", "Echo", true),
+    ],
+    resolveAudio: async ({ id }: { id: string }) => {
+      if (id === "first-timeout") {
+        throw new AppError("UPSTREAM_TIMEOUT", "Primary gateway timeout");
+      }
+      return { url: "https://ws.stream.qqmusic.qq.com/ok.mp3", trial: false };
+    },
+  };
+  const altService = new TransferService({
+    providers: { get: () => altProvider } as never,
+    credentials: { getDecryptedCookie: () => "COOKIE" } as never,
+    jobs: { enqueue: ({ runner }: { runner: (h: unknown) => unknown }) => runner(syncRuntime) } as never,
+  });
+  const altRes = (await (altService.startTransferJob(actor, {
+    sourceProvider: "netease",
+    targetProvider: "qq",
+    playlistId: "pl-alt",
+    checkAvailability: true,
+  }) as unknown as Promise<{ result: TransferResult }>)) as { result: TransferResult };
+  assert.equal(altRes.result.results[0]?.status, "matched");
+  assert.equal(altRes.result.results[0]?.selectedCandidate?.targetTrackId, "alt-playable");
+
+  // Locked-only candidate whose probe also times out preserves vip_only status AND discloses probe failure in reason
+  const lockedTimeoutProvider = {
+    getAllPlaylistTracks: async () => [makeSong("netease", "n-2", "Echo", false)],
+    searchTracks: async () => [makeSong("qq", "locked-timeout", "Echo", true)],
+    resolveAudio: async () => {
+      throw new AppError("UPSTREAM_TIMEOUT", "VIP probe timeout");
+    },
+  };
+  const lockedTimeoutService = new TransferService({
+    providers: { get: () => lockedTimeoutProvider } as never,
+    credentials: { getDecryptedCookie: () => "COOKIE" } as never,
+    jobs: { enqueue: ({ runner }: { runner: (h: unknown) => unknown }) => runner(syncRuntime) } as never,
+  });
+  const lockedTimeoutRes = (await (lockedTimeoutService.startTransferJob(actor, {
+    sourceProvider: "netease",
+    targetProvider: "qq",
+    playlistId: "pl-locked-timeout",
+    checkAvailability: true,
+  }) as unknown as Promise<{ result: TransferResult }>)) as { result: TransferResult };
+  assert.equal(lockedTimeoutRes.result.results[0]?.status, "vip_only");
+  assert.ok(lockedTimeoutRes.result.results[0]?.reason?.includes("音源实测未完成"));
+
+  // 4. T11 follow-up: 2,501-track playlist missing song_detail for #901 must NOT claim 10,000 scan truncation
+  const partialAdapter = new NeteaseAdapter({
+    apiOverride: {
+      playlist_detail: async () => ({
+        body: {
+          code: 200,
+          playlist: {
+            id: 2501,
+            name: "2501 Playlist",
+            trackCount: 2501,
+            trackIds: Array.from({ length: 2501 }, (_, i) => ({ id: i + 1 })),
+          },
+        },
+      }),
+      song_detail: async ({ ids }) => ({
+        body: {
+          code: 200,
+          songs: String(ids)
+            .split(",")
+            .map(Number)
+            .filter((id) => id !== 901)
+            .map((id) => ({
+              id,
+              name: `Track ${id}`,
+              ar: [{ name: "Artist" }],
+              dt: 180_000,
+              al: { name: "Album" },
+            })),
+        },
+      }),
+    },
+  });
+  const partialTransfer = new TransferService({
+    providers: { get: () => partialAdapter } as never,
+    credentials: { getDecryptedCookie: () => "MUSIC_U=valid" } as never,
+    jobs: { enqueue: ({ runner }: { runner: (h: unknown) => unknown }) => runner(syncRuntime) } as never,
+  });
+  const missing901 = (await (partialTransfer.startTransferJob(actor, {
+    sourceProvider: "netease",
+    targetProvider: "netease",
+    playlistId: "2501",
+    selectedSourceTrackIds: ["901"],
+    checkAvailability: false,
+  }) as unknown as Promise<{ result: TransferResult; subtitle: string }>)) as {
+    result: TransferResult;
+    subtitle: string;
+  };
+  assert.equal(missing901.result.truncated, false);
+  assert.equal(missing901.result.playlistTotal, 2501);
+  assert.equal(missing901.result.sourceTotal, 1);
+  assert.equal(missing901.result.unprocessedCount, 1);
+  assert.equal(/10000|10,000/.test(missing901.subtitle), false);
+
+  // 5. P06 follow-up: overlapping same-account Netease likelist GETs never let the older GET clobber cache
+  let releaseOldGet!: () => void;
+  const oldGetGate = new Promise<void>((r) => {
+    releaseOldGet = r;
+  });
+  let oldGetSent!: () => void;
+  const oldGetStarted = new Promise<void>((r) => {
+    oldGetSent = r;
+  });
+  let overlapCalls = 0;
+  const upstreamLikes = new Set(["old-heart"]);
+  const overlapNe = new NeteaseAdapter({
+    apiOverride: {
+      likelist: async () => {
+        overlapCalls += 1;
+        const snapshot = { body: { code: 200, ids: [...upstreamLikes] } };
+        if (overlapCalls === 1) {
+          oldGetSent();
+          await oldGetGate;
+        }
+        return snapshot;
+      },
+      like: async (params) => {
+        if (params.like === "true") upstreamLikes.add(String(params.id));
+        else upstreamLikes.delete(String(params.id));
+        return { body: { code: 200 } };
+      },
+    },
+  });
+  const overlapAuth = {
+    platform: "netease" as const,
+    cookie: "MUSIC_U=ok",
+    scopeKey: "u-overlap",
+    accountUid: "88",
+  };
+  const getA = overlapNe.getLikedSongIds(overlapAuth);
+  await oldGetStarted;
+  await overlapNe.toggleSongLike("new-heart", true, overlapAuth);
+  await overlapNe.toggleSongLike("old-heart", false, overlapAuth);
+  const resB = await overlapNe.getLikedSongIds(overlapAuth);
+  releaseOldGet();
+  const resA = await getA;
+  const resCached = await overlapNe.getLikedSongIds(overlapAuth);
+  assert.deepEqual(resB, ["new-heart"]);
+  assert.deepEqual(resA, ["new-heart"]);
+  assert.deepEqual(resCached, ["new-heart"]);
+  assert.equal(overlapCalls, 2);
 });

@@ -44,6 +44,25 @@ import type {
 } from "#shared";
 import { apiRequest } from "./http-client.js";
 
+export type JobHttpAttemptEvent =
+  | { readonly type: "list"; readonly kind?: JobKind }
+  | { readonly type: "single"; readonly id: string };
+
+const jobHttpAttemptListeners = new Set<(event: JobHttpAttemptEvent) => void>();
+
+export function subscribeJobHttpAttempts(listener: (event: JobHttpAttemptEvent) => void): () => void {
+  jobHttpAttemptListeners.add(listener);
+  return () => {
+    jobHttpAttemptListeners.delete(listener);
+  };
+}
+
+function notifyJobHttpAttempt(event: JobHttpAttemptEvent): void {
+  for (const listener of jobHttpAttemptListeners) {
+    listener(event);
+  }
+}
+
 export const api = {
   // Auth & Members
   getAuthStatus: (signal?: AbortSignal) => apiRequest<AuthStatus>("/api/auth/status", { signal }),
@@ -204,9 +223,14 @@ export const api = {
     apiRequest<{ job: JobView }>("/api/downloads", { method: "POST", body: input }),
 
   // Unified Jobs & Transfer
-  listJobs: (kind?: JobKind) =>
-    apiRequest<{ jobs: JobView[] }>(kind ? `/api/jobs?kind=${kind}` : "/api/jobs"),
-  getJob: (id: string) => apiRequest<{ job: JobView }>(`/api/jobs/${encodeURIComponent(id)}`),
+  listJobs: (kind?: JobKind) => {
+    notifyJobHttpAttempt({ type: "list", kind });
+    return apiRequest<{ jobs: JobView[] }>(kind ? `/api/jobs?kind=${kind}` : "/api/jobs");
+  },
+  getJob: (id: string) => {
+    notifyJobHttpAttempt({ type: "single", id });
+    return apiRequest<{ job: JobView }>(`/api/jobs/${encodeURIComponent(id)}`);
+  },
   cancelJob: (id: string) =>
     apiRequest<{ job: JobView }>(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   clearFinishedJobs: (kind?: JobKind) =>

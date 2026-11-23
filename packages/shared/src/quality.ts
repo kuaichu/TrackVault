@@ -75,15 +75,27 @@ export function inferQualityLevelFromBitrate(
   format?: string | null,
 ): QualityLevel | null {
   const cleanFmt = format?.replace(/^\./, "").trim().toLowerCase() ?? "";
-  const isLossless = cleanFmt === "flac" || cleanFmt === "wav" || cleanFmt === "ape";
+  const isLossless = cleanFmt === "flac" || cleanFmt === "wav" || cleanFmt === "ape" || cleanFmt === "alac";
+  const isExplicitLossy =
+    cleanFmt === "mp3" ||
+    cleanFmt === "aac" ||
+    cleanFmt === "ogg" ||
+    cleanFmt === "opus" ||
+    cleanFmt === "wma" ||
+    cleanFmt === "webm" ||
+    cleanFmt === "m4a" ||
+    cleanFmt === "mp4";
   const br = typeof bitrate === "number" && Number.isFinite(bitrate) && bitrate > 0 ? bitrate : 0;
   if (isLossless) {
     return br >= 1_200_000 ? "hires" : "lossless";
   }
   if (br <= 0) return null;
-  if (br >= 900_000) return "hires";
-  if (br >= 700_000) return "lossless";
-  // A14: High lossy bitrates (e.g. 384 kbps) without an explicit spatial/vivid tier map to exhigh (labelled with real kbps)
+  // A14: Never infer lossless/FLAC when upstream explicitly declares a lossy codec/container (e.g. AAC 768 kbps)
+  if (!isExplicitLossy) {
+    if (br >= 900_000) return "hires";
+    if (br >= 700_000) return "lossless";
+  }
+  // High lossy bitrates (e.g. 384 kbps MP3 or 768 kbps AAC) without an explicit spatial/vivid tier map to exhigh (labelled with real kbps)
   if (br >= 256_000) return "exhigh";
   if (br >= 160_000) return "higher";
   return "standard";
@@ -106,7 +118,19 @@ export function normalizeQualityLevel(
   return fallback;
 }
 
-export function getQualityLabel(level: QualityLevel | string, bitrate?: number | null): string {
+export function getQualityLabel(
+  level: QualityLevel | string,
+  bitrate?: number | null,
+  format?: string | null,
+): string {
+  const cleanFmt = format?.replace(/^\./, "").trim().toLowerCase() ?? "";
+  const isExplicitLossy =
+    cleanFmt === "mp3" ||
+    cleanFmt === "aac" ||
+    cleanFmt === "ogg" ||
+    cleanFmt === "opus" ||
+    cleanFmt === "wma" ||
+    cleanFmt === "webm";
   const kbps =
     typeof bitrate === "number" && Number.isFinite(bitrate) && bitrate > 0
       ? Math.round(bitrate / 1000)
@@ -119,6 +143,12 @@ export function getQualityLabel(level: QualityLevel | string, bitrate?: number |
     }
     if (level === "dolby") {
       return kbps ? `杜比 ${kbps}K` : meta.shortLabel;
+    }
+    if (meta.lossless && isExplicitLossy) {
+      return kbps ? `${cleanFmt.toUpperCase()} ${kbps}K` : cleanFmt.toUpperCase();
+    }
+    if (level === "lossless" && (cleanFmt === "wav" || cleanFmt === "ape" || cleanFmt === "alac")) {
+      return cleanFmt.toUpperCase();
     }
     if (!meta.lossless && kbps && (level === "standard" || level === "higher" || level === "exhigh")) {
       return `${kbps}K`;

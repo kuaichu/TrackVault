@@ -108,6 +108,16 @@ test("quality helpers include higher 192K and never crash on unknown levels (A14
   });
   assert.equal(inferred384, "exhigh");
   assert.equal(getQualityLabel(inferred384, 384_000), "384K");
+
+  // Explicit lossy format (e.g. AAC 768 kbps without level) must NEVER infer lossless or label as FLAC
+  const inferredAac768 = normalizeQualityLevel(undefined, "vivid", {
+    bitrate: 768_000,
+    format: "aac",
+  });
+  assert.equal(inferredAac768, "exhigh");
+  assert.equal(getQualityLabel(inferredAac768, 768_000), "768K");
+  assert.equal(getQualityLabel("lossless", 768_000, "aac"), "AAC 768K");
+  assert.equal(getQualityLabel("lossless", 1_411_000, "wav"), "WAV");
 });
 
 test("PlayerStateSchema backwards-compatibly accepts optional muted & lastNonZeroVolume (U09)", () => {

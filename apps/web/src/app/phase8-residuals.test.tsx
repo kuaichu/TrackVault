@@ -1,8 +1,16 @@
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, onlineManager, useQuery } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthStatus, JobView, Song, SongCommentsPage, UserSettings, UserSummary } from "#shared";
+import type {
+  AuthStatus,
+  JobView,
+  Song,
+  SongCommentsPage,
+  TransferResult,
+  UserSettings,
+  UserSummary,
+} from "#shared";
 import { SongTable } from "../entities/song/SongTable.js";
 import { PersonalFmPage } from "../features/fm/PersonalFmPage.js";
 import { CloudPage, HistoryPage } from "../features/library/CloudAndHistoryPage.js";
@@ -11,14 +19,21 @@ import { PlayQueuePanel, TrackCommentsPanel } from "../features/player/component
 import { AudioEngine, audioEngine } from "../features/player/engine/audio-engine.js";
 import { usePlaybackClockStore, usePlayerStore } from "../features/player/store/player-store.js";
 import { SearchPage } from "../features/search/SearchPage.js";
+import { TransferPage } from "../features/transfer/TransferPage.js";
 import { api } from "../shared/api/endpoints.js";
 import { DEFAULT_PROVIDER_CAPABILITIES } from "../shared/hooks/use-capabilities.js";
 import {
   clearPendingDirectLinkJobs,
+  markJobQueryAttemptStart,
   trackPendingDirectLinkJob,
   useJobEvents,
 } from "../shared/hooks/use-job-events.js";
-import { applyRecordedPlayHistory } from "../shared/hooks/use-play-history-sync.js";
+import {
+  applyClearedPlayHistory,
+  applyRecordedPlayHistory,
+  beginPlayHistoryClear,
+  beginPlayHistoryRecord,
+} from "../shared/hooks/use-play-history-sync.js";
 import { useLikedIdsQuery, useToggleLikeMutation } from "../shared/hooks/use-toggle-like.js";
 import { toast, useToastStore } from "../shared/store/toast-store.js";
 import { AppContent } from "./App.js";
@@ -688,5 +703,313 @@ describe("Phase 8 · State invariant convergence & accessibility regressions", (
     const removeButtons = screen.getAllByRole("button", { name: "移出队列" });
     expect(removeButtons[0]?.className).toContain("md:group-focus-within:opacity-100");
     queuePanel.unmount();
+  });
+
+  it("Phase 8 follow-up: F14 clear/record causal ordering & failed clear recovery, F04 retry attempt seq, F17 503 retry + late register, F07 offline restore, P12 manual FM skip quality, A10 cloud play-all yield, P15 keyboard detail=0, and T11 playlistTotal UI", async () => {
+    // 1. F14: Older POST resolving after clear stays empty; late clear ack does NOT wipe newer POST; failed clear recovers interrupted GET
+    const f14Qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const olderSong = makeSong("f14-older");
+    const newerSong = makeSong("f14-newer");
+    const olderPostSeq = beginPlayHistoryRecord(f14Qc);
+    const clearSeq1 = beginPlayHistoryClear(f14Qc);
+    applyClearedPlayHistory(f14Qc, { items: [] }, clearSeq1);
+    applyRecordedPlayHistory(f14Qc, { items: [olderSong] }, olderPostSeq, olderSong);
+    expect(f14Qc.getQueryData<{ items: Song[] }>(["play-history"])?.items ?? []).toEqual([]);
+
+    const clearSeq2 = beginPlayHistoryClear(f14Qc);
+    const newerPostSeq = beginPlayHistoryRecord(f14Qc);
+    applyRecordedPlayHistory(f14Qc, { items: [newerSong] }, newerPostSeq, newerSong);
+    applyClearedPlayHistory(f14Qc, { items: [] }, clearSeq2);
+    expect(f14Qc.getQueryData<{ items: Song[] }>(["play-history"])?.items.map((s) => s.id)).toEqual([
+      "f14-newer",
+    ]);
+
+    // Failed clear recovers cancelled initial GET
+    const failClearQc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    failClearQc.setQueryData(["play-history"], { items: [olderSong] });
+    let historyGetCount = 0;
+    let resolveInterruptedGet!: (res: { items: Song[] }) => void;
+    vi.spyOn(api, "getPlayHistory").mockImplementation(() => {
+      historyGetCount += 1;
+      if (historyGetCount === 1) {
+        return new Promise((resolve) => {
+          resolveInterruptedGet = resolve;
+        });
+      }
+      return Promise.resolve({ items: [newerSong, olderSong] });
+    });
+    vi.spyOn(api, "clearPlayHistory").mockRejectedValueOnce(new Error("503 Clear Failed"));
+    const failHistoryView = render(
+      <QueryClientProvider client={failClearQc}>
+        <MemoryRouter>
+          <HistoryPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(historyGetCount).toBe(1));
+    fireEvent.click(screen.getByRole("button", { name: "清空" }));
+    await waitFor(() =>
+      expect(failClearQc.getQueryData<{ items: Song[] }>(["play-history"])?.items.map((s) => s.id)).toEqual([
+        "f14-newer",
+        "f14-older",
+      ]),
+    );
+    resolveInterruptedGet({ items: [newerSong, olderSong] });
+    failHistoryView.unmount();
+
+    // 2. F04 automatic HTTP retry + F17 transient 503 retry & late registration after 50-item snapshot
+    const retryQc = new QueryClient({ defaultOptions: { queries: { retry: 1, retryDelay: 10 } } });
+    const anchor = makeJob({ id: "anchor", createdAt: 1, status: "running", progress: 20 });
+    const transient = makeJob({ id: "later-removed", createdAt: 2, status: "completed", progress: 100 });
+    let retryListCalls = 0;
+    let resolveAttempt1!: (val: Promise<{ jobs: JobView[] }>) => void;
+    let resolveAttempt2!: (val: { jobs: JobView[] }) => void;
+    vi.spyOn(api, "listJobs").mockImplementation(() => {
+      retryListCalls += 1;
+      if (retryListCalls === 1) return Promise.resolve({ jobs: [anchor] });
+      if (retryListCalls === 2) {
+        return new Promise<never>((_, reject) => {
+          resolveAttempt1 = () => {
+            reject(new Error("503 temporary"));
+            return Promise.resolve({ jobs: [] });
+          };
+        });
+      }
+      return new Promise((resolve) => {
+        resolveAttempt2 = resolve;
+      });
+    });
+    let getJobAttempt = 0;
+    vi.spyOn(api, "getJob").mockImplementation(async (id) => {
+      getJobAttempt += 1;
+      if (id === "retry-503-dl" && getJobAttempt === 1) {
+        throw new Error("503 transient getJob");
+      }
+      return {
+        job: makeJob({
+          id,
+          status: "completed",
+          progress: 100,
+          directUrl: `https://m7.music.126.net/${id}.mp3`,
+        }),
+      };
+    });
+
+    function RetryWatcher() {
+      useJobEvents(true);
+      useQuery({
+        queryKey: ["jobs", "download"],
+        queryFn: () => {
+          markJobQueryAttemptStart(retryQc, ["jobs", "download"]);
+          return api.listJobs("download");
+        },
+      });
+      return null;
+    }
+
+    const retryView = render(
+      <QueryClientProvider client={retryQc}>
+        <RetryWatcher />
+      </QueryClientProvider>,
+    );
+    await waitFor(() =>
+      expect(retryQc.getQueryData<{ jobs: JobView[] }>(["jobs", "download"])?.jobs.map((j) => j.id)).toEqual([
+        "anchor",
+      ]),
+    );
+    const retryEs = MockEventSource.instances.at(-1);
+    if (!retryEs) throw new Error("Expected MockEventSource");
+    act(() => retryEs.emitOpen());
+    act(() => {
+      retryEs.emitError();
+      retryEs.emitOpen();
+    });
+    await waitFor(() => expect(retryListCalls).toBe(2));
+    await act(async () => {
+      resolveAttempt1(Promise.resolve({ jobs: [] }));
+    });
+    act(() => {
+      retryEs.emitMessage({ type: "job_updated", job: transient });
+    });
+    await waitFor(() => expect(retryListCalls).toBe(3));
+    await act(async () => {
+      resolveAttempt2({ jobs: [anchor] });
+    });
+    expect(retryQc.getQueryData<{ jobs: JobView[] }>(["jobs", "download"])?.jobs.map((j) => j.id)).toEqual([
+      "anchor",
+    ]);
+
+    // Late registration when cache already holds 50 newer jobs + 503 transient retry on getJob
+    retryQc.setQueryData(["jobs", "download"], {
+      jobs: Array.from({ length: 50 }, (_, idx) => makeJob({ id: `newer-${idx}`, createdAt: 100 - idx })),
+    });
+    trackPendingDirectLinkJob("retry-503-dl", { queryClient: retryQc, fallbackTitle: "重试直链" });
+    await waitFor(
+      () => {
+        expect(useToastStore.getState().items.some((t) => t.action?.href?.includes("retry-503-dl.mp3"))).toBe(
+          true,
+        );
+      },
+      { timeout: 2000 },
+    );
+    retryView.unmount();
+    useToastStore.getState().clear();
+
+    // 3. F07: Offline mount with ?q=keyword waits for settings after coming online instead of querying aggregate first
+    let resolveOfflineSettings!: (res: { settings: UserSettings }) => void;
+    vi.spyOn(api, "getSettings").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveOfflineSettings = resolve;
+        }),
+    );
+    const offlineModes: string[] = [];
+    vi.spyOn(api, "searchSongs").mockImplementation(async (_q, mode) => {
+      offlineModes.push(mode);
+      return { results: [], mode, warnings: [] };
+    });
+    act(() => onlineManager.setOnline(false));
+    try {
+      const offlineQc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const offlineSearch = render(
+        <QueryClientProvider client={offlineQc}>
+          <MemoryRouter initialEntries={["/search?q=offline-test"]}>
+            <SearchPage />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      act(() => onlineManager.setOnline(true));
+      await waitFor(() => expect(typeof resolveOfflineSettings).toBe("function"));
+      expect(offlineModes).toEqual([]);
+      await act(async () => {
+        resolveOfflineSettings({ settings: makeSettings({ providerMode: "qq" }) });
+      });
+      await waitFor(() => expect(offlineModes).toEqual(["qq"]));
+      offlineSearch.unmount();
+    } finally {
+      act(() => onlineManager.setOnline(true));
+    }
+
+    // 4. P12: Manual skip at FM tail followed by quality switch does NOT replay old tail and plays incoming batch in lossless
+    const { audio: fmAudio } = createControlledAudio();
+    const fmEngine = new AudioEngine(fmAudio);
+    engines.push(fmEngine);
+    let fmBatchCount = 0;
+    let resolveManualFmBatch!: (res: { songs: Song[] }) => void;
+    vi.spyOn(api, "getPersonalFm").mockImplementation(() => {
+      fmBatchCount += 1;
+      if (fmBatchCount === 1) return Promise.resolve({ songs: [makeSong("fm-tail-1")] });
+      return new Promise((resolve) => {
+        resolveManualFmBatch = resolve;
+      });
+    });
+    await fmEngine.loadFmBatch({ autoPlay: true });
+    void fmEngine.playNext();
+    await waitFor(() => expect(fmBatchCount).toBe(2));
+    await fmEngine.switchPlaybackQuality("lossless");
+    expect(usePlayerStore.getState().currentTrack?.id).toBe("fm-tail-1");
+    await act(async () => {
+      resolveManualFmBatch({ songs: [makeSong("fm-batch-2")] });
+    });
+    await waitFor(() => expect(usePlayerStore.getState().currentTrack?.id).toBe("fm-batch-2"));
+    expect(fmAudio.src).toContain("level=lossless");
+
+    // 5. A10 + P15: CloudPage Play All yields to newer user selection; SongTable native keyboard detail=0 clicks both activate
+    vi.spyOn(api, "getSettings").mockResolvedValue({ settings: makeSettings() });
+    let releaseCloudPage2!: () => void;
+    vi.spyOn(api, "getCloudSongs").mockImplementation(async (params) => {
+      const offset = params?.offset ?? 0;
+      if (offset === 0) {
+        return {
+          songs: [makeSong("cloud-1", { title: "云盘一" }), makeSong("cloud-2", { title: "云盘二" })],
+          total: 3,
+          offset: 0,
+          nextOffset: 2,
+          limit: 2,
+          hasMore: true,
+        };
+      }
+      await new Promise<void>((resolve) => {
+        releaseCloudPage2 = resolve;
+      });
+      return {
+        songs: [makeSong("cloud-3", { title: "云盘三" })],
+        total: 3,
+        offset: 2,
+        nextOffset: 3,
+        limit: 2,
+        hasMore: false,
+      };
+    });
+    const playedTrackIds: string[] = [];
+    const origPlayTrack = audioEngine.playTrack.bind(audioEngine);
+    vi.spyOn(audioEngine, "playTrack").mockImplementation(async (song, opts) => {
+      playedTrackIds.push(song.id);
+      return origPlayTrack(song, opts);
+    });
+    const cloudQc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const cloudView2 = render(
+      <QueryClientProvider client={cloudQc}>
+        <MemoryRouter>
+          <CloudPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: "云盘二" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "播放全部" }));
+    // User selects song 2 while page 2 is still pending -> keyboard detail=0 twice
+    const song2Btn = screen.getByRole("button", { name: "云盘二" });
+    fireEvent.click(song2Btn, { detail: 0 });
+    fireEvent.click(song2Btn, { detail: 0 });
+    expect(playedTrackIds).toEqual(["cloud-2", "cloud-2"]);
+    await act(async () => {
+      releaseCloudPage2?.();
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "云盘三" })).toBeInTheDocument());
+    // Must NOT have hijacked back to cloud-1!
+    expect(playedTrackIds).toEqual(["cloud-2", "cloud-2"]);
+    cloudView2.unmount();
+
+    // 6. T11 UI: TransferPage displays playlistTotal (2501) vs selected count (2) even when truncated === false and unprocessedCount > 0
+    const transferJob: JobView = makeJob({
+      id: "transfer-t11-ui",
+      kind: "transfer",
+      status: "completed",
+      progress: 100,
+      title: "选中曲目迁移",
+      result: {
+        sourceProvider: "netease",
+        targetProvider: "qq",
+        playlistName: "选中曲目迁移",
+        summary: {
+          total: 1,
+          matched: 1,
+          manualReview: 0,
+          notFound: 0,
+          unavailable: 0,
+          duplicate: 0,
+          skipped: 0,
+        },
+        results: [],
+        sourceTotal: 2,
+        playlistTotal: 2501,
+        processedCount: 1,
+        unprocessedCount: 1,
+        truncated: false,
+      } satisfies TransferResult,
+    });
+    vi.spyOn(api, "listJobs").mockResolvedValue({ jobs: [transferJob] });
+    const t11Qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const t11View = render(
+      <QueryClientProvider client={t11Qc}>
+        <MemoryRouter>
+          <TransferPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/源歌单共 2501 首，本次已选 2 首/)).toBeInTheDocument();
+    });
+    t11View.unmount();
   });
 });

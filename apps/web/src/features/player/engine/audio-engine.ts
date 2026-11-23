@@ -148,7 +148,10 @@ export class AudioEngine {
   #persistDebounceId: ReturnType<typeof setTimeout> | null = null;
   #listenersBound = false;
   #pagehideHandler: (() => void) | null = null;
-  #onPlayHistoryRecorded: ((res: { items: Song[] }) => void) | null = null;
+  #onPlayHistoryRecordStart: ((song: Song) => number) | null = null;
+  #onPlayHistoryRecorded:
+    | ((res: { items: Song[] }, meta?: { startSeq?: number; song: Song }) => void)
+    | null = null;
   #historyRequestSeq = 0;
   #latestAppliedHistorySeq = 0;
   #pendingHistorySong: { token: number; song: Song } | null = null;
@@ -171,8 +174,20 @@ export class AudioEngine {
    * Dynamically bound/unbound by the active `<UserSessionBoundary>` so this singleton
    * never holds a stale QueryClient reference across account switches.
    */
-  setPlayHistoryListener(listener: ((res: { items: Song[] }) => void) | null): void {
+  setPlayHistoryListener(
+    listener: ((res: { items: Song[] }, meta?: { startSeq?: number; song: Song }) => void) | null,
+    onStart?: ((song: Song) => number) | null,
+  ): void {
     this.#onPlayHistoryRecorded = listener;
+    this.#onPlayHistoryRecordStart = listener ? (onStart ?? null) : null;
+  }
+
+  /**
+   * Monotonic playback selection token used by async UI flows (e.g. Cloud "Play All" pagination)
+   * to avoid clobbering a newer user track choice.
+   */
+  getPlaybackRevision(): number {
+    return this.#playToken;
   }
 
   dispose(): void {
@@ -229,13 +244,18 @@ export class AudioEngine {
       if (pending && pending.token === this.#playToken && !this.#recordedHistoryForCurrentPlay) {
         this.#recordedHistoryForCurrentPlay = true;
         this.#pendingHistorySong = null;
-        // F14: Validate against #sessionEpoch (NOT #playToken) so pausing right after "playing" never drops the callback
+        // F14: Capture causal initiation sequence BEFORE POST is sent, and validate against #sessionEpoch
         const recordEpoch = this.#sessionEpoch;
         const reqSeq = ++this.#historyRequestSeq;
+        const startSeq = this.#onPlayHistoryRecordStart?.(pending.song);
         void api
           .recordPlayHistory(pending.song)
           .then((res) => {
-            if (recordEpoch === this.#sessionEpoch && reqSeq >= this.#latestAppliedHistorySeq) {
+            if (recordEpoch !== this.#sessionEpoch) return;
+            if (startSeq !== undefined) {
+              this.#latestAppliedHistorySeq = Math.max(this.#latestAppliedHistorySeq, reqSeq);
+              this.#onPlayHistoryRecorded?.(res, { startSeq, song: pending.song });
+            } else if (reqSeq >= this.#latestAppliedHistorySeq) {
               this.#latestAppliedHistorySeq = reqSeq;
               this.#onPlayHistoryRecorded?.(res);
             }
@@ -766,6 +786,11 @@ export class AudioEngine {
 
       const songs = res.songs ?? [];
       this.#fmCursorIndex = -1;
+      if (this.#fmAbortController === controller) {
+        this.#fmFetching = false;
+        this.#fmFetchSource = null;
+        this.#fmAutoPlayPending = false;
+      }
       usePlayerStore.getState().setStatePatch({
         fmQueue: songs,
         fmLoading: false,
@@ -855,9 +880,10 @@ export class AudioEngine {
       return;
     }
 
-    // P12: When the previous track has already naturally ended and we are awaiting an in-flight FM batch,
-    // record the target quality for the incoming batch WITHOUT replaying the ended song or bumping #playToken.
-    if (this.#trackEndedAwaitingNext && this.#fmFetching) {
+    // P12: Whenever an auto-playing FM batch continuation is in flight (whether after natural "ended"
+    // or manual skip at batch tail), record the target quality for the incoming batch WITHOUT replaying
+    // the skipped/ended track or bumping #playToken.
+    if ((this.#fmFetching && this.#fmAutoPlayPending) || (this.#trackEndedAwaitingNext && this.#fmFetching)) {
       this.#pendingQualityForNextAutoTrack = level;
       state.setStatePatch({ activeQualityOverride: level, playerError: null });
       return;

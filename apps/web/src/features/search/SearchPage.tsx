@@ -39,7 +39,7 @@ export function SearchPage() {
   }, [urlQ]);
 
   const activeQuery = urlQ.trim();
-  const modeReady = hasExplicitMode || !settingsQuery.isLoading;
+  const modeReady = hasExplicitMode || !settingsQuery.isPending;
 
   const songSearchQuery = useQuery({
     queryKey: ["search", activeQuery, mode],

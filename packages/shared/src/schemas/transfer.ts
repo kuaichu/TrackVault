@@ -84,6 +84,7 @@ export const TransferResultSchema = z.object({
   summary: TransferSummarySchema,
   results: z.array(TransferTrackResultSchema),
   sourceTotal: z.number().int().nonnegative().optional(),
+  playlistTotal: z.number().int().nonnegative().optional(),
   processedCount: z.number().int().nonnegative().optional(),
   unprocessedCount: z.number().int().nonnegative().optional(),
   truncated: z.boolean().optional(),

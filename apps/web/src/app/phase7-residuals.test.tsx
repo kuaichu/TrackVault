@@ -537,10 +537,10 @@ describe("Phase 7 · Residual boundary closures & Fullscreen inline comments/que
       </QueryClientProvider>,
     );
     const titleBtn = screen.getByRole("button", { name: "四百毫秒双击曲" });
-    fireEvent.click(titleBtn);
-    fakeNow += 420; // 420ms > old 350ms, < new 550ms!
-    fireEvent.click(titleBtn);
-    fireEvent.doubleClick(titleBtn);
+    fireEvent.click(titleBtn, { detail: 1 });
+    fakeNow += 420; // 420ms > old 350ms, within OS double-click sequence (detail=2)
+    fireEvent.click(titleBtn, { detail: 2 });
+    fireEvent.doubleClick(titleBtn, { detail: 2 });
     expect(playSpy).toHaveBeenCalledTimes(1);
     nowSpy.mockRestore();
     tableView.unmount();

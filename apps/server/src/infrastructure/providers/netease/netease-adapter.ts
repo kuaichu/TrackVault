@@ -258,12 +258,17 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     defaultTtlMs: 3 * 60 * 1000,
   });
   readonly #lyricCache = new ScopedLruCache<SongLyrics>({ maxEntries: 300, defaultTtlMs: 30 * 60 * 1000 });
-  readonly #likeSetCache = new ScopedLruCache<Set<string>>({ maxEntries: 50, defaultTtlMs: 2 * 60 * 1000 });
+  readonly #likeSetCache = new ScopedLruCache<{ set: Set<string>; readStartEpoch: number }>({
+    maxEntries: 50,
+    defaultTtlMs: 2 * 60 * 1000,
+  });
   readonly #recentLikeMutations = new ScopedLruCache<Map<string, { liked: boolean; epoch: number }>>({
     maxEntries: 50,
     defaultTtlMs: 5 * 60 * 1000,
   });
   #likeMutationEpoch = 0;
+  #likeReadSeq = 0;
+  readonly #inFlightLikeReads = new Map<number, { scopeKey: string; startEpoch: number }>();
   readonly #uidCache = new ScopedLruCache<string>({ maxEntries: 50, defaultTtlMs: 10 * 60 * 1000 });
 
   constructor(options?: { realIp?: string; timeoutMs?: number; apiOverride?: Partial<NeteaseApiModule> }) {
@@ -337,7 +342,18 @@ export class NeteaseAdapter implements MusicProviderAdapter {
     this.#albumCache.invalidateScope(scopeKey);
     this.#playlistDetailCache.invalidateScope(scopeKey);
     this.#likeSetCache.invalidateScope(scopeKey);
+    this.#recentLikeMutations.invalidateScope(scopeKey);
     this.#uidCache.invalidateScope(scopeKey);
+  }
+
+  #getMinInFlightLikeEpoch(scopeKey: string): number {
+    let min = Number.POSITIVE_INFINITY;
+    for (const entry of this.#inFlightLikeReads.values()) {
+      if (entry.scopeKey === scopeKey && entry.startEpoch < min) {
+        min = entry.startEpoch;
+      }
+    }
+    return min;
   }
 
   #cookieCacheKey(cookie: string): string {
@@ -1552,12 +1568,15 @@ export class NeteaseAdapter implements MusicProviderAdapter {
 
   async #getLikeSet(auth: ProviderAuthContext): Promise<Set<string>> {
     const startEpoch = this.#likeMutationEpoch;
-    const uid = await this.#resolveUid(auth);
-    const cacheKey = `likes:${uid}`;
-    const cached = this.#likeSetCache.get(auth.scopeKey, cacheKey);
-    if (cached) return cached;
+    const readId = ++this.#likeReadSeq;
+    this.#inFlightLikeReads.set(readId, { scopeKey: auth.scopeKey, startEpoch });
 
     try {
+      const uid = await this.#resolveUid(auth);
+      const cacheKey = `likes:${uid}`;
+      const cached = this.#likeSetCache.get(auth.scopeKey, cacheKey);
+      if (cached) return new Set(cached.set);
+
       const response = await this.#call(
         () => this.#api.likelist(this.#baseParams(auth, { uid })),
         auth.signal,
@@ -1566,27 +1585,45 @@ export class NeteaseAdapter implements MusicProviderAdapter {
       const ids = ((response.body.ids as Array<number | string> | undefined) ?? []).map(String);
       const set = new Set(ids);
 
-      // P06: Reconcile any toggleSongLike mutations that completed while #resolveUid / likelist was in flight
-      // so a slow stale likelist response can NEVER clobber a newer like/unlike in the 2-minute cache.
+      // P06: Reconcile any toggleSongLike mutations that completed after this read began (`entry.epoch > startEpoch`)
+      // without prematurely deleting entries still required by an older overlapping in-flight GET.
       const recentMutations = this.#recentLikeMutations.get(auth.scopeKey, "mutations");
       if (recentMutations) {
         for (const [mutSongId, entry] of recentMutations.entries()) {
           if (entry.epoch > startEpoch) {
             if (entry.liked) set.add(mutSongId);
             else set.delete(mutSongId);
-          } else {
-            recentMutations.delete(mutSongId);
           }
         }
       }
 
-      this.#likeSetCache.set(auth.scopeKey, cacheKey, set);
+      // P06: Monotonic read-generation publish guard — an older GET finishing after a newer GET must never clobber cache
+      const currentCached = this.#likeSetCache.get(auth.scopeKey, cacheKey);
+      if (currentCached && currentCached.readStartEpoch > startEpoch) {
+        return new Set(currentCached.set);
+      }
+
+      this.#likeSetCache.set(auth.scopeKey, cacheKey, {
+        set: new Set(set),
+        readStartEpoch: startEpoch,
+      });
       return set;
     } catch (error) {
       if (error instanceof AppError) throw error;
       throw new AppError("UPSTREAM_ERROR", extractApiError(error, "获取网易云红心列表失败"), {
         cause: error,
       });
+    } finally {
+      this.#inFlightLikeReads.delete(readId);
+      const recentMutations = this.#recentLikeMutations.get(auth.scopeKey, "mutations");
+      if (recentMutations && recentMutations.size > 0) {
+        const minActiveEpoch = this.#getMinInFlightLikeEpoch(auth.scopeKey);
+        for (const [mutSongId, entry] of recentMutations.entries()) {
+          if (entry.epoch <= startEpoch && entry.epoch <= minActiveEpoch) {
+            recentMutations.delete(mutSongId);
+          }
+        }
+      }
     }
   }
 
@@ -1638,10 +1675,13 @@ export class NeteaseAdapter implements MusicProviderAdapter {
         const cacheKey = `likes:${uid}`;
         const existing = this.#likeSetCache.get(auth.scopeKey, cacheKey);
         if (existing) {
-          const next = new Set(existing);
+          const next = new Set(existing.set);
           if (liked) next.add(songId);
           else next.delete(songId);
-          this.#likeSetCache.set(auth.scopeKey, cacheKey, next);
+          this.#likeSetCache.set(auth.scopeKey, cacheKey, {
+            set: next,
+            readStartEpoch: Math.max(existing.readStartEpoch, mutationEpoch),
+          });
         }
       } else {
         this.#likeSetCache.invalidateScope(auth.scopeKey);

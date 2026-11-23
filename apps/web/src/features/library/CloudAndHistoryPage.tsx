@@ -1,13 +1,18 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Play, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { Song } from "#shared";
+import { type Song, getSongKey } from "#shared";
 import { SongTable } from "../../entities/song/SongTable.js";
 import { api } from "../../shared/api/endpoints.js";
-import { applyClearedPlayHistory, fetchSyncedPlayHistory } from "../../shared/hooks/use-play-history-sync.js";
+import {
+  applyClearedPlayHistory,
+  beginPlayHistoryClear,
+  fetchSyncedPlayHistory,
+} from "../../shared/hooks/use-play-history-sync.js";
 import { toast } from "../../shared/store/toast-store.js";
 import { EmptyState } from "../../shared/ui/primitives.js";
 import { audioEngine } from "../player/engine/audio-engine.js";
+import { usePlayerStore } from "../player/store/player-store.js";
 
 const CLOUD_PAGE_SIZE = 100;
 const MAX_CLOUD_PLAY_ALL_PAGES = 30;
@@ -62,6 +67,7 @@ export function CloudPage() {
       return;
     }
 
+    const startRevision = audioEngine.getPlaybackRevision();
     setIsLoadingAllForPlay(true);
     try {
       let latestPages = pages;
@@ -69,13 +75,16 @@ export function CloudPage() {
       let fetchedCount = 0;
 
       while (canFetchMore && fetchedCount < MAX_CLOUD_PLAY_ALL_PAGES && mountedRef.current) {
+        if (audioEngine.getPlaybackRevision() !== startRevision) {
+          break;
+        }
         fetchedCount += 1;
         const nextRes = await cloudQuery.fetchNextPage();
         if (nextRes.data?.pages) {
           latestPages = nextRes.data.pages;
         }
         if (nextRes.isError) {
-          if (!mountedRef.current) return;
+          if (!mountedRef.current || audioEngine.getPlaybackRevision() !== startRevision) return;
           const partialCount = dedupCloudSongs(latestPages.flatMap((page) => page.songs)).length;
           const errMsg = nextRes.error instanceof Error ? nextRes.error.message : "后续分页请求失败";
           toast.error(`云盘后续分页加载失败（当前已加载 ${partialCount} 首）：${errMsg}，请重试`);
@@ -91,7 +100,21 @@ export function CloudPage() {
       if (!mountedRef.current) return;
 
       const fullSongs = dedupCloudSongs(latestPages.flatMap((page) => page.songs));
-      const first = fullSongs[0];
+
+      // A10: Never hijack playback if the user selected another track while cloud pagination was in flight
+      if (audioEngine.getPlaybackRevision() !== startRevision) {
+        const playerState = usePlayerStore.getState();
+        if (
+          !playerState.fmMode &&
+          playerState.currentTrack &&
+          fullSongs.some((s) => getSongKey(s) === getSongKey(playerState.currentTrack as Song))
+        ) {
+          playerState.setStatePatch({ queue: fullSongs });
+        }
+        return;
+      }
+
+      const first = fullSongs.find((s) => !s.availability?.playback.locked) ?? fullSongs[0];
       if (first) {
         void audioEngine.playTrack(first, { queue: fullSongs });
       }
@@ -204,13 +227,19 @@ export function HistoryPage() {
   const clearMutation = useMutation({
     mutationFn: () => api.clearPlayHistory(),
     onMutate: async () => {
+      const clearSeq = beginPlayHistoryClear(queryClient);
+      const wasFetching = queryClient.getQueryState(["play-history"])?.fetchStatus === "fetching";
       await queryClient.cancelQueries({ queryKey: ["play-history"] });
+      return { clearSeq, wasFetching };
     },
-    onSuccess: (res) => {
-      applyClearedPlayHistory(queryClient, res);
+    onSuccess: (res, _vars, context) => {
+      applyClearedPlayHistory(queryClient, res, context?.clearSeq);
       toast.info("已清空播放记录");
     },
-    onError: (err) => {
+    onError: (err, _vars, context) => {
+      if (context?.wasFetching || queryClient.getQueryData(["play-history"]) === undefined) {
+        void queryClient.invalidateQueries({ queryKey: ["play-history"] });
+      }
       toast.error(err instanceof Error ? err.message : "清空播放记录失败");
     },
   });

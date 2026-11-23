@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, ExternalLink, Trash2, X } from "lucide-react";
 import { sanitizeExternalUrl } from "#shared";
 import { api } from "../../shared/api/endpoints.js";
+import { markJobQueryAttemptStart } from "../../shared/hooks/use-job-events.js";
 import { toast } from "../../shared/store/toast-store.js";
 import { EmptyState } from "../../shared/ui/primitives.js";
 
@@ -9,7 +10,10 @@ export function DownloadsPage() {
   const queryClient = useQueryClient();
   const jobsQuery = useQuery({
     queryKey: ["jobs", "download"],
-    queryFn: () => api.listJobs("download"),
+    queryFn: () => {
+      markJobQueryAttemptStart(queryClient, ["jobs", "download"]);
+      return api.listJobs("download");
+    },
   });
 
   const cancelMutation = useMutation({

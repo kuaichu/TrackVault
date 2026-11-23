@@ -76,24 +76,15 @@ export function SongTable({
   const [menuUpward, setMenuUpward] = useState(false);
 
   const lastButtonPlayRef = useRef<{ key: string; at: number } | null>(null);
-  const lastZeroDetailPlayRef = useRef<{ key: string; at: number } | null>(null);
 
-  // P15: Honor UIEvent.detail semantics so OS double-clicks at ANY speed (e.g. 650ms, detail=2) never play twice,
-  // while independent single pointer clicks (detail === 1) ALWAYS respond even when 420ms apart.
+  // P15: Honor W3C UIEvent.detail semantics:
+  // - Pointer double-clicks at ANY OS speed dispatch detail=1 then detail=2 (ignored via e.detail > 1).
+  // - Independent pointer single-clicks (detail=1) and keyboard/assistive activations (detail=0) ALWAYS respond immediately.
   const handlePlayButtonClick = (e: MouseEvent<HTMLButtonElement>, song: Song) => {
     if (e.detail > 1) {
       return;
     }
-    const songKey = getSongKey(song);
-    const now = Date.now();
-    if (e.detail === 0) {
-      const prevZero = lastZeroDetailPlayRef.current;
-      if (prevZero && prevZero.key === songKey && now - prevZero.at < 550) {
-        return;
-      }
-      lastZeroDetailPlayRef.current = { key: songKey, at: now };
-    }
-    lastButtonPlayRef.current = { key: songKey, at: now };
+    lastButtonPlayRef.current = { key: getSongKey(song), at: Date.now() };
     void audioEngine.playTrack(song, { queue: songs });
   };
 

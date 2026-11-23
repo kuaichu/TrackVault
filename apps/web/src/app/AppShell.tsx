@@ -27,14 +27,18 @@ import { RightDrawer } from "../features/player/components/RightDrawer.js";
 import { audioEngine } from "../features/player/engine/audio-engine.js";
 import { usePlayerStore } from "../features/player/store/player-store.js";
 import { api } from "../shared/api/endpoints.js";
-import { clearPendingDirectLinkJobs, useJobEvents } from "../shared/hooks/use-job-events.js";
+import {
+  clearPendingDirectLinkJobs,
+  markJobQueryAttemptStart,
+  useJobEvents,
+} from "../shared/hooks/use-job-events.js";
 import {
   registerInertSynchronizer,
   setElementInert,
   useIsOverlayViewport,
   useModalFocusTrap,
 } from "../shared/hooks/use-modal-focus-trap.js";
-import { applyRecordedPlayHistory } from "../shared/hooks/use-play-history-sync.js";
+import { applyRecordedPlayHistory, beginPlayHistoryRecord } from "../shared/hooks/use-play-history-sync.js";
 import { useThemeStore } from "../shared/store/theme-store.js";
 import { toast, useToastStore } from "../shared/store/toast-store.js";
 
@@ -154,10 +158,13 @@ export function AppShell({
   useJobEvents(true);
 
   // Bind play-history listener strictly to the active per-user QueryClient lifecycle
-  useEffect(() => {
-    audioEngine.setPlayHistoryListener((res) => {
-      applyRecordedPlayHistory(queryClient, res);
-    });
+  useLayoutEffect(() => {
+    audioEngine.setPlayHistoryListener(
+      (res, meta) => {
+        applyRecordedPlayHistory(queryClient, res, meta?.startSeq, meta?.song);
+      },
+      () => beginPlayHistoryRecord(queryClient),
+    );
     return () => {
       audioEngine.setPlayHistoryListener(null);
     };
@@ -176,7 +183,10 @@ export function AppShell({
 
   const activeDownloadsQuery = useQuery({
     queryKey: ["jobs", "download"],
-    queryFn: () => api.listJobs("download"),
+    queryFn: () => {
+      markJobQueryAttemptStart(queryClient, ["jobs", "download"]);
+      return api.listJobs("download");
+    },
   });
 
   const runningDownloadCount =

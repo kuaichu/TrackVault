@@ -18,6 +18,7 @@ import {
   sanitizeExternalUrl,
 } from "#shared";
 import { api } from "../../shared/api/endpoints.js";
+import { markJobQueryAttemptStart } from "../../shared/hooks/use-job-events.js";
 import { toast } from "../../shared/store/toast-store.js";
 import { SegmentedTabs } from "../../shared/ui/primitives.js";
 
@@ -248,12 +249,17 @@ function TransferResultViewer({ job, result }: { job: JobView; result: TransferR
 
   return (
     <div className="space-y-3">
-      {result.truncated && result.sourceTotal !== undefined && (
+      {(result.truncated || unprocessedCount > 0) && result.sourceTotal !== undefined && (
         <div className="flex items-start gap-2 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-500">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
-            源歌单共 {result.sourceTotal} 首，本次已处理前 {processedCount} 首（未处理 {unprocessedCount}{" "}
-            首）。
+            {result.playlistTotal !== undefined
+              ? result.truncated
+                ? `源歌单共 ${result.playlistTotal} 首，本次已选 ${result.sourceTotal} 首，已处理 ${processedCount} 首（未处理 ${unprocessedCount} 首，超出扫描或单次处理上限）。`
+                : `源歌单共 ${result.playlistTotal} 首，本次已选 ${result.sourceTotal} 首，已处理 ${processedCount} 首（未处理 ${unprocessedCount} 首，部分所选曲目缺少有效详情）。`
+              : result.truncated
+                ? `源歌单共 ${result.sourceTotal} 首，本次已处理前 ${processedCount} 首（未处理 ${unprocessedCount} 首）。`
+                : `源歌单共 ${result.sourceTotal} 首，本次已处理 ${processedCount} 首（未处理 ${unprocessedCount} 首）。`}
           </span>
         </div>
       )}
@@ -348,14 +354,19 @@ function TransferResultViewer({ job, result }: { job: JobView; result: TransferR
                       )}
                     </div>
                     {item.selectedCandidate ? (
-                      <div className="mt-0.5 truncate text-[11px] text-[var(--tv-text-muted)]">
-                        已选：{item.selectedCandidate.title} — {item.selectedCandidate.artists.join(" / ")} ·{" "}
-                        {item.selectedCandidate.confidenceScore}分
-                        {item.selectedCandidate.availability &&
-                        item.selectedCandidate.availability !== "playable" &&
-                        item.selectedCandidate.availability !== "unknown"
-                          ? ` · ${AVAILABILITY_LABELS[item.selectedCandidate.availability]}`
-                          : ""}
+                      <div className="mt-0.5 space-y-0.5 text-[11px]">
+                        <div className="truncate text-[var(--tv-text-muted)]">
+                          已选：{item.selectedCandidate.title} — {item.selectedCandidate.artists.join(" / ")}{" "}
+                          · {item.selectedCandidate.confidenceScore}分
+                          {item.selectedCandidate.availability &&
+                          item.selectedCandidate.availability !== "playable" &&
+                          item.selectedCandidate.availability !== "unknown"
+                            ? ` · ${AVAILABILITY_LABELS[item.selectedCandidate.availability]}`
+                            : ""}
+                        </div>
+                        {item.status !== "matched" && item.reason && (
+                          <div className="truncate text-[var(--tv-text-subtle)]">{item.reason}</div>
+                        )}
                       </div>
                     ) : item.reason ? (
                       <div className="mt-0.5 truncate text-[11px] text-[var(--tv-text-subtle)]">
@@ -802,7 +813,10 @@ export function TransferPage() {
   const activeKind = subTab === "transfer" ? "transfer" : subTab === "audit" ? "import_audit" : "compare";
   const jobsQuery = useQuery({
     queryKey: ["jobs", activeKind],
-    queryFn: () => api.listJobs(activeKind),
+    queryFn: () => {
+      markJobQueryAttemptStart(queryClient, ["jobs", activeKind]);
+      return api.listJobs(activeKind);
+    },
   });
 
   const canStartTransfer =
