@@ -335,6 +335,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         },
       },
       cookieMap,
+      auth.signal,
     );
 
     const list = response.req?.data?.body?.song?.list ?? [];
@@ -354,6 +355,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         g_tk: cookieMap ? computeQqGtk(cookieMap) : 5381,
       },
       cookieMap,
+      signal: auth.signal,
     });
     return (fallback.data?.song?.list ?? []).map(mapQqSong).filter((song): song is Song => song !== null);
   }
@@ -1361,6 +1363,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         },
       },
       cookieMap,
+      auth.signal,
     );
 
     const body = res.req?.data?.body;

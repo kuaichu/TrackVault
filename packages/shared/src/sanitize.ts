@@ -121,7 +121,7 @@ export function sanitizeDownloadFilename(
  */
 export function escapeCsvCell(value: string | number | null | undefined): string {
   const raw = value === null || value === undefined ? "" : String(value);
-  const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  const safe = /^(?:[\t\r\n]|[\s]*[=+\-@])/.test(raw) ? `'${raw}` : raw;
   return `"${safe.replace(/"/g, '""')}"`;
 }
 

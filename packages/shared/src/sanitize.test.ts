@@ -50,6 +50,13 @@ test("escapeCsvCell mitigates spreadsheet formula injection and escapes quotes",
   assert.equal(escapeCsvCell("=CMD|' /C calc'!A0"), `"'=CMD|' /C calc'!A0"`);
   assert.equal(escapeCsvCell("+SUM(A1:A2)"), `"'` + `+SUM(A1:A2)"`);
   assert.equal(escapeCsvCell('Normal "Title", Live'), `"Normal ""Title"", Live"`);
+  // C044: leading whitespace before formula characters and leading newline/tab/CR
+  assert.equal(escapeCsvCell("  =HYPERLINK(1)"), `"'  =HYPERLINK(1)"`);
+  assert.equal(escapeCsvCell("  @SUM(A1)"), `"'  @SUM(A1)"`);
+  assert.equal(escapeCsvCell("\n=CMD"), `"'\n=CMD"`);
+  assert.equal(escapeCsvCell("\tfoo"), `"'\tfoo"`);
+  // Ordinary apostrophe title stays untouched
+  assert.equal(escapeCsvCell("'Til Tomorrow"), `"'Til Tomorrow"`);
 });
 
 test("sanitizeCssUrl encodes characters that could break out of CSS url(...)", () => {

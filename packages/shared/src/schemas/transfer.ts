@@ -83,8 +83,19 @@ export const TransferResultSchema = z.object({
   playlistName: z.string(),
   summary: TransferSummarySchema,
   results: z.array(TransferTrackResultSchema),
+  sourceTotal: z.number().int().nonnegative().optional(),
+  processedCount: z.number().int().nonnegative().optional(),
+  unprocessedCount: z.number().int().nonnegative().optional(),
+  truncated: z.boolean().optional(),
 });
 export type TransferResult = z.infer<typeof TransferResultSchema>;
+
+export const UpdateTransferSelectionInputSchema = z.object({
+  index: z.number().int().min(0),
+  action: z.enum(["select", "skip", "reset"]),
+  targetTrackId: z.string().trim().min(1).max(128).optional(),
+});
+export type UpdateTransferSelectionInput = z.infer<typeof UpdateTransferSelectionInputSchema>;
 
 export const StartImportAuditInputSchema = z.object({
   playlistId: z.string().trim().min(1).max(128),
@@ -100,7 +111,7 @@ export const AuditIssueItemSchema = z.object({
   title: z.string(),
   artists: z.array(z.string()),
   album: z.string().optional(),
-  issueType: z.enum(["copyright_unavailable", "vip_only", "trial_only"]),
+  issueType: z.enum(["copyright_unavailable", "vip_only", "paid_album", "restricted", "trial_only"]),
   reason: z.string(),
   replacements: z.array(MatchCandidateSchema),
 });
@@ -114,6 +125,9 @@ export const ImportAuditResultSchema = z.object({
   issueCount: z.number().int().nonnegative(),
   playableTrackIds: z.array(z.string()),
   issues: z.array(AuditIssueItemSchema),
+  sourceTotal: z.number().int().nonnegative().optional(),
+  unprocessedCount: z.number().int().nonnegative().optional(),
+  truncated: z.boolean().optional(),
 });
 export type ImportAuditResult = z.infer<typeof ImportAuditResultSchema>;
 
@@ -162,12 +176,18 @@ export const CompareResultSchema = z.object({
     playlistId: z.string(),
     playlistName: z.string(),
     total: z.number().int().nonnegative(),
+    sourceTotal: z.number().int().nonnegative().optional(),
+    unprocessedCount: z.number().int().nonnegative().optional(),
+    truncated: z.boolean().optional(),
   }),
   right: z.object({
     provider: MusicPlatformSchema,
     playlistId: z.string(),
     playlistName: z.string(),
     total: z.number().int().nonnegative(),
+    sourceTotal: z.number().int().nonnegative().optional(),
+    unprocessedCount: z.number().int().nonnegative().optional(),
+    truncated: z.boolean().optional(),
   }),
   summary: CompareSummarySchema,
   items: z.array(CompareItemSchema),

@@ -610,3 +610,110 @@ test("Phase 1 security suite: 429 rate-limit, CSRF, SSE CORS, trustProxy cookies
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("PATCH /api/transfer/jobs/:id/selection enforces ownership and persists selection updates (F15)", async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "trackvault-v2-transfer-route-"));
+  const config = loadServerConfig({
+    NODE_ENV: "test",
+    DATA_DIR: tmpDir,
+    ALLOWED_ORIGINS: "http://127.0.0.1:5174",
+    COOKIE_SECURE: "false",
+  });
+
+  const providers = new ProviderRegistry();
+  providers.register(createMockAdapter("netease"));
+  providers.register(createMockAdapter("qq"));
+
+  const server = await buildServer({
+    config,
+    dbPathOverride: ":memory:",
+    providersOverride: providers,
+    disableRateLimit: true,
+    serveStaticWeb: false,
+  });
+
+  try {
+    const setupRes = await server.app.inject({
+      method: "POST",
+      url: "/api/auth/setup",
+      payload: { username: "owner", password: "OwnerPassword123!" },
+    });
+    assert.equal(setupRes.statusCode, 201);
+    const ownerCookie = extractCookieHeader(setupRes.headers["set-cookie"]);
+
+    const createOther = await server.app.inject({
+      method: "POST",
+      url: "/api/admin/members",
+      headers: { cookie: ownerCookie },
+      payload: {
+        username: "other",
+        password: "OtherPassword123!",
+        role: "member",
+        trustedFallback: false,
+      },
+    });
+    assert.equal(createOther.statusCode, 201);
+    const otherLogin = await server.app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { username: "other", password: "OtherPassword123!" },
+    });
+    const otherCookie = extractCookieHeader(otherLogin.headers["set-cookie"]);
+
+    const startRes = await server.app.inject({
+      method: "POST",
+      url: "/api/transfer/jobs",
+      headers: { cookie: ownerCookie },
+      payload: {
+        sourceProvider: "text",
+        targetProvider: "netease",
+        rawText: "晴天 - 周杰伦",
+        checkAvailability: false,
+      },
+    });
+    assert.equal(startRes.statusCode, 202);
+    const jobId = startRes.json().job.id as string;
+
+    for (let i = 0; i < 30; i += 1) {
+      const poll = await server.app.inject({
+        method: "GET",
+        url: `/api/jobs/${jobId}`,
+        headers: { cookie: ownerCookie },
+      });
+      if (poll.json().job.status === "completed") break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    // Owner skips item 0
+    const skipRes = await server.app.inject({
+      method: "PATCH",
+      url: `/api/transfer/jobs/${jobId}/selection`,
+      headers: { cookie: ownerCookie },
+      payload: { index: 0, action: "skip" },
+    });
+    assert.equal(skipRes.statusCode, 200);
+    assert.equal(skipRes.json().job.result.results[0].status, "skipped");
+    assert.equal(skipRes.json().job.result.summary.skipped, 1);
+
+    // Other user cannot modify owner's transfer job -> 404
+    const idorRes = await server.app.inject({
+      method: "PATCH",
+      url: `/api/transfer/jobs/${jobId}/selection`,
+      headers: { cookie: otherCookie },
+      payload: { index: 0, action: "reset" },
+    });
+    assert.equal(idorRes.statusCode, 404);
+
+    // Invalid payload -> 400
+    const badRes = await server.app.inject({
+      method: "PATCH",
+      url: `/api/transfer/jobs/${jobId}/selection`,
+      headers: { cookie: ownerCookie },
+      payload: { index: -1, action: "skip" },
+    });
+    assert.equal(badRes.statusCode, 400);
+  } finally {
+    await server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});

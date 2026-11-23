@@ -10,9 +10,40 @@ import {
   sanitizeDownloadFilename,
 } from "#shared";
 
+export interface ParsedPlaylistStats {
+  tracks: TransferTrack[];
+  sourceTotal: number;
+  truncated: boolean;
+}
+
 /**
- * Full RFC4180-compliant CSV parser (handles quoted fields, escaped quotes, embedded commas and CRLF).
- * Fixes legacy naive line.split(",") that broke round-tripping TrackVault's own exports.
+ * Restores ONLY the formula-injection leading apostrophe added by `escapeCsvCell`,
+ * preserving legitimate titles starting with an apostrophe (e.g. "'Til Tomorrow", "'Round Midnight").
+ */
+function unescapeCsvFormulaPrefix(value: string): string {
+  const trimmed = value.trim();
+  if (/^'(?:[\t\r\n]|[\s]*[=+\-@])/.test(trimmed)) {
+    return trimmed.slice(1).trim();
+  }
+  return trimmed;
+}
+
+/**
+ * Splits multi-artist strings ONLY on unambiguous delimiters (` / `, `、`, `;`, `；`),
+ * preserving band names containing `/` or `&` (e.g. "AC/DC", "Simon & Garfunkel", "Tyler, The Creator").
+ */
+export function splitArtistNames(raw: string): string[] {
+  const cleaned = raw.trim();
+  if (!cleaned) return [];
+  return cleaned
+    .split(/\s+\/\s+|\s*[、;；]\s*/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Full RFC4180-compliant CSV parser (handles quoted fields, escaped quotes, leading whitespace
+ * before quotes, embedded commas, and CRLF).
  */
 export function parseCsvRows(raw: string): string[][] {
   const rows: string[][] = [];
@@ -37,7 +68,8 @@ export function parseCsvRows(raw: string): string[][] {
       continue;
     }
 
-    if (ch === '"' && cell.length === 0) {
+    if (ch === '"' && cell.trim().length === 0) {
+      cell = "";
       inQuotes = true;
     } else if (ch === ",") {
       row.push(cell.trim());
@@ -65,14 +97,14 @@ export function parseCsvRows(raw: string): string[][] {
   return rows;
 }
 
-export function parseCsvPlaylist(raw: string, maxTracks = 1000): TransferTrack[] {
+export function parseCsvPlaylistWithStats(raw: string, maxTracks = 1000): ParsedPlaylistStats {
   const rows = parseCsvRows(raw);
-  if (rows.length === 0) return [];
+  if (rows.length === 0) return { tracks: [], sourceTotal: 0, truncated: false };
 
   const firstRow = rows[0] ?? [];
   const lowerHeaders = firstRow.map((h) => h.toLowerCase());
   const hasHeader = lowerHeaders.some((h) =>
-    ["title", "歌名", "歌曲", "源歌名", "name", "artist", "歌手", "源歌手"].includes(h),
+    ["title", "歌名", "歌曲", "源歌名", "name", "artist", "artists", "歌手", "源歌手"].includes(h),
   );
 
   let titleCol = 0;
@@ -83,31 +115,44 @@ export function parseCsvPlaylist(raw: string, maxTracks = 1000): TransferTrack[]
     const foundTitle = lowerHeaders.findIndex((h) => ["title", "歌名", "歌曲", "源歌名", "name"].includes(h));
     const foundArtist = lowerHeaders.findIndex((h) => ["artist", "artists", "歌手", "源歌手"].includes(h));
     const foundAlbum = lowerHeaders.findIndex((h) => ["album", "专辑", "源专辑"].includes(h));
-    if (foundTitle >= 0) titleCol = foundTitle;
-    if (foundArtist >= 0) artistCol = foundArtist;
-    if (foundAlbum >= 0) albumCol = foundAlbum;
+
+    // When a header row is recognized, missing optional columns MUST stay absent (-1)
+    // instead of falling back to positional indices and colliding with other columns.
+    artistCol = foundArtist;
+    albumCol = foundAlbum;
+    if (foundTitle >= 0) {
+      titleCol = foundTitle;
+    } else {
+      titleCol = foundArtist !== 0 && foundAlbum !== 0 ? 0 : -1;
+    }
   }
 
   const dataRows = hasHeader ? rows.slice(1) : rows;
   const tracks: TransferTrack[] = [];
+  let sourceTotal = 0;
 
   for (const cols of dataRows) {
-    if (tracks.length >= maxTracks) break;
-    const title = (cols[titleCol] ?? "").replace(/^'/, "").trim();
+    const title = titleCol >= 0 ? unescapeCsvFormulaPrefix(cols[titleCol] ?? "") : "";
     if (!title) continue;
-    const rawArtists = (cols[artistCol] ?? "").replace(/^'/, "").trim();
-    const album = (cols[albumCol] ?? "").replace(/^'/, "").trim() || undefined;
-    const artists = rawArtists
-      ? rawArtists
-          .split(/\s*[/、;&]\s*/)
-          .map((item) => item.trim())
-          .filter(Boolean)
-      : [];
+    sourceTotal += 1;
+    if (tracks.length >= maxTracks) continue;
+
+    const rawArtists = artistCol >= 0 ? unescapeCsvFormulaPrefix(cols[artistCol] ?? "") : "";
+    const album = albumCol >= 0 ? unescapeCsvFormulaPrefix(cols[albumCol] ?? "") || undefined : undefined;
+    const artists = splitArtistNames(rawArtists);
 
     tracks.push({ source: "csv", title, artists, album });
   }
 
-  return tracks;
+  return {
+    tracks,
+    sourceTotal,
+    truncated: sourceTotal > tracks.length,
+  };
+}
+
+export function parseCsvPlaylist(raw: string, maxTracks = 1000): TransferTrack[] {
+  return parseCsvPlaylistWithStats(raw, maxTracks).tracks;
 }
 
 const IGNORED_TEXT_PREFIXES = [
@@ -122,20 +167,25 @@ const IGNORED_TEXT_PREFIXES = [
   "不可用：",
   "重复：",
   "统计：",
+  "已扫描：",
   "---",
 ];
 
-export function parseTextPlaylist(raw: string, maxTracks = 1000): TransferTrack[] {
+export function parseTextPlaylistWithStats(raw: string, maxTracks = 1000): ParsedPlaylistStats {
   const tracks: TransferTrack[] = [];
+  let sourceTotal = 0;
+
   for (const rawLine of raw.split(/\r?\n/)) {
-    if (tracks.length >= maxTracks) break;
     const trimmed = rawLine.trim();
     if (!trimmed || trimmed === "无") continue;
     if (IGNORED_TEXT_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) continue;
 
-    // Strip leading numbering like "1. " or "01) " or "- "
-    const body = trimmed.replace(/^(?:\d+[.)、]\s*|[-*•]\s*)/, "").trim();
+    // Require whitespace after `.` / `)` so decimal titles like "3.14 - 歌手" or "10.15 Saturday Night" stay intact
+    const body = trimmed.replace(/^(?:\d+[.)]\s+|\d+、\s*|[-*•]\s+)/, "").trim();
     if (!body) continue;
+
+    sourceTotal += 1;
+    if (tracks.length >= maxTracks) continue;
 
     // Split by explicit track delimiters (" - ", " — ", "\t", " | ") without breaking commas inside titles/artists
     const parts = body
@@ -146,17 +196,20 @@ export function parseTextPlaylist(raw: string, maxTracks = 1000): TransferTrack[
     const title = parts[0] ?? body;
     const rawArtists = parts[1] ?? "";
     const album = parts[2] || undefined;
-    const artists = rawArtists
-      ? rawArtists
-          .split(/\s*[/、;&]\s*/)
-          .map((a) => a.trim())
-          .filter(Boolean)
-      : [];
+    const artists = splitArtistNames(rawArtists);
 
     tracks.push({ source: "text", title, artists, album });
   }
 
-  return tracks;
+  return {
+    tracks,
+    sourceTotal,
+    truncated: sourceTotal > tracks.length,
+  };
+}
+
+export function parseTextPlaylist(raw: string, maxTracks = 1000): TransferTrack[] {
+  return parseTextPlaylistWithStats(raw, maxTracks).tracks;
 }
 
 export function formatTransferExport(result: TransferResult, format: ExportFormat): ExportPayload {
@@ -208,11 +261,17 @@ export function formatTransferExport(result: TransferResult, format: ExportForma
     };
   }
 
+  const truncationNote =
+    result.truncated && result.sourceTotal
+      ? `- 注意：源歌单共 ${result.sourceTotal} 首，本次仅处理前 ${result.processedCount ?? result.summary.total} 首（未处理 ${result.unprocessedCount ?? Math.max(0, result.sourceTotal - result.summary.total)} 首）`
+      : null;
+
   const mdLines = [
     `# 歌单互转报告：${result.playlistName}`,
     "",
     `- 来源：${result.sourceProvider} -> 目标：${result.targetProvider}`,
-    `- 总数：${result.summary.total} | 匹配：${result.summary.matched} | 待确认：${result.summary.manualReview} | 未找到：${result.summary.notFound} | 不可用：${result.summary.unavailable}`,
+    `- 总数：${result.summary.total} | 匹配：${result.summary.matched} | 待确认：${result.summary.manualReview} | 未找到：${result.summary.notFound} | 不可用：${result.summary.unavailable} | 重复：${result.summary.duplicate} | 跳过：${result.summary.skipped}`,
+    ...(truncationNote ? [truncationNote] : []),
     "",
     ...result.results.map((item, idx) => {
       const target = item.selectedCandidate
@@ -286,6 +345,14 @@ export function formatCompareExport(
     };
   }
 
+  const truncationNotes: string[] = [];
+  if (result.left.truncated && result.left.sourceTotal) {
+    truncationNotes.push(`- 左侧歌单共 ${result.left.sourceTotal} 首，仅比对前 ${result.left.total} 首`);
+  }
+  if (result.right.truncated && result.right.sourceTotal) {
+    truncationNotes.push(`- 右侧歌单共 ${result.right.sourceTotal} 首，仅比对前 ${result.right.total} 首`);
+  }
+
   return {
     filename: `${safeBase}.md`,
     mimeType: "text/markdown; charset=utf-8",
@@ -293,6 +360,7 @@ export function formatCompareExport(
       `# 歌单对比报告：${result.left.playlistName} vs ${result.right.playlistName}`,
       "",
       `- 完全一致：${result.summary.exact} | 同名异唱：${result.summary.sameTitleDifferentArtist} | 相似：${result.summary.similarTitle} | 仅左侧：${result.summary.leftOnly} | 仅右侧：${result.summary.rightOnly}`,
+      ...truncationNotes,
       "",
       ...items.map(
         (item, idx) =>
@@ -336,15 +404,31 @@ export function formatImportAuditExport(result: ImportAuditResult, format: Expor
     };
   }
 
+  if (format === "text") {
+    const cleanLines = result.issues.map((issue, idx) => {
+      const artists = issue.artists.join(" / ");
+      const album = issue.album ? ` - ${issue.album}` : "";
+      return `${idx + 1}. ${issue.title}${artists ? ` - ${artists}` : ""}${album}`;
+    });
+    return {
+      filename: `${safeBase}.txt`,
+      mimeType: "text/plain; charset=utf-8",
+      content: cleanLines.join("\n"),
+    };
+  }
+
   const lines = result.issues.map(
     (issue, idx) => `${idx + 1}. ${issue.title} - ${issue.artists.join(" / ")} (${issue.reason})`,
   );
+  const truncationSuffix =
+    result.truncated && result.sourceTotal ? `（源歌单共 ${result.sourceTotal} 首，已截断）` : "";
+
   return {
-    filename: `${safeBase}.${format === "markdown" ? "md" : "txt"}`,
-    mimeType: format === "markdown" ? "text/markdown; charset=utf-8" : "text/plain; charset=utf-8",
+    filename: `${safeBase}.md`,
+    mimeType: "text/markdown; charset=utf-8",
     content: [
       `# 歌单可用性审计：${result.playlistName}`,
-      `已扫描：${result.scannedCount} | 正常可播：${result.playableCount} | 异常：${result.issueCount}`,
+      `已扫描：${result.scannedCount} | 正常可播：${result.playableCount} | 异常：${result.issueCount}${truncationSuffix}`,
       "",
       ...lines,
     ].join("\n"),

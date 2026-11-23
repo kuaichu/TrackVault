@@ -172,6 +172,21 @@ export class BackgroundJobManager {
     return record;
   }
 
+  updateOwnedJobResult(
+    actor: ActorContext,
+    jobId: string,
+    patch: { result: unknown; subtitle?: string },
+  ): JobView {
+    const record = this.getOwnedJob(actor, jobId);
+    const updated = this.#repo.update(record.id, {
+      result: patch.result,
+      ...(patch.subtitle !== undefined ? { subtitle: patch.subtitle } : {}),
+    });
+    const view = toJobView(updated ?? record);
+    this.#emit(actor.userId, { type: "job_updated", job: view, timestamp: Date.now() });
+    return view;
+  }
+
   cancelOwnedJob(actor: ActorContext, jobId: string): JobView {
     const record = this.getOwnedJob(actor, jobId);
 

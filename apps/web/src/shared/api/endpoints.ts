@@ -37,6 +37,7 @@ import type {
   SystemFallbackView,
   UpdateMemberInput,
   UpdateSystemFallbackInput,
+  UpdateTransferSelectionInput,
   UpdateUserSettingsInput,
   UserSettings,
   UserSummary,
@@ -222,6 +223,11 @@ export const api = {
     apiRequest<ExportPayload>(`/api/transfer/jobs/${encodeURIComponent(id)}/export`, {
       method: "POST",
       body: { format, statuses },
+    }),
+  updateTransferSelection: (id: string, input: UpdateTransferSelectionInput) =>
+    apiRequest<{ job: JobView }>(`/api/transfer/jobs/${encodeURIComponent(id)}/selection`, {
+      method: "PATCH",
+      body: input,
     }),
   importTransferJob: (id: string, input: { name?: string; existingPlaylistId?: string }) =>
     apiRequest<{

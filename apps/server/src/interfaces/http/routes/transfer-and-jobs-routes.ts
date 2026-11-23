@@ -8,6 +8,7 @@ import {
   StartCompareInputSchema,
   StartImportAuditInputSchema,
   StartTransferInputSchema,
+  UpdateTransferSelectionInputSchema,
 } from "#shared";
 import type { BackgroundJobManager } from "../../../application/jobs/background-job-manager.js";
 import type { TransferService } from "../../../application/transfer/transfer-service.js";
@@ -213,6 +214,13 @@ export function registerTransferAndJobRoutes(
       .parse(request.body ?? {});
 
     return transferService.exportJob(actor, id, body.format, body.statuses);
+  });
+
+  app.patch("/api/transfer/jobs/:id/selection", async (request) => {
+    const actor = requireActor(request);
+    const { id } = z.object({ id: z.string().min(1) }).parse(request.params);
+    const input = UpdateTransferSelectionInputSchema.parse(request.body);
+    return { job: transferService.updateTransferTrackSelection(actor, id, input) };
   });
 
   app.post("/api/transfer/jobs/:id/import", async (request) => {
