@@ -3,25 +3,23 @@
   "version": "2.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "workspaces": ["packages/*", "apps/*"],
   "imports": {
-    "#shared": {
-      "types": "./packages/shared/src/index.ts",
-      "default": "./packages/shared/dist/index.js"
-    },
-    "#audio-tags": {
-      "types": "./packages/audio-tags/src/index.ts",
-      "default": "./packages/audio-tags/dist/index.js"
-    }
+    "#shared": "@trackvault/shared",
+    "#audio-tags": "@trackvault/audio-tags"
   },
   "scripts": {
-    "dev": "concurrently -n server,web -c cyan,magenta \"npm run dev:server\" \"npm run dev:web\"",
+    "dev": "npm run build:packages && concurrently -n packages,server,web -c blue,cyan,magenta \"tsc -b packages/shared/tsconfig.build.json packages/audio-tags/tsconfig.build.json --watch --preserveWatchOutput\" \"tsx watch apps/server/src/index.ts\" \"npm run dev:web\"",
     "dev:server": "npm run build:packages && tsx watch apps/server/src/index.ts",
     "dev:web": "vite --config apps/web/vite.config.ts",
-    "build:packages": "tsc -p packages/shared/tsconfig.json && tsc -p packages/audio-tags/tsconfig.json",
-    "build:server": "npm run build:packages && tsc -p apps/server/tsconfig.json",
+    "build:packages": "node scripts/ensure-workspace-links.mjs && tsc -b packages/shared/tsconfig.build.json packages/audio-tags/tsconfig.build.json",
+    "build:server": "node scripts/ensure-workspace-links.mjs && tsc -b apps/server/tsconfig.build.json",
     "build:web": "npm run build:packages && tsc --noEmit -p apps/web/tsconfig.json && vite build --config apps/web/vite.config.ts",
-    "build": "npm run build:packages && tsc -p apps/server/tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json && vite build --config apps/web/vite.config.ts",
-    "typecheck": "npm run build:packages && tsc --noEmit -p apps/server/tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json",
+    "build": "node scripts/ensure-workspace-links.mjs && tsc -b tsconfig.build.json && tsc --noEmit -p apps/web/tsconfig.json && vite build --config apps/web/vite.config.ts",
+    "typecheck": "npm run build:packages && tsc --noEmit -p packages/shared/tsconfig.json && tsc --noEmit -p packages/audio-tags/tsconfig.json && tsc --noEmit -p apps/server/tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json",
     "lint": "biome check packages apps",
     "lint:fix": "biome check --write packages apps",
     "test:shared": "tsx --test \"packages/shared/src/**/*.test.ts\"",
@@ -31,22 +29,6 @@
     "test": "npm run build:packages && npm run test:shared && npm run test:audio-tags && npm run test:server && npm run test:web",
     "start": "node apps/server/dist/index.js",
     "import:legacy": "npm run build:packages && tsx apps/server/src/cli/import-legacy.ts"
-  },
-  "dependencies": {
-    "@fastify/cookie": "^11.0.2",
-    "@fastify/cors": "^11.0.1",
-    "@fastify/helmet": "^13.0.1",
-    "@fastify/rate-limit": "^10.2.2",
-    "@fastify/static": "^8.1.0",
-    "@tanstack/react-query": "^5.74.4",
-    "fastify": "^5.2.2",
-    "lucide-react": "^0.487.0",
-    "NeteaseCloudMusicApi": "^4.32.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-router-dom": "^7.5.1",
-    "zod": "^3.24.2",
-    "zustand": "^5.0.3"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

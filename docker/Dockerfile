@@ -1,11 +1,23 @@
 FROM node:24-slim AS builder
 WORKDIR /app
 
-COPY package.json package-lock.json tsconfig.base.json ./
+# 1. Restore dependency layer caching: copy manifests first
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json ./packages/shared/package.json
+COPY packages/audio-tags/package.json ./packages/audio-tags/package.json
+COPY apps/server/package.json ./apps/server/package.json
+COPY apps/web/package.json ./apps/web/package.json
+
+RUN npm ci --no-audit --no-fund
+
+# 2. Copy TypeScript configs and source code, then build all artifacts
+COPY tsconfig.base.json tsconfig.build.json ./
+COPY scripts ./scripts
 COPY packages ./packages
 COPY apps ./apps
 
-RUN npm ci --no-audit --no-fund && npm run build && npm prune --omit=dev
+RUN npm run build \
+  && npm prune --omit=dev --workspace=@trackvault/server --workspace=@trackvault/shared --workspace=@trackvault/audio-tags
 
 FROM node:24-slim AS runner
 WORKDIR /app
@@ -17,7 +29,12 @@ ENV DATA_DIR=/data
 RUN addgroup --system trackvault && adduser --system --ingroup trackvault trackvault \
   && mkdir -p /data && chown -R trackvault:trackvault /data
 
+# Copy workspace manifests so Node.js ESM subpath #imports resolve via nearest package.json
 COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/packages/shared/package.json ./packages/shared/package.json
+COPY --from=builder /app/packages/audio-tags/package.json ./packages/audio-tags/package.json
+COPY --from=builder /app/apps/server/package.json ./apps/server/package.json
+
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
 COPY --from=builder /app/packages/audio-tags/dist ./packages/audio-tags/dist

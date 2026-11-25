@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "references": [
+    { "path": "../../packages/shared/tsconfig.build.json" },
+    { "path": "../../packages/audio-tags/tsconfig.build.json" }
+  ],
+  "exclude": ["src/**/*.test.ts", "src/test-utils/**", "dist"]
+}

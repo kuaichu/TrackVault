@@ -70,23 +70,65 @@ export const QUALITY_FALLBACK_ORDER: readonly QualityLevel[] = [
   "standard",
 ];
 
+export type AudioFormatCategory = "uncompressed_lossless" | "compressed_lossless" | "lossy" | "unknown";
+
+export interface AudioFormatClassification {
+  cleanFormat: string;
+  category: AudioFormatCategory;
+  isLossless: boolean;
+  isExplicitLossy: boolean;
+}
+
+const UNCOMPRESSED_LOSSLESS_FORMATS = new Set(["wav", "aiff", "pcm"]);
+const COMPRESSED_LOSSLESS_FORMATS = new Set(["flac", "ape", "alac"]);
+const LOSSY_FORMATS = new Set(["mp3", "aac", "ogg", "opus", "wma", "webm", "m4a", "mp4"]);
+
+export function classifyAudioFormat(format?: string | null): AudioFormatClassification {
+  const cleanFormat = format?.trim().replace(/^\./, "").trim().toLowerCase() ?? "";
+  if (UNCOMPRESSED_LOSSLESS_FORMATS.has(cleanFormat)) {
+    return {
+      cleanFormat,
+      category: "uncompressed_lossless",
+      isLossless: true,
+      isExplicitLossy: false,
+    };
+  }
+  if (COMPRESSED_LOSSLESS_FORMATS.has(cleanFormat)) {
+    return {
+      cleanFormat,
+      category: "compressed_lossless",
+      isLossless: true,
+      isExplicitLossy: false,
+    };
+  }
+  if (LOSSY_FORMATS.has(cleanFormat)) {
+    return {
+      cleanFormat,
+      category: "lossy",
+      isLossless: false,
+      isExplicitLossy: true,
+    };
+  }
+  return {
+    cleanFormat,
+    category: "unknown",
+    isLossless: false,
+    isExplicitLossy: false,
+  };
+}
+
 export function inferQualityLevelFromBitrate(
   bitrate: number | null | undefined,
   format?: string | null,
 ): QualityLevel | null {
-  const cleanFmt = format?.replace(/^\./, "").trim().toLowerCase() ?? "";
-  const isLossless = cleanFmt === "flac" || cleanFmt === "wav" || cleanFmt === "ape" || cleanFmt === "alac";
-  const isExplicitLossy =
-    cleanFmt === "mp3" ||
-    cleanFmt === "aac" ||
-    cleanFmt === "ogg" ||
-    cleanFmt === "opus" ||
-    cleanFmt === "wma" ||
-    cleanFmt === "webm" ||
-    cleanFmt === "m4a" ||
-    cleanFmt === "mp4";
+  const { category, isExplicitLossy } = classifyAudioFormat(format);
   const br = typeof bitrate === "number" && Number.isFinite(bitrate) && bitrate > 0 ? bitrate : 0;
-  if (isLossless) {
+  if (category === "uncompressed_lossless") {
+    // A14: Standard 16-bit / 44.1 kHz (1,411.2 kbps) and 16-bit / 48 kHz (1,536 kbps) stereo PCM WAV
+    // are CD-tier lossless, not Hi-Res; 24-bit PCM starts above 2.1 Mbps.
+    return br >= 2_100_000 ? "hires" : "lossless";
+  }
+  if (category === "compressed_lossless") {
     return br >= 1_200_000 ? "hires" : "lossless";
   }
   if (br <= 0) return null;
@@ -123,14 +165,7 @@ export function getQualityLabel(
   bitrate?: number | null,
   format?: string | null,
 ): string {
-  const cleanFmt = format?.replace(/^\./, "").trim().toLowerCase() ?? "";
-  const isExplicitLossy =
-    cleanFmt === "mp3" ||
-    cleanFmt === "aac" ||
-    cleanFmt === "ogg" ||
-    cleanFmt === "opus" ||
-    cleanFmt === "wma" ||
-    cleanFmt === "webm";
+  const { cleanFormat, isLossless, isExplicitLossy } = classifyAudioFormat(format);
   const kbps =
     typeof bitrate === "number" && Number.isFinite(bitrate) && bitrate > 0
       ? Math.round(bitrate / 1000)
@@ -145,10 +180,10 @@ export function getQualityLabel(
       return kbps ? `杜比 ${kbps}K` : meta.shortLabel;
     }
     if (meta.lossless && isExplicitLossy) {
-      return kbps ? `${cleanFmt.toUpperCase()} ${kbps}K` : cleanFmt.toUpperCase();
+      return kbps ? `${cleanFormat.toUpperCase()} ${kbps}K` : cleanFormat.toUpperCase();
     }
-    if (level === "lossless" && (cleanFmt === "wav" || cleanFmt === "ape" || cleanFmt === "alac")) {
-      return cleanFmt.toUpperCase();
+    if (level === "lossless" && isLossless) {
+      return cleanFormat.toUpperCase();
     }
     if (!meta.lossless && kbps && (level === "standard" || level === "higher" || level === "exhigh")) {
       return `${kbps}K`;

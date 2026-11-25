@@ -2,6 +2,7 @@
 **/node_modules
 **/dist
 **/*.tsbuildinfo
+**/.vite-temp
 coverage
 
 # Runtime data, databases & sensitive keys
@@ -19,10 +20,12 @@ data/**
 **/.env.*
 .git
 .gitignore
+.gitattributes
 
-# Documentation, audit plans, logs & temp files
+# Documentation, E2E outputs, logs & temp files
 docs
-bug_remediation_plan.md
+e2e/
+playwright-report/
 *.log
 tmp
 .tmp

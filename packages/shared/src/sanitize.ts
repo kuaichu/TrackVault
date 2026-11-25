@@ -131,3 +131,71 @@ export function sanitizeCssUrl(raw: string | null | undefined): string | null {
   // Encode quotes, backslashes, and parentheses so the value can never break out of CSS url("...")
   return safe.replace(/["'()\\]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
 }
+
+/**
+ * Truncates text by Unicode code points so surrogate pairs (e.g. emoji) are never split.
+ */
+export function truncateCodePoints(value: string, maxCodePoints: number): string {
+  const safeMax = Number.isFinite(maxCodePoints) ? Math.max(0, Math.floor(maxCodePoints)) : 0;
+  if (safeMax === 0) return "";
+  const safe = toWellFormedString(value);
+  const chars = Array.from(safe);
+  if (chars.length <= safeMax) return safe;
+  return safeMax > 3 ? `${chars.slice(0, safeMax - 3).join("")}...` : chars.slice(0, safeMax).join("");
+}
+
+/**
+ * Formats duration in seconds as `MM:SS`, or `HH:MM:SS` when >= 3600 seconds.
+ */
+export function formatDurationSeconds(seconds: number | null | undefined): string {
+  const safe = typeof seconds === "number" && Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+  if (safe >= 3600) {
+    const hours = String(Math.floor(safe / 3600)).padStart(2, "0");
+    const mins = String(Math.floor((safe % 3600) / 60)).padStart(2, "0");
+    const secs = String(safe % 60).padStart(2, "0");
+    return `${hours}:${mins}:${secs}`;
+  }
+  const mins = String(Math.floor(safe / 60)).padStart(2, "0");
+  const secs = String(safe % 60).padStart(2, "0");
+  return `${mins}:${secs}`;
+}
+
+const shanghaiTimestampFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+/**
+ * Formats a Unix timestamp (seconds or milliseconds) in Asia/Shanghai as `YYYY-MM-DD HH:mm`,
+ * or empty string when missing/invalid.
+ */
+export function formatTimestampText(timestampMsOrSec: number | null | undefined): string {
+  if (typeof timestampMsOrSec !== "number" || !Number.isFinite(timestampMsOrSec) || timestampMsOrSec <= 0) {
+    return "";
+  }
+  const ms = timestampMsOrSec > 10_000_000_000 ? timestampMsOrSec : timestampMsOrSec * 1000;
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const parts = shanghaiTimestampFormatter.formatToParts(date);
+  let year = "";
+  let month = "";
+  let day = "";
+  let hour = "";
+  let minute = "";
+  for (const part of parts) {
+    if (part.type === "year") year = part.value;
+    else if (part.type === "month") month = part.value;
+    else if (part.type === "day") day = part.value;
+    else if (part.type === "hour") hour = part.value;
+    else if (part.type === "minute") minute = part.value;
+  }
+  if (!year || !month || !day || !hour || !minute) return "";
+  return `${year}-${month}-${day} ${hour}:${minute}`;
+}

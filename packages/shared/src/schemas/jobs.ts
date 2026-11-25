@@ -19,7 +19,7 @@ export const CreateDownloadJobInputSchema = z.object({
 });
 export type CreateDownloadJobInput = z.infer<typeof CreateDownloadJobInputSchema>;
 
-export const JobViewSchema = z.object({
+export const JobSummaryViewSchema = z.object({
   id: z.string(),
   kind: JobKindSchema,
   status: JobStatusSchema,
@@ -27,7 +27,8 @@ export const JobViewSchema = z.object({
   title: z.string(),
   subtitle: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
-  result: z.unknown().optional(),
+  hasResult: z.boolean().optional(),
+  revision: z.number().int().nonnegative().optional(),
   errorCode: ErrorCodeSchema.optional(),
   errorMessage: z.string().optional(),
   downloadReady: z.boolean().optional(),
@@ -37,12 +38,30 @@ export const JobViewSchema = z.object({
   createdAt: z.number(),
   updatedAt: z.number(),
 });
-export type JobView = z.infer<typeof JobViewSchema>;
+export type JobSummaryView = z.infer<typeof JobSummaryViewSchema>;
+
+export const JobDetailViewSchema = JobSummaryViewSchema.extend({
+  result: z.unknown().optional(),
+});
+export type JobDetailView = z.infer<typeof JobDetailViewSchema>;
+
+export const JobViewSchema = JobDetailViewSchema;
+export type JobView = JobDetailView;
+
+export const JobsListResponseSchema = z.object({
+  jobs: z.array(JobSummaryViewSchema),
+  serverRevision: z.number().int().nonnegative().optional(),
+  clearedBeforeRevision: z.number().int().nonnegative().optional(),
+});
+export type JobsListResponse = z.infer<typeof JobsListResponseSchema>;
 
 export const JobEventSchema = z.object({
-  type: z.enum(["job_updated", "job_removed", "heartbeat"]),
+  type: z.enum(["job_updated", "job_removed", "jobs_cleared", "heartbeat"]),
   job: JobViewSchema.optional(),
   jobId: z.string().optional(),
+  serverRevision: z.number().int().nonnegative().optional(),
+  clearedBeforeRevision: z.number().int().nonnegative().optional(),
+  clearedKind: JobKindSchema.optional(),
   timestamp: z.number(),
 });
 export type JobEvent = z.infer<typeof JobEventSchema>;

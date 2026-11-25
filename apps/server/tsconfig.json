@@ -1,8 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "types": ["node"],
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    "composite": true
   },
   "references": [{ "path": "../../packages/shared" }, { "path": "../../packages/audio-tags" }],
   "include": ["src"]

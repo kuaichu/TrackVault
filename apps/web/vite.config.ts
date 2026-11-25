@@ -13,7 +13,6 @@ export default defineConfig({
   resolve: {
     alias: {
       "#shared": path.resolve(rootDir, "packages/shared/src/index.ts"),
-      "#audio-tags": path.resolve(rootDir, "packages/audio-tags/src/index.ts"),
     },
   },
   server: {

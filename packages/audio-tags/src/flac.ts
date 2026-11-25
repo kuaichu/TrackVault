@@ -161,6 +161,43 @@ function buildFlacMetadataBlock(type: number, data: Uint8Array, isLast: boolean)
   ]);
 }
 
+export interface FlacMetadataBlock {
+  type: number;
+  data: Uint8Array;
+}
+
+export function buildFlacHeaderBytes(
+  blocks: readonly FlacMetadataBlock[],
+  meta: AudioTagMetadata,
+  lyricsText: string,
+  cover: AudioCoverData | null,
+): Uint8Array | null {
+  const streamInfo = blocks.find((b) => b.type === 0);
+  if (!streamInfo) return null;
+
+  const existingVorbis = blocks.find((b) => b.type === 4);
+  const mergedVorbis = buildVorbisCommentBlock(meta, lyricsText, existingVorbis?.data);
+  const vorbisBlock =
+    mergedVorbis.length <= MAX_FLAC_METADATA_BLOCK_BYTES ? mergedVorbis : existingVorbis?.data;
+
+  const pictureBlock = buildFlacPictureBlock(cover);
+  const existingPictures = blocks.filter((b) => b.type === 6);
+  const pictureBlocksToWrite = pictureBlock ? [{ type: 6, data: pictureBlock }] : existingPictures;
+
+  const metadataBlocks = [
+    streamInfo,
+    ...(vorbisBlock ? [{ type: 4, data: vorbisBlock }] : []),
+    ...pictureBlocksToWrite,
+    ...blocks.filter((b) => b !== streamInfo && b.type !== 4 && b.type !== 6),
+  ];
+
+  const encodedBlocks = metadataBlocks.map((block, index) =>
+    buildFlacMetadataBlock(block.type, block.data, index === metadataBlocks.length - 1),
+  );
+
+  return concatBytes([new Uint8Array([0x66, 0x4c, 0x61, 0x43]), ...encodedBlocks]);
+}
+
 export function injectFlacMetadata(
   input: Uint8Array,
   meta: AudioTagMetadata,
@@ -171,7 +208,7 @@ export function injectFlacMetadata(
   if (flacStartOffset < 0) return input;
 
   const bytes = input.subarray(flacStartOffset);
-  const blocks: Array<{ type: number; data: Uint8Array }> = [];
+  const blocks: FlacMetadataBlock[] = [];
   let offset = 4;
   let foundLastBlock = false;
 
@@ -204,28 +241,8 @@ export function injectFlacMetadata(
     return input;
   }
 
-  const streamInfo = blocks.find((b) => b.type === 0);
-  if (!streamInfo) return input;
+  const headerBytes = buildFlacHeaderBytes(blocks, meta, lyricsText, cover);
+  if (!headerBytes) return input;
 
-  const existingVorbis = blocks.find((b) => b.type === 4);
-  const mergedVorbis = buildVorbisCommentBlock(meta, lyricsText, existingVorbis?.data);
-  const vorbisBlock =
-    mergedVorbis.length <= MAX_FLAC_METADATA_BLOCK_BYTES ? mergedVorbis : existingVorbis?.data;
-
-  const pictureBlock = buildFlacPictureBlock(cover);
-  const existingPictures = blocks.filter((b) => b.type === 6);
-  const pictureBlocksToWrite = pictureBlock ? [{ type: 6, data: pictureBlock }] : existingPictures;
-
-  const metadataBlocks = [
-    streamInfo,
-    ...(vorbisBlock ? [{ type: 4, data: vorbisBlock }] : []),
-    ...pictureBlocksToWrite,
-    ...blocks.filter((b) => b !== streamInfo && b.type !== 4 && b.type !== 6),
-  ];
-
-  const encodedBlocks = metadataBlocks.map((block, index) =>
-    buildFlacMetadataBlock(block.type, block.data, index === metadataBlocks.length - 1),
-  );
-
-  return concatBytes([new Uint8Array([0x66, 0x4c, 0x61, 0x43]), ...encodedBlocks, bytes.subarray(offset)]);
+  return concatBytes([headerBytes, bytes.subarray(offset)]);
 }

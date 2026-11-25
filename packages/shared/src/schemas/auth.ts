@@ -76,6 +76,7 @@ export const PlatformBindingViewSchema = z.object({
   vipExpireAt: z.number().nullable(),
   verifiedAt: z.number().nullable(),
   message: z.string().optional(),
+  credentialCorrupted: z.boolean().optional(),
 });
 export type PlatformBindingView = z.infer<typeof PlatformBindingViewSchema>;
 

@@ -1,7 +1,7 @@
 import {
   concatBytes,
   getAllId3v2TagsLength,
-  getId3v2TagLength,
+  parseId3v2HeaderLength,
   readUint32BigEndian,
   writeUint32BigEndian,
 } from "./bytes.js";
@@ -414,7 +414,7 @@ const ID3V1_GENRES: readonly string[] = [
   "Psybient",
 ];
 
-interface ParsedId3v1Tag {
+export interface ParsedId3v1Tag {
   title?: string;
   artist?: string;
   album?: string;
@@ -442,10 +442,8 @@ function decodeId3v1Field(slice: Uint8Array): string | undefined {
   return trimmed || undefined;
 }
 
-function parseExistingId3v1Tag(bytes: Uint8Array): ParsedId3v1Tag | null {
-  const id3v2Length = getAllId3v2TagsLength(bytes);
-  if (bytes.length < id3v2Length + 128) return null;
-  const v1 = bytes.subarray(bytes.length - 128);
+export function parseId3v1TagSlice(v1: Uint8Array): ParsedId3v1Tag | null {
+  if (v1.length < 128) return null;
   if (v1[0] !== 0x54 || v1[1] !== 0x41 || v1[2] !== 0x47) return null;
 
   const isV11Track = v1[125] === 0x00 && (v1[126] ?? 0) > 0;
@@ -460,6 +458,12 @@ function parseExistingId3v1Tag(bytes: Uint8Array): ParsedId3v1Tag | null {
     track: isV11Track ? String(v1[126]) : undefined,
     genre,
   };
+}
+
+function parseExistingId3v1Tag(bytes: Uint8Array): ParsedId3v1Tag | null {
+  const id3v2Length = getAllId3v2TagsLength(bytes);
+  if (bytes.length < id3v2Length + 128) return null;
+  return parseId3v1TagSlice(bytes.subarray(bytes.length - 128));
 }
 
 function convertId3v22CntToPcnt(data: Uint8Array): Uint8Array | null {
@@ -506,12 +510,13 @@ function convertId3v22PicToApic(data: Uint8Array): Uint8Array | null {
   ]);
 }
 
-function parseExistingId3v2Frames(bytes: Uint8Array): ParsedId3Frame[] {
+function parseExistingId3v2Frames(bytes: Uint8Array, exactTagSlice = false): ParsedId3Frame[] {
   const frames: ParsedId3Frame[] = [];
   let tagStart = 0;
 
   for (let tagIdx = 0; tagIdx < 16; tagIdx += 1) {
-    const totalLen = getId3v2TagLength(bytes, tagStart);
+    const available = bytes.length - tagStart + (exactTagSlice ? 1 : 0);
+    const totalLen = parseId3v2HeaderLength(bytes, tagStart, available);
     if (totalLen <= 0) break;
 
     const major = bytes[tagStart + 3] ?? 0;
@@ -537,7 +542,11 @@ function parseExistingId3v2Frames(bytes: Uint8Array): ParsedId3Frame[] {
           const rawSize =
             (((body[offset + 3] ?? 0) << 16) | ((body[offset + 4] ?? 0) << 8) | (body[offset + 5] ?? 0)) >>>
             0;
-          if (rawSize <= 0) break;
+          if (rawSize < 0) break;
+          if (rawSize === 0) {
+            offset += 6;
+            continue;
+          }
           offset += 6;
           if (offset + rawSize > body.length) break;
 
@@ -597,7 +606,11 @@ function parseExistingId3v2Frames(bytes: Uint8Array): ParsedId3Frame[] {
 
         const rawSize =
           major === 4 ? readSyncsafeUint32(body, offset + 4) : readUint32BigEndian(body, offset + 4);
-        if (rawSize === null || rawSize <= 0) break;
+        if (rawSize === null || rawSize < 0) break;
+        if (rawSize === 0) {
+          offset += 10;
+          continue;
+        }
         const frameFlags1 = body[offset + 9] ?? 0;
         offset += 10;
         if (offset + rawSize > body.length) break;
@@ -718,17 +731,14 @@ function buildCommentFrame(commentText: string | null | undefined): Uint8Array |
   );
 }
 
-export function injectMp3Metadata(
-  input: Uint8Array,
+export function buildMp3Id3v2Tag(
+  existingId3v2Bytes: Uint8Array,
+  existingV1: ParsedId3v1Tag | null,
   meta: AudioTagMetadata,
   lyricsText: string,
   cover: AudioCoverData | null,
+  exactTagSlice = false,
 ): Uint8Array {
-  // Never corrupt non-MP3 payloads (e.g. M4A streams or HTML error pages)
-  if (!isMp3Bytes(input)) {
-    return input;
-  }
-
   const artistText = meta.artists?.length ? meta.artists.map((a) => a.name).join("; ") : meta.artist;
   const hasTitle = Boolean(meta.title?.trim());
   const hasArtist = Boolean(artistText?.trim());
@@ -751,7 +761,7 @@ export function injectMp3Metadata(
   if (hasLyrics) replacedTxxx.add("LYRICS");
 
   // Preserve existing ID3v2 (v2.2 / v2.3 / v2.4) frames that are not being replaced
-  const parsedExistingV2 = parseExistingId3v2Frames(input).filter((frame) => {
+  const parsedExistingV2 = parseExistingId3v2Frames(existingId3v2Bytes, exactTagSlice).filter((frame) => {
     if (frame.id === "TXXX") {
       return !frame.txxxDesc || !replacedTxxx.has(frame.txxxDesc);
     }
@@ -764,7 +774,6 @@ export function injectMp3Metadata(
   }
 
   // J08: Preserve ID3v1 / ID3v1.1 fields (especially track number TRCK) before stripping trailing 128-byte tag
-  const existingV1 = parseExistingId3v1Tag(input);
   const fallbackV1Frames: Uint8Array[] = [];
   if (existingV1) {
     if (existingV1.track && !presentIds.has("TRCK")) {
@@ -822,5 +831,21 @@ export function injectMp3Metadata(
     writeSyncsafeUint32(body.length),
   ]);
 
-  return concatBytes([header, body, stripExistingId3Tags(input)]);
+  return concatBytes([header, body]);
+}
+
+export function injectMp3Metadata(
+  input: Uint8Array,
+  meta: AudioTagMetadata,
+  lyricsText: string,
+  cover: AudioCoverData | null,
+): Uint8Array {
+  // Never corrupt non-MP3 payloads (e.g. M4A streams or HTML error pages)
+  if (!isMp3Bytes(input)) {
+    return input;
+  }
+
+  const existingV1 = parseExistingId3v1Tag(input);
+  const id3v2Tag = buildMp3Id3v2Tag(input, existingV1, meta, lyricsText, cover, false);
+  return concatBytes([id3v2Tag, stripExistingId3Tags(input)]);
 }

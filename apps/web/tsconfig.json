@@ -3,6 +3,7 @@
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "vitest/globals"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
@@ -10,8 +11,7 @@
     "declaration": false,
     "declarationMap": false,
     "paths": {
-      "#shared": ["../../packages/shared/src/index.ts"],
-      "#audio-tags": ["../../packages/audio-tags/src/index.ts"]
+      "#shared": ["../../packages/shared/src/index.ts"]
     }
   },
   "include": ["src", "vite.config.ts", "vitest.config.ts"]

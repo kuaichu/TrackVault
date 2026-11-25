@@ -1,6 +1,8 @@
 node_modules
 dist
 data
+coverage
+.vite-temp
 .env
 .env.*
 !.env.example
@@ -8,3 +10,6 @@ data
 *.zip
 *.tsbuildinfo
 .DS_Store
+audit-*/
+e2e/test-results/
+playwright-report/

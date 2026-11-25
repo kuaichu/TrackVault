@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PreferenceQualityLevelSchema } from "../quality.js";
+import { PreferenceQualityLevelSchema, QualityLevelSchema } from "../quality.js";
 import { ProviderModeSchema } from "./auth.js";
 import { SongSchema } from "./music.js";
 
@@ -30,8 +30,15 @@ export const PlayerStateSchema = z.object({
   muted: z.boolean().optional(),
   lastNonZeroVolume: z.number().min(0).max(1).optional(),
   playbackMode: PlaybackModeSchema,
+  preferredQuality: QualityLevelSchema.optional(),
 });
 export type PlayerState = z.infer<typeof PlayerStateSchema>;
+
+export const PlayHistoryResponseSchema = z.object({
+  items: z.array(SongSchema),
+  revision: z.number().int().nonnegative(),
+});
+export type PlayHistoryResponse = z.infer<typeof PlayHistoryResponseSchema>;
 
 export const SearchHistoryInputSchema = z.object({
   keyword: z.string().trim().min(1).max(120),

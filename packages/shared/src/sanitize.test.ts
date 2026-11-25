@@ -3,11 +3,14 @@ import test from "node:test";
 import { QualityLevelSchema, getQualityLabel, normalizeQualityLevel } from "./quality.js";
 import {
   escapeCsvCell,
+  formatDurationSeconds,
+  formatTimestampText,
   isAllowedCoverHost,
   normalizeCoverUrl,
   sanitizeCssUrl,
   sanitizeDownloadFilename,
   sanitizeExternalUrl,
+  truncateCodePoints,
 } from "./sanitize.js";
 import { PlayerStateSchema } from "./schemas/settings.js";
 
@@ -117,7 +120,22 @@ test("quality helpers include higher 192K and never crash on unknown levels (A14
   assert.equal(inferredAac768, "exhigh");
   assert.equal(getQualityLabel(inferredAac768, 768_000), "768K");
   assert.equal(getQualityLabel("lossless", 768_000, "aac"), "AAC 768K");
+  assert.equal(getQualityLabel("lossless", null, "aac"), "AAC");
+  assert.equal(getQualityLabel("lossless", null, "m4a"), "M4A");
   assert.equal(getQualityLabel("lossless", 1_411_000, "wav"), "WAV");
+  assert.equal(getQualityLabel("lossless", 128_000, "wav"), "WAV");
+  // CD-quality 16-bit / 44.1 kHz stereo PCM WAV (1,411,200 bps) without upstream level stays lossless ("WAV"), not Hi-Res
+  const inferredCdWav = normalizeQualityLevel(undefined, "lossless", {
+    bitrate: 1_411_200,
+    format: "wav",
+  });
+  assert.equal(inferredCdWav, "lossless");
+  assert.equal(getQualityLabel(inferredCdWav, 1_411_200, "wav"), "WAV");
+  const inferredHiResWav = normalizeQualityLevel(undefined, "lossless", {
+    bitrate: 4_608_000,
+    format: "wav",
+  });
+  assert.equal(inferredHiResWav, "hires");
 });
 
 test("PlayerStateSchema backwards-compatibly accepts optional muted & lastNonZeroVolume (U09)", () => {
@@ -142,4 +160,56 @@ test("PlayerStateSchema backwards-compatibly accepts optional muted & lastNonZer
   });
   assert.equal(extended.muted, true);
   assert.equal(extended.lastNonZeroVolume, 0.1);
+});
+
+test("truncateCodePoints truncates safely by Unicode code points without splitting surrogate pairs", () => {
+  assert.equal(truncateCodePoints("Hello", 10), "Hello");
+  assert.equal(truncateCodePoints("HelloWorld", 8), "Hello...");
+  assert.equal(truncateCodePoints("Hello", 3), "Hel");
+  assert.equal(truncateCodePoints("Hello", 0), "");
+
+  // Surrogate pairs (2 UTF-16 code units = 1 code point) must never be split
+  const emoji = "🎵🎶🎧🎤🎹";
+  assert.equal(truncateCodePoints(emoji, 5), emoji);
+  const truncatedEmoji = truncateCodePoints(emoji, 4);
+  assert.equal(truncatedEmoji, "🎵...");
+  assert.doesNotThrow(() => encodeURIComponent(truncatedEmoji));
+
+  const shortEmoji = truncateCodePoints("🎵🎶🎧", 2);
+  assert.equal(shortEmoji, "🎵🎶");
+  assert.doesNotThrow(() => encodeURIComponent(shortEmoji));
+
+  // Lone surrogate normalized safely
+  const withLone = truncateCodePoints("A\uD800B", 5);
+  assert.doesNotThrow(() => encodeURIComponent(withLone));
+});
+
+test("formatDurationSeconds formats MM:SS and HH:MM:SS for >= 3600s", () => {
+  assert.equal(formatDurationSeconds(null), "00:00");
+  assert.equal(formatDurationSeconds(undefined), "00:00");
+  assert.equal(formatDurationSeconds(Number.NaN), "00:00");
+  assert.equal(formatDurationSeconds(-12), "00:00");
+  assert.equal(formatDurationSeconds(0), "00:00");
+  assert.equal(formatDurationSeconds(65.9), "01:05");
+  assert.equal(formatDurationSeconds(3599), "59:59");
+  assert.equal(formatDurationSeconds(3600), "01:00:00");
+  assert.equal(formatDurationSeconds(3661), "01:01:01");
+});
+
+test("formatTimestampText handles both seconds and milliseconds in Asia/Shanghai YYYY-MM-DD HH:mm", () => {
+  assert.equal(formatTimestampText(null), "");
+  assert.equal(formatTimestampText(undefined), "");
+  assert.equal(formatTimestampText(0), "");
+  assert.equal(formatTimestampText(-100), "");
+  assert.equal(formatTimestampText(Number.NaN), "");
+  assert.equal(formatTimestampText(1e20), "");
+
+  const ms = Date.UTC(2024, 0, 1, 0, 0, 0); // 2024-01-01 08:00 Asia/Shanghai
+  const sec = Math.floor(ms / 1000);
+  assert.equal(formatTimestampText(ms), "2024-01-01 08:00");
+  assert.equal(formatTimestampText(sec), "2024-01-01 08:00");
+
+  // Midnight in Asia/Shanghai must format as 00:00 (not 24:00)
+  const midnightMs = Date.UTC(2023, 11, 31, 16, 0, 0);
+  assert.equal(formatTimestampText(midnightMs), "2024-01-01 00:00");
 });

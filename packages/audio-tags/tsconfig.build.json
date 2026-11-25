@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "references": [{ "path": "../shared/tsconfig.build.json" }],
+  "exclude": ["src/**/*.test.ts", "dist"]
+}
