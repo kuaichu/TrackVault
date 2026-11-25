@@ -172,7 +172,12 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
     request.sessionTokenHash = actor && token ? hashSessionToken(token) : null;
   });
 
+  const enforceHttpsHeaders = config.cookieSecure === "true";
+
   await app.register(fastifyHelmet, {
+    strictTransportSecurity: enforceHttpsHeaders,
+    crossOriginOpenerPolicy: enforceHttpsHeaders ? { policy: "same-origin" } : false,
+    originAgentCluster: enforceHttpsHeaders,
     crossOriginResourcePolicy: { policy: "cross-origin" },
     contentSecurityPolicy: {
       directives: {
@@ -195,6 +200,7 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
         frameAncestors: ["'none'"],
+        upgradeInsecureRequests: enforceHttpsHeaders ? [] : null,
       },
     },
     referrerPolicy: { policy: "no-referrer" },
