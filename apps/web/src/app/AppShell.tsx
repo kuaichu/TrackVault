@@ -420,8 +420,10 @@ function AppShellInner({
               </div>
             </header>
 
-            <main className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5 md:px-7 md:py-6">
-              <div className="mx-auto max-w-[1280px]">{children}</div>
+            <main className="flex-1 overflow-y-auto px-4 pt-4 pb-5 sm:px-6 sm:pt-5 sm:pb-6 md:px-7 md:pt-6 md:pb-28">
+              <div key={location.pathname} className="tv-page-enter mx-auto max-w-[1280px]">
+                {children}
+              </div>
             </main>
           </div>
         </div>
@@ -429,7 +431,22 @@ function AppShellInner({
         <RightDrawer backgroundInert={fullscreenOpen || effectiveMobileMenuOpen} />
       </div>
 
-      <div ref={bottomBarsRef} className="shrink-0">
+      {/* Non-interactive bottom fade mask so scrolled song rows dissolve smoothly before the floating glass bar */}
+      <div
+        aria-hidden="true"
+        className={`pointer-events-none hidden md:fixed md:bottom-0 md:left-[220px] md:right-0 md:block md:h-24 md:bg-gradient-to-t md:from-[var(--tv-bg)] md:via-[var(--tv-bg)]/78 md:to-transparent ${
+          drawerOpen ? "xl:right-[336px]" : ""
+        }`}
+        style={{ zIndex: "calc(var(--tv-z-sticky) - 1)" }}
+      />
+
+      <div
+        ref={bottomBarsRef}
+        className={`shrink-0 md:pointer-events-none md:fixed md:bottom-3.5 md:left-[220px] md:right-0 md:px-6 lg:px-7 ${
+          drawerOpen ? "xl:right-[336px]" : ""
+        }`}
+        style={{ zIndex: "var(--tv-z-sticky)" }}
+      >
         <PlayerBar />
 
         <nav
@@ -475,7 +492,7 @@ function AppShellInner({
           <button
             type="button"
             onClick={() => setMobileMenuOpen(false)}
-            className="fixed inset-0 bg-black/55 backdrop-blur-xs"
+            className="tv-backdrop-enter fixed inset-0 bg-black/55 backdrop-blur-xs"
             aria-label="关闭菜单遮罩"
           />
           <dialog
@@ -483,7 +500,7 @@ function AppShellInner({
             open
             aria-modal="true"
             aria-label="导航菜单"
-            className="relative m-0 flex h-full max-h-none w-[264px] max-w-[82vw] flex-col border-0 border-r border-[var(--tv-border)] bg-[var(--tv-sidebar)] p-0 text-[var(--tv-text)] shadow-2xl select-none"
+            className="tv-sidebar-enter relative m-0 flex h-full max-h-none w-[264px] max-w-[82vw] flex-col border-0 border-r border-[var(--tv-border)] bg-[var(--tv-sidebar)] p-0 text-[var(--tv-text)] shadow-2xl select-none"
           >
             {renderSidebarContent(true)}
           </dialog>

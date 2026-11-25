@@ -59,7 +59,7 @@ export function RightDrawer({ backgroundInert = false }: { backgroundInert?: boo
       <button
         type="button"
         onClick={() => setOpen(false)}
-        className="fixed inset-0 bg-black/55 backdrop-blur-xs xl:hidden"
+        className="tv-backdrop-enter fixed inset-0 bg-black/55 backdrop-blur-xs xl:hidden"
         aria-label="关闭侧栏遮罩"
       />
 
@@ -68,7 +68,7 @@ export function RightDrawer({ backgroundInert = false }: { backgroundInert?: boo
         role={isOverlay ? "dialog" : undefined}
         aria-modal={isOverlay ? true : undefined}
         aria-label="播放详情侧栏"
-        className="tv-pb-safe relative flex h-[78dvh] w-full flex-col rounded-t-2xl border-t border-[var(--tv-border-strong)] bg-[var(--tv-sidebar)] shadow-2xl xl:h-full xl:w-[336px] xl:rounded-none xl:border-l xl:border-t-0 xl:border-[var(--tv-border)] xl:shadow-none"
+        className="tv-pb-safe tv-drawer-enter relative flex h-[78dvh] w-full flex-col rounded-t-2xl border-t border-[var(--tv-border-strong)] bg-[var(--tv-sidebar)] shadow-2xl xl:h-full xl:w-[336px] xl:rounded-none xl:border-l xl:border-t-0 xl:border-[var(--tv-border)] xl:shadow-none"
       >
         {/* Mobile/Tablet grab indicator (< xl) */}
         <div className="flex justify-center pt-2 xl:hidden">
@@ -104,27 +104,31 @@ export function RightDrawer({ backgroundInert = false }: { backgroundInert?: boo
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {tab === "queue" && <PlayQueuePanel />}
+          <div key={tab} className="tv-panel-enter h-full">
+            {tab === "queue" && <PlayQueuePanel />}
 
-          {tab === "lyrics" &&
-            (!currentTrack ? (
-              <div className="py-16 text-center text-xs text-[var(--tv-text-muted)]">播放歌曲后查看歌词</div>
-            ) : (
-              <LyricScroller
-                lines={lyricsQuery.data?.lyrics.lines ?? []}
-                loading={lyricsQuery.isLoading}
-                error={
-                  lyricsQuery.isError
-                    ? lyricsQuery.error instanceof Error
-                      ? lyricsQuery.error.message
-                      : "歌词加载失败"
-                    : null
-                }
-                onRetry={() => void lyricsQuery.refetch()}
-              />
-            ))}
+            {tab === "lyrics" &&
+              (!currentTrack ? (
+                <div className="py-16 text-center text-xs text-[var(--tv-text-muted)]">
+                  播放歌曲后查看歌词
+                </div>
+              ) : (
+                <LyricScroller
+                  lines={lyricsQuery.data?.lyrics.lines ?? []}
+                  loading={lyricsQuery.isLoading}
+                  error={
+                    lyricsQuery.isError
+                      ? lyricsQuery.error instanceof Error
+                        ? lyricsQuery.error.message
+                        : "歌词加载失败"
+                      : null
+                  }
+                  onRetry={() => void lyricsQuery.refetch()}
+                />
+              ))}
 
-          {tab === "comments" && <TrackCommentsPanel active={Boolean(open && tab === "comments")} />}
+            {tab === "comments" && <TrackCommentsPanel active={Boolean(open && tab === "comments")} />}
+          </div>
         </div>
       </aside>
     </div>

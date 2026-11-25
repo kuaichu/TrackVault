@@ -6,8 +6,10 @@ import { DEFAULT_PROVIDER_CAPABILITIES } from "../../shared/hooks/use-capabiliti
 import { makeTestSong, renderWithProviders } from "../../test-utils/fixtures.js";
 import { FullscreenPlayer } from "./components/FullscreenPlayer.js";
 import { LyricScroller } from "./components/LyricScroller.js";
+import { PlayerBar } from "./components/PlayerBar.js";
 import { PlayQueuePanel, TrackCommentsPanel } from "./components/PlayerDrawerPanels.js";
 import { RightDrawer } from "./components/RightDrawer.js";
+import { audioEngine } from "./engine/audio-engine.js";
 import { usePlaybackClockStore, usePlayerStore } from "./store/player-store.js";
 
 describe("LyricScroller, RightDrawer, and Fullscreen inline panels", () => {
@@ -424,5 +426,129 @@ describe("LyricScroller, RightDrawer, and Fullscreen inline panels", () => {
 
     const removeButtons = screen.getAllByRole("button", { name: "移出队列" });
     expect(removeButtons[0]?.className).toContain("md:group-focus-within:opacity-100");
+  });
+
+  it("LyricScroller hides prominent native scrollbar and FullscreenPlayer opens explicit quality options menu", async () => {
+    const switchQualitySpy = vi.spyOn(audioEngine, "switchPlaybackQuality").mockResolvedValue(undefined);
+
+    const { container, unmount } = render(
+      <LyricScroller lines={[{ time: 1, text: "无滚动条沉浸歌词" }]} loading={false} large />,
+    );
+    expect(container.firstElementChild?.className).toContain("tv-no-scrollbar");
+    unmount();
+
+    const song = makeTestSong("s-quality", {
+      availableQualities: [
+        { level: "standard", label: "128K" },
+        { level: "exhigh", label: "320K" },
+      ],
+    });
+    usePlayerStore.setState({
+      currentTrack: song,
+      queue: [song],
+      fullscreenOpen: true,
+      defaultPlaybackQuality: "exhigh",
+      preferredTrackQuality: null,
+      loadedStreamQuality: "exhigh",
+    });
+
+    renderWithProviders(<FullscreenPlayer />);
+
+    // Apple Music borderless play glyph & stacked full-width progress bar
+    const playBtn = screen.getByRole("button", { name: "播放" });
+    expect(playBtn.className).toContain("bg-transparent");
+    expect(document.querySelector("[data-layout='stacked-timestamps']")).not.toBeNull();
+
+    const qualityBtn = screen.getByRole("button", { name: "切换音质" });
+    expect(qualityBtn).toHaveTextContent("320K");
+    expect(qualityBtn.className).not.toContain("border-");
+
+    // Clicking opens quality options menu instead of silently cycling
+    fireEvent.click(qualityBtn);
+    const menu = screen.getByRole("menu", { name: "音质选项" });
+    expect(menu).toBeInTheDocument();
+    expect(switchQualitySpy).not.toHaveBeenCalled();
+
+    // Unavailable tiers above track's declared capabilities are clearly shown as disabled
+    const hiresItem = screen.getByRole("menuitemradio", { name: /Hi-Res/ });
+    expect(hiresItem).toBeDisabled();
+
+    const standardItem = screen.getByRole("menuitemradio", { name: /128K/ });
+    expect(standardItem).not.toBeDisabled();
+    fireEvent.click(standardItem);
+    expect(switchQualitySpy).toHaveBeenCalledWith("standard");
+  });
+
+  it("PlayerBar and FullscreenPlayer provide quick collect-to-playlist with one-click add and inline create", async () => {
+    vi.spyOn(api, "getUserPlaylists").mockResolvedValue({
+      playlists: [
+        {
+          id: "pl-owned-1",
+          platform: "netease",
+          name: "深夜循环精选",
+          trackCount: 18,
+          creatorName: "我",
+          owned: true,
+        },
+        {
+          id: "pl-sub-2",
+          platform: "netease",
+          name: "他人歌单",
+          trackCount: 50,
+          creatorName: "别人",
+          owned: false,
+        },
+      ],
+    });
+    const addTracksSpy = vi.spyOn(api, "addTracksToPlaylist").mockResolvedValue({ addedCount: 1 });
+    const createPlaylistSpy = vi.spyOn(api, "createPlaylist").mockResolvedValue({
+      playlistId: "pl-new-9",
+      playlistName: "新歌速藏",
+      playlistUrl: "https://music.163.com/#/playlist?id=9",
+      addedCount: 1,
+    });
+
+    const song = makeTestSong("s-collect", { title: "待收藏好歌" });
+    usePlayerStore.setState({
+      currentTrack: song,
+      queue: [song],
+      fullscreenOpen: false,
+    });
+
+    const barView = renderWithProviders(<PlayerBar />);
+    // Verify Apple Music Route B LCD card, borderless play glyph, borderless quality pill, and quote-bubble lyrics button
+    expect(document.querySelector("[data-layout='lcd']")).not.toBeNull();
+    expect(screen.getAllByRole("button", { name: "播放" })[1]?.className).toContain("bg-transparent");
+    expect(screen.getByTitle("切换试听音质").className).not.toContain("border-");
+    expect(screen.getByRole("button", { name: "歌词" }).textContent).toBe("");
+
+    const collectBtns = screen.getAllByRole("button", { name: "收藏到歌单" });
+    expect(collectBtns.length).toBeGreaterThanOrEqual(2); // mobile + desktop bars
+
+    fireEvent.click(collectBtns[collectBtns.length - 1] as HTMLElement);
+    await waitFor(() => expect(screen.getByText("深夜循环精选")).toBeInTheDocument());
+    expect(screen.queryByText("他人歌单")).toBeNull();
+
+    fireEvent.click(screen.getByText("深夜循环精选"));
+    await waitFor(() => {
+      expect(addTracksSpy).toHaveBeenCalledWith("netease", "pl-owned-1", ["s-collect"]);
+    });
+    barView.unmount();
+
+    // Verify inline create-and-collect inside FullscreenPlayer utility pill
+    usePlayerStore.setState({ fullscreenOpen: true });
+    renderWithProviders(<FullscreenPlayer />);
+
+    fireEvent.click(screen.getByRole("button", { name: "收藏到歌单" }));
+    await waitFor(() => expect(screen.getByText("新建歌单并收藏")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("新建歌单并收藏"));
+    const input = screen.getByRole("textbox", { name: "新歌单名称" });
+    fireEvent.change(input, { target: { value: "新歌速藏" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+
+    await waitFor(() => {
+      expect(createPlaylistSpy).toHaveBeenCalledWith("netease", "新歌速藏", ["s-collect"]);
+    });
   });
 });

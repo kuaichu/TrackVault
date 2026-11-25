@@ -30,6 +30,16 @@ export function resolveEffectivePlaybackQuality(
     return desired;
   }
 
+  // Lightweight upstream list items (e.g. un-enriched QQ/persisted entries) may only carry default [128K];
+  // honor an explicit manual override while keeping default clamping intact.
+  if (
+    activeQualityOverride &&
+    song.availableQualities.length === 1 &&
+    song.availableQualities[0]?.level === "standard"
+  ) {
+    return activeQualityOverride;
+  }
+
   const desiredRank = QUALITY_RANK[desired] ?? 0;
   let bestAtOrBelow: QualityLevel | null = null;
   let bestAtOrBelowRank = -1;

@@ -22,6 +22,12 @@ export interface RawNeteasePrivilege {
   dl?: number | string | null;
   st?: number | string | null;
   cp?: number | string | null;
+  maxbr?: number | string | null;
+  playMaxbr?: number | string | null;
+  maxBrLevel?: string | null;
+  playMaxBrLevel?: string | null;
+  plLevel?: string | null;
+  dlLevel?: string | null;
 }
 
 export interface RawNeteaseSong {
@@ -38,24 +44,92 @@ export interface RawNeteaseSong {
   cp?: number | string | null;
   privilege?: RawNeteasePrivilege | null;
   hr?: unknown;
+  hrMusic?: unknown;
   sq?: unknown;
+  sqMusic?: unknown;
   h?: unknown;
+  hMusic?: unknown;
   m?: unknown;
+  mMusic?: unknown;
   l?: unknown;
+  lMusic?: unknown;
   pc?: unknown;
 }
 
 export const formatNeteaseTime = formatTimestampText;
 
-function deriveQualities(song: RawNeteaseSong): QualityOption[] {
+const EXHIGH_PRIVILEGE_LEVELS = new Set([
+  "exhigh",
+  "lossless",
+  "hires",
+  "jyeffect",
+  "vivid",
+  "dolby",
+  "sky",
+  "jymaster",
+]);
+const LOSSLESS_PRIVILEGE_LEVELS = new Set(["lossless", "hires", "jymaster"]);
+const HIRES_PRIVILEGE_LEVELS = new Set(["hires", "jymaster"]);
+
+function hasQualityDescriptor(value: unknown): boolean {
+  if (!value) return false;
+  if (typeof value !== "object") return Boolean(value);
+  const record = value as { br?: unknown; size?: unknown };
+  if (typeof record.size === "number") return record.size > 0;
+  if (typeof record.br === "number") return record.br > 0;
+  return true;
+}
+
+function deriveQualities(
+  song: RawNeteaseSong,
+  privilege: RawNeteasePrivilege | null,
+  isCloud: boolean,
+): QualityOption[] {
+  const maxBr = Math.max(Number(privilege?.maxbr ?? 0) || 0, Number(privilege?.playMaxbr ?? 0) || 0);
+  const privLevels = [
+    privilege?.maxBrLevel,
+    privilege?.playMaxBrLevel,
+    privilege?.plLevel,
+    privilege?.dlLevel,
+  ]
+    .map((item) => (typeof item === "string" ? item.trim().toLowerCase() : ""))
+    .filter(Boolean);
+
+  const hasHires =
+    hasQualityDescriptor(song.hr) ||
+    hasQualityDescriptor(song.hrMusic) ||
+    privLevels.some((level) => HIRES_PRIVILEGE_LEVELS.has(level));
+  const hasLossless =
+    hasHires ||
+    hasQualityDescriptor(song.sq) ||
+    hasQualityDescriptor(song.sqMusic) ||
+    maxBr >= 700_000 ||
+    privLevels.some((level) => LOSSLESS_PRIVILEGE_LEVELS.has(level));
+  const hasExhigh =
+    hasLossless ||
+    isCloud ||
+    hasQualityDescriptor(song.h) ||
+    hasQualityDescriptor(song.hMusic) ||
+    maxBr >= 256_000 ||
+    privLevels.some((level) => EXHIGH_PRIVILEGE_LEVELS.has(level));
+  const hasHigher =
+    !hasExhigh &&
+    (hasQualityDescriptor(song.m) ||
+      hasQualityDescriptor(song.mMusic) ||
+      (maxBr >= 160_000 && maxBr < 256_000) ||
+      privLevels.includes("higher"));
+
   const list: QualityOption[] = [{ level: "standard", label: "128K" }];
-  if (song.h || song.sq || song.hr) {
+  if (hasHigher) {
+    list.push({ level: "higher", label: "192K" });
+  }
+  if (hasExhigh) {
     list.push({ level: "exhigh", label: "320K" });
   }
-  if (song.sq || song.hr) {
+  if (hasLossless) {
     list.push({ level: "lossless", label: "FLAC" });
   }
-  if (song.hr) {
+  if (hasHires) {
     list.push({ level: "hires", label: "Hi-Res" });
   }
   return list;
@@ -95,11 +169,10 @@ export function mapNeteaseSong(
 
   const durationMs = Number(raw.dt ?? raw.duration ?? 0);
   const durationSeconds = Number.isFinite(durationMs) && durationMs > 0 ? Math.round(durationMs / 1000) : 0;
-  const availableQualities = deriveQualities(raw);
-  const topQuality = availableQualities[availableQualities.length - 1]?.label ?? "128K";
-
   const privilege = options?.privilege ?? raw.privilege ?? null;
   const isCloud = Boolean(options?.isCloud || raw.pc);
+  const availableQualities = deriveQualities(raw, privilege, isCloud);
+  const topQuality = availableQualities[availableQualities.length - 1]?.label ?? "128K";
 
   const availability = evaluateNeteaseAvailability({
     fee: privilege?.fee ?? raw.fee,

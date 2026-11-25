@@ -5,6 +5,7 @@ import test from "node:test";
 import { AppError } from "../../../domain/errors.js";
 import type { ProviderAuthContext } from "../../../domain/ports/music-provider.js";
 import { NeteaseAdapter } from "./netease-adapter.js";
+import { mapNeteaseSong } from "./netease-mapper.js";
 import { type NeteaseAxiosRequestConfig, NeteaseRpcClient, neteaseAxios } from "./netease-rpc-client.js";
 
 const neAuthA: ProviderAuthContext = {
@@ -395,4 +396,56 @@ test("NeteaseRpcClient.call propagates AbortSignal and shared bounded keep-alive
     neteaseAxios.defaults.adapter = originalAdapter;
     rpc.close();
   }
+});
+
+test("mapNeteaseSong derives multi-tier qualities from hMusic/sqMusic, privilege maxBrLevel/maxbr, and cloud flag", () => {
+  const fmSong = mapNeteaseSong({
+    id: 1001,
+    name: "FM Song",
+    artists: [{ id: 1, name: "Artist" }],
+    album: { id: 2, name: "Album" },
+    duration: 210_000,
+    hMusic: { br: 320_000, size: 8_400_000 },
+    sqMusic: { br: 999_000, size: 26_000_000 },
+    hrMusic: { br: 0, size: 0 },
+  });
+  assert.deepEqual(
+    fmSong?.availableQualities.map((q) => q.level),
+    ["standard", "exhigh", "lossless"],
+  );
+  assert.equal(fmSong?.quality, "FLAC");
+
+  const privHiresSong = mapNeteaseSong(
+    {
+      id: 1002,
+      name: "Privilege Hi-Res Song",
+      ar: [{ id: 1, name: "Artist" }],
+      al: { id: 2, name: "Album" },
+      dt: 180_000,
+    },
+    {
+      privilege: {
+        id: 1002,
+        maxbr: 999_000,
+        maxBrLevel: "hires",
+      },
+    },
+  );
+  assert.deepEqual(
+    privHiresSong?.availableQualities.map((q) => q.level),
+    ["standard", "exhigh", "lossless", "hires"],
+  );
+  assert.equal(privHiresSong?.quality, "Hi-Res");
+
+  const cloudSong = mapNeteaseSong(
+    {
+      id: 1003,
+      name: "Cloud Song",
+    },
+    { isCloud: true },
+  );
+  assert.deepEqual(
+    cloudSong?.availableQualities.map((q) => q.level),
+    ["standard", "exhigh"],
+  );
 });

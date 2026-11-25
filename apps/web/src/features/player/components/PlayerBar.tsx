@@ -1,28 +1,32 @@
-import {
-  ChevronUp,
-  Heart,
-  ListMusic,
-  Loader2,
-  MessageSquare,
-  Pause,
-  Play,
-  Repeat,
-  Repeat1,
-  Shuffle,
-  SkipBack,
-  SkipForward,
-  Volume2,
-  VolumeX,
-} from "lucide-react";
-import { useEffect, useState } from "react";
-import { type QualityLevel, getQualityLabel } from "#shared";
+import { ChevronUp, Loader2, Music2 } from "lucide-react";
+import type { MouseEvent } from "react";
 import { ArtistLinks } from "../../../entities/music/index.js";
 import { useIsSongLiked, useToggleLikeMutation } from "../../../entities/song/index.js";
 import { useCapabilities } from "../../../shared/hooks/use-capabilities.js";
-import { CoverArt, PlatformBadge } from "../../../shared/ui/primitives.js";
+import { CoverArt } from "../../../shared/ui/primitives.js";
 import { audioEngine, resolveEffectivePlaybackQuality } from "../engine/audio-engine.js";
 import { usePlayerStore } from "../store/player-store.js";
+import {
+  SfBackwardFill,
+  SfCommentBubble,
+  SfForwardFill,
+  SfHeart,
+  SfLyricsBubble,
+  SfPauseFill,
+  SfPlayFill,
+  SfQueueList,
+  SfRepeat,
+  SfRepeatOne,
+  SfShuffle,
+  SfSpeakerMaxFill,
+  SfSpeakerMinFill,
+  SfSpeakerXmarkFill,
+} from "./AppleMusicIcons.js";
 import { MiniProgressStripe, PlaybackProgressBar } from "./PlaybackProgressBar.js";
+import { QualitySelectorPopover } from "./QualitySelectorPopover.js";
+import { QuickCollectPopover } from "./QuickCollectPopover.js";
+
+const INTERACTIVE_CHILD_SELECTOR = "button, a, input, section, [role='menu']";
 
 export function PlayerBar() {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
@@ -41,15 +45,6 @@ export function PlayerBar() {
   const setFullscreenOpen = usePlayerStore((s) => s.setFullscreenOpen);
   const toggleDrawerTab = usePlayerStore((s) => s.toggleDrawerTab);
 
-  const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
-
-  useEffect(() => {
-    if (!qualityMenuOpen) return;
-    const onPointerDown = () => setQualityMenuOpen(false);
-    window.addEventListener("pointerdown", onPointerDown);
-    return () => window.removeEventListener("pointerdown", onPointerDown);
-  }, [qualityMenuOpen]);
-
   const capabilities = useCapabilities();
   const canLike = Boolean(currentTrack && capabilities[currentTrack.platform].canLikeSong);
   const { liked: isLiked } = useIsSongLiked(currentTrack?.platform, currentTrack?.id, canLike);
@@ -58,23 +53,28 @@ export function PlayerBar() {
 
   const canControl = Boolean(currentTrack) || hasPlayableQueue;
   const effectiveVolume = muted ? 0 : volume;
+  const volumePct = Math.round(effectiveVolume * 100);
   const activeQuality = resolveEffectivePlaybackQuality(
     currentTrack,
     loadedStreamQuality ?? preferredTrackQuality,
     defaultPlaybackQuality,
   );
-  const availableQualities =
-    currentTrack && currentTrack.availableQualities.length > 0
-      ? currentTrack.availableQualities
-      : [{ level: "standard" as const, label: "128K" }];
+  const platformText = currentTrack?.platform === "qq" ? "QQ 音乐" : "网易云";
+
+  const handleNowPlayingRegionClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (!currentTrack) return;
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (target?.closest(INTERACTIVE_CHILD_SELECTOR)) return;
+    setFullscreenOpen(true);
+  };
 
   return (
-    <footer
-      className="relative shrink-0 border-t border-[var(--tv-border)] bg-[var(--tv-player-bg)] backdrop-blur-2xl select-none"
-      style={{ zIndex: "var(--tv-z-sticky)" }}
-    >
-      {/* Mobile Mini Player Bar (< md) */}
-      <div className="relative flex h-[58px] items-center justify-between gap-2.5 px-3.5 md:hidden">
+    <footer className="pointer-events-auto relative select-none">
+      {/* Mobile Floating Liquid Glass Capsule (< md) */}
+      <div
+        className="relative mx-2.5 mb-1.5 flex h-[56px] items-center justify-between gap-2.5 rounded-[18px] border border-[var(--tv-glass-border)] bg-[var(--tv-glass-bg)] px-3.5 backdrop-blur-[28px] backdrop-saturate-[180%] md:hidden"
+        style={{ boxShadow: "var(--tv-glass-highlight), var(--tv-glass-shadow)" }}
+      >
         <MiniProgressStripe />
 
         {currentTrack ? (
@@ -86,30 +86,36 @@ export function PlayerBar() {
             <CoverArt
               src={currentTrack.coverUrl}
               alt={currentTrack.title}
-              className="h-10 w-10 shadow-sm"
-              rounded="rounded-lg"
+              className="h-9 w-9 shadow-sm"
+              rounded="rounded-[8px]"
             />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[13px] font-semibold text-[var(--tv-text)]">
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <div className="truncate text-[13px] font-semibold tracking-tight text-[var(--tv-text)]">
                 {currentTrack.title}
               </div>
-              <div className="truncate text-[11.5px] text-[var(--tv-text-muted)]">
+              <div className="truncate text-[11px] text-[var(--tv-text-muted)]">
                 {playerError ? (
                   <span className="text-[var(--tv-danger)]">{playerError}</span>
                 ) : (
-                  currentTrack.artist
+                  <>
+                    {currentTrack.artist}
+                    <span className="mx-1 opacity-45">·</span>
+                    <span className="text-[var(--tv-text-subtle)]">{platformText}</span>
+                  </>
                 )}
               </div>
             </div>
           </button>
         ) : (
           <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            <div className="h-9 w-9 rounded-lg bg-[var(--tv-surface)]" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-[8px] bg-[var(--tv-lcd-bg)] text-[var(--tv-text-subtle)]">
+              <Music2 className="h-4 w-4 opacity-60" />
+            </div>
             <span className="text-xs text-[var(--tv-text-subtle)]">未在播放</span>
           </div>
         )}
 
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-0.5">
           {canLike && currentTrack && (
             <button
               type="button"
@@ -121,28 +127,30 @@ export function PlayerBar() {
                   songTitle: currentTrack.title,
                 })
               }
-              className={`rounded-full p-2 transition-colors ${
+              className={`inline-flex items-center justify-center rounded-full p-1.5 transition-colors ${
                 isLiked ? "text-[var(--tv-accent)]" : "text-[var(--tv-text-muted)]"
               }`}
               aria-label={isLiked ? "取消喜欢" : "喜欢"}
             >
-              <Heart className={`h-4 w-4 ${isLiked ? "fill-current" : ""}`} />
+              <SfHeart filled={isLiked} className={`h-4 w-4 ${isLiked ? "tv-heart-pop" : ""}`} />
             </button>
           )}
+
+          <QuickCollectPopover song={currentTrack} variant="mobile-bar" />
 
           <button
             type="button"
             onClick={() => void audioEngine.togglePlay()}
             disabled={!canControl}
             aria-label={isPlaying ? "暂停" : "播放"}
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--tv-contrast-bg)] text-[var(--tv-contrast-fg)] active:scale-95 disabled:opacity-35"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-transparent text-[var(--tv-text)] transition-transform active:scale-90 disabled:opacity-35"
           >
             {isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="h-4 w-4 animate-spin text-[var(--tv-text-muted)]" />
             ) : isPlaying ? (
-              <Pause className="h-4 w-4 fill-current" />
+              <SfPauseFill className="h-[19px] w-[19px]" />
             ) : (
-              <Play className="ml-0.5 h-4 w-4 fill-current" />
+              <SfPlayFill className="h-[19px] w-[19px]" />
             )}
           </button>
 
@@ -150,236 +158,216 @@ export function PlayerBar() {
             type="button"
             onClick={() => void audioEngine.playNext()}
             disabled={!canControl}
-            className="rounded-full p-2 text-[var(--tv-text)] disabled:opacity-35"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[var(--tv-text)] transition-transform active:scale-90 disabled:opacity-35"
             aria-label="下一首"
           >
-            <SkipForward className="h-4 w-4 fill-current" />
+            <SfForwardFill className="h-[17px] w-[17px]" />
           </button>
 
           <button
             type="button"
             onClick={() => toggleDrawerTab("queue")}
-            className={`rounded-full p-2 ${
+            className={`inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
               drawerOpen && drawerTab === "queue" ? "text-[var(--tv-accent)]" : "text-[var(--tv-text-muted)]"
             }`}
             aria-label="播放队列"
           >
-            <ListMusic className="h-4 w-4" />
+            <SfQueueList className="h-4 w-4" />
           </button>
         </div>
       </div>
 
-      {/* Desktop 3-Column Player Bar (>= md) */}
-      <div className="mx-auto hidden h-[76px] max-w-[1680px] grid-cols-[minmax(0,1fr)_minmax(0,1.45fr)_minmax(0,1fr)] items-center gap-4 px-5 md:grid">
-        {/* Left: Cover + Track Info + Like */}
-        <div className="flex min-w-0 items-center gap-3">
+      {/* Desktop Floating Liquid Glass Bar (>= md): symmetric 1fr | minmax(320px,460px) | 1fr + bottom-edge scrubber */}
+      <div
+        className="relative mx-auto hidden h-[74px] max-w-[1280px] grid-cols-[1fr_minmax(280px,440px)_1fr] items-center gap-4 rounded-[18px] border border-[var(--tv-glass-border)] bg-[var(--tv-glass-bg)] px-5 backdrop-blur-[28px] backdrop-saturate-[180%] lg:grid-cols-[1fr_minmax(340px,460px)_1fr] lg:gap-6 lg:px-6 md:grid"
+        style={{ boxShadow: "var(--tv-glass-highlight), var(--tv-glass-shadow)" }}
+      >
+        {/* Left Zone: Borderless SF Symbols Transport Controls (left-anchored in 1fr) */}
+        <div className="flex items-center gap-1.5 justify-self-start">
+          <button
+            type="button"
+            onClick={() => audioEngine.cyclePlaybackMode()}
+            title={
+              playbackMode === "repeat-one"
+                ? "单曲循环"
+                : playbackMode === "shuffle"
+                  ? "随机播放"
+                  : "列表循环"
+            }
+            aria-label="切换播放模式"
+            className={`inline-flex h-8 w-8 items-center justify-center rounded-full transition-all duration-150 hover:bg-[var(--tv-surface-hover)] active:scale-90 ${
+              playbackMode === "sequential"
+                ? "text-[var(--tv-text-subtle)] hover:text-[var(--tv-text)]"
+                : "bg-[var(--tv-accent-soft)] text-[var(--tv-accent)]"
+            }`}
+          >
+            {playbackMode === "repeat-one" ? (
+              <SfRepeatOne className="h-[15px] w-[15px]" />
+            ) : playbackMode === "shuffle" ? (
+              <SfShuffle className="h-[15px] w-[15px]" />
+            ) : (
+              <SfRepeat className="h-[15px] w-[15px]" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void audioEngine.playPrevious()}
+            disabled={!canControl}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[var(--tv-text)] opacity-85 transition-all duration-150 hover:bg-[var(--tv-surface-hover)] hover:opacity-100 active:scale-90 disabled:opacity-30"
+            aria-label="上一首"
+          >
+            <SfBackwardFill className="h-[19px] w-[19px]" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void audioEngine.togglePlay()}
+            disabled={!canControl}
+            aria-label={isPlaying ? "暂停" : "播放"}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-transparent text-[var(--tv-text)] transition-all duration-150 hover:bg-[var(--tv-surface-hover)] active:scale-90 active:bg-[var(--tv-surface-active)] disabled:opacity-30"
+          >
+            {isLoading ? (
+              <Loader2 className="h-5 w-5 animate-spin text-[var(--tv-text-muted)]" />
+            ) : isPlaying ? (
+              <SfPauseFill className="h-[25px] w-[25px]" />
+            ) : (
+              <SfPlayFill className="h-[25px] w-[25px]" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void audioEngine.playNext()}
+            disabled={!canControl}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[var(--tv-text)] opacity-85 transition-all duration-150 hover:bg-[var(--tv-surface-hover)] hover:opacity-100 active:scale-90 disabled:opacity-30"
+            aria-label="下一首"
+          >
+            <SfForwardFill className="h-[19px] w-[19px]" />
+          </button>
+        </div>
+
+        {/* Center Zone: Strictly Centered 2-Line Now Playing + Vertically Centered Actions (zero vertical crunch) */}
+        {/* biome-ignore lint/a11y/useKeyWithClickEvents: inner cover/title buttons provide full keyboard activation */}
+        <div
+          onClick={handleNowPlayingRegionClick}
+          className={`group/lcd flex w-full items-center gap-3.5 justify-self-center rounded-[13px] px-2.5 py-1.5 transition-colors duration-150 ${
+            currentTrack ? "cursor-pointer hover:bg-[var(--tv-np-hover)]" : ""
+          }`}
+        >
           {currentTrack ? (
             <>
               <button
                 type="button"
                 onClick={() => setFullscreenOpen(true)}
-                className="group relative shrink-0 overflow-hidden rounded-lg shadow-sm"
+                className="group/cover relative shrink-0 overflow-hidden rounded-[9px] shadow-sm"
                 title="展开全屏歌词"
                 aria-label="展开全屏播放器"
               >
                 <CoverArt
                   src={currentTrack.coverUrl}
                   alt={currentTrack.title}
-                  className="h-12 w-12"
-                  rounded="rounded-lg"
+                  className="h-[46px] w-[46px]"
+                  rounded="rounded-[9px]"
                 />
-                <span className="absolute inset-0 flex items-center justify-center bg-black/45 opacity-0 transition-opacity group-hover:opacity-100">
-                  <ChevronUp className="h-5 w-5 text-white" />
+                <span className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 backdrop-blur-[1px] transition-opacity duration-150 group-hover/lcd:opacity-100">
+                  <ChevronUp className="h-4 w-4 text-white/95" />
                 </span>
               </button>
 
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setFullscreenOpen(true)}
-                    className="truncate text-left text-[13.5px] font-semibold text-[var(--tv-text)] hover:underline"
-                  >
-                    {currentTrack.title}
-                  </button>
-                  <PlatformBadge platform={currentTrack.platform} subtle />
-                </div>
-                <div className="mt-0.5 truncate text-xs text-[var(--tv-text-muted)]">
+              <div className="min-w-0 flex-1 space-y-1 text-left">
+                <button
+                  type="button"
+                  onClick={() => setFullscreenOpen(true)}
+                  className="block w-full truncate text-left text-[13.5px] leading-snug font-semibold tracking-tight text-[var(--tv-text)]"
+                >
+                  {currentTrack.title}
+                </button>
+
+                <div className="truncate text-[11.5px] leading-snug text-[var(--tv-text-muted)]">
                   {playerError ? (
                     <span className="text-[var(--tv-danger)]">{playerError}</span>
                   ) : (
-                    <ArtistLinks
-                      platform={currentTrack.platform}
-                      artists={currentTrack.artists}
-                      fallbackText={currentTrack.artist}
-                      primaryArtistId={currentTrack.primaryArtistId}
-                    />
+                    <>
+                      <ArtistLinks
+                        platform={currentTrack.platform}
+                        artists={currentTrack.artists}
+                        fallbackText={currentTrack.artist}
+                        primaryArtistId={currentTrack.primaryArtistId}
+                        linkClassName="transition-colors hover:text-[var(--tv-text)]"
+                      />
+                      <span className="mx-1.5 opacity-40">·</span>
+                      <span className="text-[11px] text-[var(--tv-text-subtle)]">{platformText}</span>
+                    </>
                   )}
                 </div>
               </div>
 
-              {canLike && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    likeMutation.mutate({
-                      platform: currentTrack.platform,
-                      songId: currentTrack.id,
-                      nextLiked: !isLiked,
-                      songTitle: currentTrack.title,
-                    })
-                  }
-                  className={`rounded-full p-1.5 transition-colors ${
-                    isLiked
-                      ? "text-[var(--tv-accent)]"
-                      : "text-[var(--tv-text-subtle)] hover:text-[var(--tv-text)]"
-                  }`}
-                  title={isLiked ? "取消喜欢" : "喜欢"}
-                  aria-label={isLiked ? "取消喜欢" : "喜欢"}
-                >
-                  <Heart className={`h-4 w-4 ${isLiked ? "fill-current" : ""}`} />
-                </button>
-              )}
+              {/* Vertically centered Collect + Heart actions */}
+              <div className="flex shrink-0 items-center gap-0.5 pl-1">
+                <QuickCollectPopover song={currentTrack} variant="player-bar" />
+
+                {canLike && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      likeMutation.mutate({
+                        platform: currentTrack.platform,
+                        songId: currentTrack.id,
+                        nextLiked: !isLiked,
+                        songTitle: currentTrack.title,
+                      })
+                    }
+                    className={`inline-flex items-center justify-center rounded-full p-1.5 transition-all duration-150 active:scale-95 ${
+                      isLiked
+                        ? "text-[var(--tv-accent)]"
+                        : "text-[var(--tv-text-subtle)] opacity-75 group-hover/lcd:opacity-100 hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-text)]"
+                    }`}
+                    title={isLiked ? "取消喜欢" : "喜欢"}
+                    aria-label={isLiked ? "取消喜欢" : "喜欢"}
+                  >
+                    <SfHeart
+                      filled={isLiked}
+                      className={`h-[16px] w-[16px] ${isLiked ? "tv-heart-pop" : ""}`}
+                    />
+                  </button>
+                )}
+              </div>
             </>
           ) : (
-            <div className="flex items-center gap-3">
-              <div className="h-11 w-11 rounded-lg bg-[var(--tv-surface)]" />
-              <div className="text-xs text-[var(--tv-text-subtle)]">未在播放</div>
+            <div className="flex w-full items-center gap-3.5">
+              <div className="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-[9px] bg-[var(--tv-lcd-bg)] text-[var(--tv-text-subtle)]">
+                <Music2 className="h-4 w-4 opacity-50" />
+              </div>
+              <span className="text-xs font-medium text-[var(--tv-text-subtle)]">未在播放</span>
             </div>
           )}
         </div>
 
-        {/* Center: Clean Monochrome Transport + Tactile Progress */}
-        <div className="flex flex-col items-center justify-center gap-1">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => audioEngine.cyclePlaybackMode()}
-              title={
-                playbackMode === "repeat-one"
-                  ? "单曲循环"
-                  : playbackMode === "shuffle"
-                    ? "随机播放"
-                    : "列表循环"
-              }
-              aria-label="切换播放模式"
-              className={`rounded-full p-1.5 transition-colors hover:bg-[var(--tv-surface-hover)] ${
-                playbackMode === "sequential"
-                  ? "text-[var(--tv-text-muted)] hover:text-[var(--tv-text)]"
-                  : "text-[var(--tv-accent)]"
-              }`}
-            >
-              {playbackMode === "repeat-one" ? (
-                <Repeat1 className="h-4 w-4" />
-              ) : playbackMode === "shuffle" ? (
-                <Shuffle className="h-4 w-4" />
-              ) : (
-                <Repeat className="h-4 w-4" />
-              )}
-            </button>
+        {/* Right Zone: Slimmed-down Tool Cluster (right-anchored in 1fr) */}
+        <div className="flex items-center justify-self-end gap-1">
+          {currentTrack && (
+            <QualitySelectorPopover song={currentTrack} activeQuality={activeQuality} variant="player-bar" />
+          )}
 
-            <button
-              type="button"
-              onClick={() => void audioEngine.playPrevious()}
-              disabled={!canControl}
-              className="rounded-full p-1.5 text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)] disabled:opacity-35"
-              aria-label="上一首"
-            >
-              <SkipBack className="h-4 w-4 fill-current" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => void audioEngine.togglePlay()}
-              disabled={!canControl}
-              aria-label={isPlaying ? "暂停" : "播放"}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--tv-contrast-bg)] text-[var(--tv-contrast-fg)] transition-transform hover:scale-105 hover:bg-[var(--tv-contrast-bg-hover)] active:scale-95 disabled:opacity-35"
-            >
-              {isLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : isPlaying ? (
-                <Pause className="h-4 w-4 fill-current" />
-              ) : (
-                <Play className="ml-0.5 h-4 w-4 fill-current" />
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => void audioEngine.playNext()}
-              disabled={!canControl}
-              className="rounded-full p-1.5 text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)] disabled:opacity-35"
-              aria-label="下一首"
-            >
-              <SkipForward className="h-4 w-4 fill-current" />
-            </button>
-
-            {currentTrack && (
-              <div className="relative" onPointerDown={(e) => e.stopPropagation()}>
-                <button
-                  type="button"
-                  onClick={() => setQualityMenuOpen((v) => !v)}
-                  className="rounded border border-[var(--tv-border-strong)] px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--tv-text-muted)] transition-colors hover:border-[var(--tv-text-subtle)] hover:text-[var(--tv-text)]"
-                  title="切换试听音质"
-                >
-                  {getQualityLabel(activeQuality)}
-                </button>
-                {qualityMenuOpen && (
-                  <div
-                    className="absolute bottom-full left-1/2 mb-2 w-32 -translate-x-1/2 rounded-xl border border-[var(--tv-border-strong)] bg-[var(--tv-surface-elevated)] p-1 shadow-xl"
-                    style={{ zIndex: "var(--tv-z-dropdown)" }}
-                  >
-                    <div className="px-2 py-1 text-[10px] font-medium text-[var(--tv-text-subtle)]">
-                      试听音质
-                    </div>
-                    {availableQualities.map((q) => (
-                      <button
-                        key={q.level}
-                        type="button"
-                        onClick={() => {
-                          setQualityMenuOpen(false);
-                          void audioEngine.switchPlaybackQuality(q.level as QualityLevel);
-                        }}
-                        className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-[var(--tv-surface-hover)] ${
-                          q.level === activeQuality
-                            ? "font-semibold text-[var(--tv-accent)]"
-                            : "text-[var(--tv-text)]"
-                        }`}
-                      >
-                        <span>{q.label}</span>
-                        {q.level === activeQuality && (
-                          <span className="h-1.5 w-1.5 rounded-full bg-[var(--tv-accent)]" />
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          <PlaybackProgressBar />
-        </div>
-
-        {/* Right: Lyrics / Comments / Queue + Sleek Volume */}
-        <div className="flex items-center justify-end gap-1">
           <button
             type="button"
             onClick={() => toggleDrawerTab("lyrics")}
-            className={`rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+            className={`inline-flex h-8 w-8 items-center justify-center rounded-full transition-all duration-150 ${
               drawerOpen && drawerTab === "lyrics"
                 ? "bg-[var(--tv-accent-soft)] text-[var(--tv-accent)]"
                 : "text-[var(--tv-text-muted)] hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
             }`}
             title="歌词"
+            aria-label="歌词"
           >
-            词
+            <SfLyricsBubble className="h-[17px] w-[17px]" />
           </button>
 
           <button
             type="button"
             onClick={() => toggleDrawerTab("comments")}
-            className={`rounded-md p-1.5 transition-colors ${
+            className={`inline-flex h-8 w-8 items-center justify-center rounded-full transition-all duration-150 ${
               drawerOpen && drawerTab === "comments"
                 ? "bg-[var(--tv-accent-soft)] text-[var(--tv-accent)]"
                 : "text-[var(--tv-text-muted)] hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
@@ -387,13 +375,13 @@ export function PlayerBar() {
             title="评论"
             aria-label="歌曲评论"
           >
-            <MessageSquare className="h-4 w-4" />
+            <SfCommentBubble className="h-[17px] w-[17px]" />
           </button>
 
           <button
             type="button"
             onClick={() => toggleDrawerTab("queue")}
-            className={`rounded-md p-1.5 transition-colors ${
+            className={`inline-flex h-8 w-8 items-center justify-center rounded-full transition-all duration-150 ${
               drawerOpen && drawerTab === "queue"
                 ? "bg-[var(--tv-accent-soft)] text-[var(--tv-accent)]"
                 : "text-[var(--tv-text-muted)] hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
@@ -401,32 +389,35 @@ export function PlayerBar() {
             title="播放队列"
             aria-label="播放队列"
           >
-            <ListMusic className="h-4 w-4" />
+            <SfQueueList className="h-[17px] w-[17px]" />
           </button>
 
-          <div className="ml-2 flex items-center gap-1.5">
+          <div className="ml-1 flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => audioEngine.toggleMute()}
-              className="rounded-md p-1.5 text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--tv-text-subtle)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
               aria-label={muted || effectiveVolume === 0 ? "取消静音" : "静音切换"}
             >
               {muted || effectiveVolume === 0 ? (
-                <VolumeX className="h-4 w-4" />
+                <SfSpeakerXmarkFill className="h-3.5 w-3.5" />
+              ) : effectiveVolume < 0.45 ? (
+                <SfSpeakerMinFill className="h-3.5 w-3.5" />
               ) : (
-                <Volume2 className="h-4 w-4" />
+                <SfSpeakerMaxFill className="h-3.5 w-3.5" />
               )}
             </button>
-            <div className="group relative flex h-5 w-20 items-center lg:w-24">
-              <div className="relative h-[4px] w-full overflow-hidden rounded-full bg-[var(--tv-border-strong)]">
+
+            <div className="group/vol relative flex h-5 w-[72px] items-center lg:w-[76px]">
+              <div className="relative h-[3px] w-full overflow-hidden rounded-full bg-[var(--tv-slider-track)] transition-[height] duration-150 group-hover/vol:h-[4.5px]">
                 <div
-                  className="absolute inset-y-0 left-0 rounded-full bg-[var(--tv-text-muted)] transition-colors group-hover:bg-[var(--tv-accent)]"
-                  style={{ width: `${Math.round(effectiveVolume * 100)}%` }}
+                  className="absolute inset-y-0 left-0 rounded-full bg-[var(--tv-slider-fill-muted)] transition-colors group-hover/vol:bg-[var(--tv-slider-fill)]"
+                  style={{ width: `${volumePct}%` }}
                 />
               </div>
               <div
-                className="pointer-events-none absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--tv-text)] opacity-0 shadow-sm transition-opacity duration-150 group-hover:opacity-100"
-                style={{ left: `${Math.round(effectiveVolume * 100)}%` }}
+                className="pointer-events-none absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--tv-text)] opacity-0 shadow-xs transition-opacity duration-150 group-hover/vol:opacity-100"
+                style={{ left: `${volumePct}%` }}
               />
               <input
                 type="range"
@@ -441,6 +432,9 @@ export function PlayerBar() {
             </div>
           </div>
         </div>
+
+        {/* Full-Capsule Bottom-Edge Scrubber (liberates middle vertical space completely) */}
+        <PlaybackProgressBar variant="lcd" />
       </div>
     </footer>
   );

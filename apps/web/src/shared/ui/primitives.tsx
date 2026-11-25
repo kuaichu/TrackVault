@@ -234,7 +234,7 @@ export function ToastContainer() {
 
   return (
     <output
-      className="fixed bottom-36 left-4 right-4 flex flex-col gap-2 pointer-events-none md:bottom-24 md:left-auto md:right-5 md:w-full md:max-w-xs"
+      className="fixed bottom-36 left-4 right-4 flex flex-col gap-2 pointer-events-none md:bottom-26 md:left-auto md:right-6 md:w-full md:max-w-xs"
       style={{ zIndex: "var(--tv-z-toast)" }}
       aria-live="polite"
     >
@@ -243,7 +243,7 @@ export function ToastContainer() {
         return (
           <div
             key={item.id}
-            className="pointer-events-auto flex items-start gap-2.5 rounded-xl border border-[var(--tv-border-strong)] bg-[var(--tv-surface-elevated)]/95 px-3.5 py-2.5 text-[13px] text-[var(--tv-text)] shadow-xl backdrop-blur-xl"
+            className="tv-toast-enter pointer-events-auto flex items-start gap-2.5 rounded-xl border border-[var(--tv-border-strong)] bg-[var(--tv-surface-elevated)]/95 px-3.5 py-2.5 text-[13px] text-[var(--tv-text)] shadow-xl backdrop-blur-xl"
           >
             {item.variant === "error" ? (
               <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--tv-danger)]" />

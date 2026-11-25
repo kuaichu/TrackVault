@@ -107,7 +107,7 @@ export function SongRowMenu({
       data-song-portal-menu="true"
       data-placement={anchor.upward ? "top" : "bottom"}
       onPointerDown={(e) => e.stopPropagation()}
-      className="w-48 rounded-xl border border-[var(--tv-border-strong)] bg-[var(--tv-surface-elevated)] p-1 shadow-2xl"
+      className="tv-popover-in w-48 rounded-xl border border-[var(--tv-border-strong)] bg-[var(--tv-surface-elevated)] p-1 shadow-2xl"
       style={positionStyle}
     >
       {panel === "main" && (

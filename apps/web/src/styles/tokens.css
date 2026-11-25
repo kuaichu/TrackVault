@@ -14,6 +14,19 @@
   --tv-header-bg: rgba(17, 17, 19, 0.82);
   --tv-player-bg: rgba(22, 22, 25, 0.88);
 
+  /* macOS Liquid Glass & Now Playing tokens */
+  --tv-glass-bg: rgba(28, 28, 31, 0.74);
+  --tv-glass-border: rgba(255, 255, 255, 0.045);
+  --tv-glass-highlight: inset 0 0.5px 0 0 rgba(255, 255, 255, 0.08);
+  --tv-glass-shadow: 0 16px 42px -8px rgba(0, 0, 0, 0.65), 0 4px 12px -2px rgba(0, 0, 0, 0.35);
+  --tv-np-hover: rgba(255, 255, 255, 0.045);
+  --tv-lcd-bg: rgba(255, 255, 255, 0.05);
+  --tv-lcd-border: rgba(255, 255, 255, 0.05);
+  --tv-slider-track: rgba(255, 255, 255, 0.1);
+  --tv-slider-buffer: rgba(255, 255, 255, 0.2);
+  --tv-slider-fill: rgba(255, 255, 255, 0.86);
+  --tv-slider-fill-muted: rgba(255, 255, 255, 0.42);
+
   --tv-border: rgba(255, 255, 255, 0.075);
   --tv-border-strong: rgba(255, 255, 255, 0.15);
 
@@ -57,6 +70,18 @@
   --tv-surface-active: rgba(0, 0, 0, 0.075);
   --tv-header-bg: rgba(255, 255, 255, 0.84);
   --tv-player-bg: rgba(250, 250, 252, 0.88);
+
+  --tv-glass-bg: rgba(250, 250, 252, 0.75);
+  --tv-glass-border: rgba(0, 0, 0, 0.06);
+  --tv-glass-highlight: inset 0 1px 0 0 rgba(255, 255, 255, 0.9);
+  --tv-glass-shadow: 0 12px 34px rgba(15, 15, 25, 0.12), 0 2px 8px rgba(15, 15, 25, 0.06);
+  --tv-np-hover: rgba(0, 0, 0, 0.038);
+  --tv-lcd-bg: rgba(0, 0, 0, 0.04);
+  --tv-lcd-border: rgba(0, 0, 0, 0.055);
+  --tv-slider-track: rgba(0, 0, 0, 0.12);
+  --tv-slider-buffer: rgba(0, 0, 0, 0.2);
+  --tv-slider-fill: rgba(29, 29, 31, 0.84);
+  --tv-slider-fill-muted: rgba(29, 29, 31, 0.42);
 
   --tv-border: rgba(0, 0, 0, 0.075);
   --tv-border-strong: rgba(0, 0, 0, 0.15);
@@ -111,6 +136,7 @@ select:not(:disabled) {
 .tv-theme-switching *::before,
 .tv-theme-switching *::after {
   transition: none !important;
+  animation: none !important;
 }
 
 /* Native macOS-style thin scrollbars */
@@ -130,6 +156,222 @@ select:not(:disabled) {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--tv-text-subtle);
+}
+
+/* Invisible scrollbar for synchronized lyric scrollers (prevents bright OS scrollbar over ambient backdrop) */
+.tv-no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.tv-no-scrollbar::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Ultra-subtle scrollbar for dark fullscreen overlays & drawers */
+.tv-subtle-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+.tv-subtle-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.tv-subtle-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+
+.tv-subtle-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* GPU-composited UI transitions & micro-interactions (end at transform: none to preserve fixed descendants) */
+@keyframes tv-page-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tv-fullscreen-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 28px, 0) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tv-panel-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tv-drawer-enter-mobile {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tv-drawer-enter-desktop {
+  0% {
+    opacity: 0;
+    transform: translate3d(20px, 0, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tv-sidebar-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(-100%, 0, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tv-backdrop-enter {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes tv-popover-up {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tv-popover-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tv-toast-enter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tv-heart-pop {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.28);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.tv-page-enter {
+  animation: tv-page-enter 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.tv-fullscreen-enter {
+  animation: tv-fullscreen-enter 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tv-panel-enter {
+  animation: tv-panel-enter 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.tv-drawer-enter {
+  animation: tv-drawer-enter-mobile 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (min-width: 1280px) {
+  .tv-drawer-enter {
+    animation: tv-drawer-enter-desktop 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+
+.tv-sidebar-enter {
+  animation: tv-sidebar-enter 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tv-backdrop-enter {
+  animation: tv-backdrop-enter 200ms ease-out;
+}
+
+.tv-popover-up {
+  transform-origin: bottom center;
+  animation: tv-popover-up 170ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tv-popover-in {
+  animation: tv-popover-in 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tv-toast-enter {
+  animation: tv-toast-enter 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tv-heart-pop {
+  animation: tv-heart-pop 280ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tv-page-enter,
+  .tv-fullscreen-enter,
+  .tv-panel-enter,
+  .tv-drawer-enter,
+  .tv-sidebar-enter,
+  .tv-backdrop-enter,
+  .tv-popover-up,
+  .tv-popover-in,
+  .tv-toast-enter,
+  .tv-heart-pop,
+  .tv-eq-bar {
+    animation: none !important;
+  }
 }
 
 /* Active track 3-bar equalizer animation (Spotify / Feishin style) */
