@@ -186,7 +186,7 @@ export function SegmentedTabs<T extends string>({
   onChange: (next: T) => void;
 }) {
   return (
-    <div className="inline-flex items-center rounded-lg bg-[var(--tv-surface)] p-0.5 text-xs">
+    <div className="inline-flex items-center rounded-[9px] bg-[var(--tv-lcd-bg)] p-[3px] text-xs ring-1 ring-[var(--tv-sidebar-border)] ring-inset">
       {items.map((item) => {
         const active = item.id === value;
         return (
@@ -194,9 +194,9 @@ export function SegmentedTabs<T extends string>({
             key={item.id}
             type="button"
             onClick={() => onChange(item.id)}
-            className={`rounded-md px-3 py-1.5 font-medium transition-all ${
+            className={`rounded-[7px] px-2.5 py-1 font-medium transition-all duration-150 ${
               active
-                ? "bg-[var(--tv-surface-elevated)] text-[var(--tv-text)] shadow-xs"
+                ? "bg-[var(--tv-nav-active)] text-[var(--tv-text)] shadow-xs"
                 : "text-[var(--tv-text-muted)] hover:text-[var(--tv-text)]"
             }`}
           >

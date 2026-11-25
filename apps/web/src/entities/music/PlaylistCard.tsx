@@ -15,12 +15,15 @@ export function PlaylistCard({
   onOpen,
   onPlay,
   playLoading = false,
+  pinnedFavorite = false,
 }: {
   playlist: PlaylistSummary;
   subtitle?: ReactNode;
   onOpen: () => void;
   onPlay?: () => void;
   playLoading?: boolean;
+  /** Subtle Apple Music corner heart indicator for the user's primary "Liked Songs" playlist. */
+  pinnedFavorite?: boolean;
 }) {
   return (
     <div className="group text-left">
@@ -45,6 +48,21 @@ export function PlaylistCard({
           className="pointer-events-none absolute inset-0 rounded-[11px]"
           style={{ boxShadow: "var(--tv-cover-ring)" }}
         />
+
+        {pinnedFavorite && (
+          <span
+            aria-label="我喜欢的音乐"
+            title="我喜欢的音乐"
+            className="pointer-events-none absolute top-2.5 right-2.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/45 text-[#fa2d48] shadow-xs ring-1 ring-white/15 backdrop-blur-md"
+          >
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" className="h-3.5 w-3.5">
+              <path
+                d="M12 20.15C11.68 20.15 11.37 20.04 11.11 19.84C7.18 16.79 3.25 13.38 3.25 9.15C3.25 6.32 5.45 4.25 8.12 4.25C9.73 4.25 11.12 5.04 12 6.26C12.88 5.04 14.27 4.25 15.88 4.25C18.55 4.25 20.75 6.32 20.75 9.15C20.75 13.38 16.82 16.79 12.89 19.84C12.63 20.04 12.32 20.15 12 20.15Z"
+                fill="currentColor"
+              />
+            </svg>
+          </span>
+        )}
 
         {onPlay && (
           <button

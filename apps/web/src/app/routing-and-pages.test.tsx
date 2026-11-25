@@ -613,4 +613,69 @@ describe("Phase 5 · Routing, providerMode defaults, URL state, QR polling, erro
       expect(btn1).not.toBeDisabled();
     });
   });
+
+  it("PlaylistsPage separates owned and collected sections, hides group headers in single-filter mode, omits repetitive '自建' tag, and pins favorite badge", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.spyOn(api, "getSettings").mockResolvedValue({ settings: makeSettings() });
+    vi.spyOn(api, "getCapabilities").mockResolvedValue({ capabilities: DEFAULT_PROVIDER_CAPABILITIES });
+    vi.spyOn(api, "getUserPlaylists").mockResolvedValue({
+      playlists: [
+        {
+          id: "pl-fav",
+          platform: "netease",
+          name: "KuaiChu喜欢的音乐",
+          trackCount: 7636,
+          creatorName: "KuaiChu",
+          owned: true,
+        },
+        {
+          id: "pl-own-2",
+          platform: "netease",
+          name: "纯音乐",
+          trackCount: 25,
+          creatorName: "KuaiChu",
+          owned: true,
+        },
+        {
+          id: "pl-col-1",
+          platform: "netease",
+          name: "孤独诗人的慰藉",
+          trackCount: 42,
+          creatorName: "独立策展人",
+          owned: false,
+        },
+      ],
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/playlists"]}>
+          <PlaylistsPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "我创建的" })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "收藏的歌单" })).toBeInTheDocument();
+    });
+
+    // Owned subtitles omit repetitive '自建'; collected subtitles show creator + count; favorite badge is pinned
+    expect(screen.queryByText("自建")).toBeNull();
+    expect(screen.getByText("独立策展人")).toBeInTheDocument();
+    expect(screen.getByLabelText("我喜欢的音乐")).toBeInTheDocument();
+
+    // Switching to '收藏' hides group headings and shows only collected playlists
+    fireEvent.click(screen.getByRole("button", { name: "收藏" }));
+    expect(screen.queryByRole("heading", { name: "收藏的歌单" })).toBeNull();
+    expect(screen.queryByText("纯音乐")).toBeNull();
+    expect(screen.getByText("孤独诗人的慰藉")).toBeInTheDocument();
+
+    // Switching to '我创建的' hides group headings and keeps '+ 新建歌单' accessible
+    fireEvent.click(screen.getByRole("button", { name: "我创建的" }));
+    expect(screen.queryByRole("heading", { name: "我创建的" })).toBeNull();
+    expect(screen.getByText("纯音乐")).toBeInTheDocument();
+    expect(screen.queryByText("孤独诗人的慰藉")).toBeNull();
+    expect(screen.getByRole("button", { name: /新建歌单/ })).toBeInTheDocument();
+  });
 });

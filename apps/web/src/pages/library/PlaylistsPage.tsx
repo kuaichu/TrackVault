@@ -14,12 +14,15 @@ import { EmptyState, SegmentedTabs } from "../../shared/ui/primitives.js";
 import { SongTable } from "../../widgets/song-table/index.js";
 
 const PAGE_SIZE = 50;
+type PlaylistFilter = "all" | "owned" | "collected";
+const FAVORITE_PLAYLIST_PATTERN = /(喜欢的音乐|我喜欢)$/;
 
 export function PlaylistsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { platform, platformReady, setPlatform } = usePlatformParam();
   const capabilities = useCapabilities();
+  const [filter, setFilter] = useState<PlaylistFilter>("all");
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [playingPlaylistKey, setPlayingPlaylistKey] = useState<string | null>(null);
@@ -72,40 +75,98 @@ export function PlaylistsPage() {
   };
 
   const playlists = playlistsQuery.data?.playlists ?? [];
+  const ownedPlaylists = playlists.filter((pl) => pl.owned);
+  const collectedPlaylists = playlists.filter((pl) => !pl.owned);
+
+  const renderCreateTrigger = () => {
+    if (!canCreatePlaylist) return null;
+    return (
+      <button
+        type="button"
+        onClick={() => setCreating((v) => !v)}
+        className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[13px] font-medium text-[var(--tv-accent)] transition-colors hover:bg-[var(--tv-accent-soft)]"
+      >
+        <Plus className="h-4 w-4 stroke-[2.2]" />
+        新建歌单
+      </button>
+    );
+  };
+
+  const renderPlaylistGrid = (items: PlaylistSummary[], groupKind: "owned" | "collected") => (
+    <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 sm:gap-x-5 sm:gap-y-7 md:grid-cols-4 lg:grid-cols-5">
+      {items.map((pl, index) => {
+        const key = `${pl.platform}:${pl.id}`;
+        const isPinnedFavorite =
+          groupKind === "owned" && index === 0 && FAVORITE_PLAYLIST_PATTERN.test(pl.name.trim());
+        return (
+          <PlaylistCard
+            key={key}
+            playlist={pl}
+            pinnedFavorite={isPinnedFavorite}
+            playLoading={playingPlaylistKey === key}
+            onOpen={() =>
+              navigate(`/playlists/${pl.platform}/${encodeURIComponent(pl.id)}`, {
+                state: { playlist: pl },
+              })
+            }
+            onPlay={() => void handlePlayPlaylist(pl)}
+            subtitle={
+              pl.owned ? (
+                <span className="tabular-nums">{pl.trackCount} 首</span>
+              ) : (
+                <>
+                  <span className="truncate">{pl.creatorName}</span>
+                  <span className="opacity-45">·</span>
+                  <span className="shrink-0 tabular-nums">{pl.trackCount} 首</span>
+                </>
+              )
+            }
+          />
+        );
+      })}
+    </div>
+  );
 
   return (
-    <div className="space-y-7">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
-          <h1 className="text-[28px] font-bold tracking-tight text-[var(--tv-text)]">歌单</h1>
-          {canCreatePlaylist && (
-            <button
-              type="button"
-              onClick={() => setCreating((v) => !v)}
-              className="inline-flex items-center gap-1 rounded-lg bg-[var(--tv-surface)] px-3 py-1.5 text-xs font-medium text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-active)]"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              新建歌单
-            </button>
-          )}
+    <div className="space-y-7 sm:space-y-8">
+      {/* Apple Music Editorial Header + Hairline Rule + Segmented Filter & Platform Switcher */}
+      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-[var(--tv-border)] pb-3.5">
+        <h1 className="text-[30px] leading-none font-extrabold tracking-tight text-[var(--tv-text)] sm:text-[34px]">
+          歌单
+        </h1>
+
+        <div className="flex flex-wrap items-center gap-2.5">
+          <SegmentedTabs
+            value={filter}
+            onChange={(next) => {
+              if (next === "collected") setCreating(false);
+              setFilter(next);
+            }}
+            items={[
+              { id: "all", label: "全部" },
+              { id: "owned", label: "我创建的" },
+              { id: "collected", label: "收藏" },
+            ]}
+          />
+
+          <SegmentedTabs
+            value={platform}
+            onChange={(next) => {
+              setCreating(false);
+              setPlatform(next);
+            }}
+            items={[
+              { id: "netease", label: "网易云音乐" },
+              { id: "qq", label: "QQ 音乐" },
+            ]}
+          />
         </div>
-        <SegmentedTabs
-          value={platform}
-          onChange={(next) => {
-            setCreating(false);
-            setPlatform(next);
-          }}
-          items={[
-            { id: "netease", label: "网易云音乐" },
-            { id: "qq", label: "QQ 音乐" },
-          ]}
-        />
       </div>
 
       {creating && canCreatePlaylist && (
         <form
           onSubmit={handleCreate}
-          className="flex flex-wrap items-center gap-2.5 rounded-xl bg-[var(--tv-surface)] p-3.5"
+          className="flex flex-wrap items-center gap-2.5 rounded-xl border border-[var(--tv-sidebar-border)] bg-[var(--tv-lcd-bg)] p-3.5"
         >
           <input
             type="text"
@@ -114,7 +175,7 @@ export function PlaylistsPage() {
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             placeholder="输入新歌单名称..."
-            className="h-9 flex-1 min-w-[200px] rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-3 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:border-[var(--tv-border-strong)] focus:outline-none"
+            className="h-9 min-w-[200px] flex-1 rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-3 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:border-[var(--tv-border-strong)] focus:outline-none"
           />
           <button
             type="submit"
@@ -134,10 +195,10 @@ export function PlaylistsPage() {
       )}
 
       {playlistsQuery.isLoading || !platformReady ? (
-        <div className="grid grid-cols-2 gap-x-3.5 gap-y-5 sm:grid-cols-3 sm:gap-x-5 sm:gap-y-7 md:grid-cols-4 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 sm:gap-x-5 sm:gap-y-7 md:grid-cols-4 lg:grid-cols-5">
           {["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"].map((id) => (
-            <div key={id} className="space-y-2.5">
-              <div className="aspect-square w-full animate-pulse rounded-xl bg-[var(--tv-surface)]" />
+            <div key={id} className="space-y-2">
+              <div className="aspect-square w-full animate-pulse rounded-[11px] bg-[var(--tv-surface)]" />
               <div className="h-3.5 w-3/4 animate-pulse rounded bg-[var(--tv-surface)]" />
               <div className="h-3 w-1/2 animate-pulse rounded bg-[var(--tv-surface)]" />
             </div>
@@ -170,32 +231,74 @@ export function PlaylistsPage() {
           }
         />
       ) : playlists.length === 0 ? (
-        <EmptyState title="暂无歌单" description="该平台账号下还没有自建或收藏的歌单。" />
+        <EmptyState
+          title="暂无歌单"
+          description="该平台账号下还没有自建或收藏的歌单。"
+          action={renderCreateTrigger()}
+        />
+      ) : filter === "owned" ? (
+        ownedPlaylists.length === 0 ? (
+          <EmptyState
+            title="暂无自建歌单"
+            description="点击下方按钮创建你的第一个专属歌单。"
+            action={renderCreateTrigger()}
+          />
+        ) : (
+          <div className="space-y-4">
+            {canCreatePlaylist && <div className="-mt-2 flex justify-end">{renderCreateTrigger()}</div>}
+            {renderPlaylistGrid(ownedPlaylists, "owned")}
+          </div>
+        )
+      ) : filter === "collected" ? (
+        collectedPlaylists.length === 0 ? (
+          <EmptyState title="暂无收藏歌单" description="你在该平台收藏的歌单会显示在这里。" />
+        ) : (
+          renderPlaylistGrid(collectedPlaylists, "collected")
+        )
       ) : (
-        <div className="grid grid-cols-2 gap-x-3.5 gap-y-5 sm:grid-cols-3 sm:gap-x-5 sm:gap-y-7 md:grid-cols-4 lg:grid-cols-5">
-          {playlists.map((pl) => {
-            const key = `${pl.platform}:${pl.id}`;
-            return (
-              <PlaylistCard
-                key={key}
-                playlist={pl}
-                playLoading={playingPlaylistKey === key}
-                onOpen={() =>
-                  navigate(`/playlists/${pl.platform}/${encodeURIComponent(pl.id)}`, {
-                    state: { playlist: pl },
-                  })
-                }
-                onPlay={() => void handlePlayPlaylist(pl)}
-                subtitle={
-                  <>
-                    <span className="tabular-nums">{pl.trackCount} 首</span>
-                    <span>·</span>
-                    <span className="truncate">{pl.owned ? "自建" : pl.creatorName}</span>
-                  </>
-                }
-              />
-            );
-          })}
+        <div>
+          {(ownedPlaylists.length > 0 || canCreatePlaylist) && (
+            <section className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-baseline gap-2">
+                  <h2 className="text-[19px] font-bold tracking-tight text-[var(--tv-text)] sm:text-[20px]">
+                    我创建的
+                  </h2>
+                  <span className="text-[13px] font-medium text-[var(--tv-text-subtle)] tabular-nums">
+                    {ownedPlaylists.length}
+                  </span>
+                </div>
+                {renderCreateTrigger()}
+              </div>
+
+              {ownedPlaylists.length > 0 ? (
+                renderPlaylistGrid(ownedPlaylists, "owned")
+              ) : (
+                <div className="py-4 text-xs text-[var(--tv-text-subtle)]">暂无我创建的歌单</div>
+              )}
+            </section>
+          )}
+
+          {collectedPlaylists.length > 0 && (
+            <section
+              className={`space-y-4 ${
+                ownedPlaylists.length > 0 || canCreatePlaylist
+                  ? "mt-11 border-t border-[var(--tv-border)] pt-8 sm:mt-12"
+                  : ""
+              }`}
+            >
+              <div className="flex items-baseline gap-2">
+                <h2 className="text-[19px] font-bold tracking-tight text-[var(--tv-text)] sm:text-[20px]">
+                  收藏的歌单
+                </h2>
+                <span className="text-[13px] font-medium text-[var(--tv-text-subtle)] tabular-nums">
+                  {collectedPlaylists.length}
+                </span>
+              </div>
+
+              {renderPlaylistGrid(collectedPlaylists, "collected")}
+            </section>
+          )}
         </div>
       )}
     </div>
