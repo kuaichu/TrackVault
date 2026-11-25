@@ -3,15 +3,15 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ErrorCode, JobEvent, JobKind, JobView } from "#shared";
+import type { ErrorCode, JobDetailView, JobEvent, JobKind, JobView, JobsListResponse } from "#shared";
 import type { ActorContext } from "../../domain/context.js";
 import { AppError, isAppError } from "../../domain/errors.js";
-import {
-  type JobRepository,
-  type StoredJobRecord,
-  hasLocalDownloadArtifactExpectation,
-  toJobView,
-} from "../../infrastructure/db/repositories/job-repository.js";
+import type {
+  JobRepositoryPort,
+  StoredJobRecord,
+  StoredJobSummaryRecord,
+} from "../../domain/ports/job-repository.js";
+import { hasLocalDownloadArtifactExpectation, toJobSummaryView, toJobView } from "./job-view-mapper.js";
 
 export interface JobRuntimeHandle {
   readonly jobId: string;
@@ -41,10 +41,10 @@ const ARTIFACT_TTL_MS = 2 * 60 * 60 * 1000;
  * import audits, and playlist comparisons.
  * - Enforces ownerId checks on every read/cancel/artifact fetch.
  * - Enforces per-user and global concurrency caps.
- * - Persists state row-by-row to SQLite and streams real-time updates via SSE EventEmitter.
+ * - Persists state row-by-row to SQLite with monotonic per-user revision and CAS guards.
  */
 export class BackgroundJobManager {
-  readonly #repo: JobRepository;
+  readonly #repo: JobRepositoryPort;
   readonly #tmpDownloadsDir: string;
   readonly #globalMaxDownload: number;
   readonly #globalMaxGeneral: number;
@@ -56,9 +56,10 @@ export class BackgroundJobManager {
     { userId: string; kind: JobKind; controller: AbortController }
   >();
   #cleanupTimer: NodeJS.Timeout | null = null;
+  #stopped = false;
 
   constructor(options: {
-    repo: JobRepository;
+    repo: JobRepositoryPort;
     tmpDownloadsDir: string;
     globalMaxConcurrentDownloads: number;
     globalMaxConcurrentJobs: number;
@@ -68,7 +69,7 @@ export class BackgroundJobManager {
     this.#globalMaxDownload = options.globalMaxConcurrentDownloads;
     this.#globalMaxGeneral = options.globalMaxConcurrentJobs;
     this.#events.setMaxListeners(100);
-    const recovered = this.#repo.recoverInterruptedJobs();
+    const recovered = this.#repo.recoverInterruptedJobs("任务在服务重启前被中断，请重试。");
     for (const item of recovered) {
       void this.#deleteArtifactById(item.userId, item.id).catch(() => undefined);
     }
@@ -79,7 +80,7 @@ export class BackgroundJobManager {
   }
 
   startPeriodicCleanup(): void {
-    if (this.#cleanupTimer) return;
+    if (this.#cleanupTimer || this.#stopped) return;
     this.#cleanupTimer = setInterval(
       () => {
         void this.cleanupExpiredArtifacts().catch(() => undefined);
@@ -90,15 +91,49 @@ export class BackgroundJobManager {
   }
 
   stop(): void {
+    this.#stopped = true;
     if (this.#cleanupTimer) {
       clearInterval(this.#cleanupTimer);
       this.#cleanupTimer = null;
     }
-    for (const entry of this.#runningControllers.values()) {
-      entry.controller.abort();
+
+    const queuedItems = this.#queue.splice(0, this.#queue.length);
+    for (const item of queuedItems) {
+      const updated = this.#repo.update(
+        item.record.id,
+        { status: "cancelled", subtitle: "服务已停止，任务已取消" },
+        { expectedStatus: ["queued", "running"] },
+      );
+      if (updated) {
+        this.#emit(item.record.userId, {
+          type: "job_updated",
+          job: toJobSummaryView(updated),
+          serverRevision: updated.revision ?? 0,
+          timestamp: updated.updatedAt,
+        });
+      }
+      void this.#deleteArtifactById(item.record.userId, item.record.id).catch(() => undefined);
     }
+
+    const runningEntries = [...this.#runningControllers.entries()];
     this.#runningControllers.clear();
-    this.#queue.length = 0;
+    for (const [jobId, entry] of runningEntries) {
+      entry.controller.abort();
+      const updated = this.#repo.update(
+        jobId,
+        { status: "cancelled", subtitle: "服务已停止，任务已取消" },
+        { expectedStatus: ["queued", "running"] },
+      );
+      if (updated) {
+        this.#emit(entry.userId, {
+          type: "job_updated",
+          job: toJobSummaryView(updated),
+          serverRevision: updated.revision ?? 0,
+          timestamp: updated.updatedAt,
+        });
+      }
+      void this.#deleteArtifactById(entry.userId, jobId).catch(() => undefined);
+    }
   }
 
   subscribe(userId: string, listener: (event: JobEvent) => void): () => void {
@@ -122,6 +157,10 @@ export class BackgroundJobManager {
     maxUserConcurrency?: number;
     runner: (handle: JobRuntimeHandle) => Promise<JobRunOutcome>;
   }): JobView {
+    if (this.#stopped) {
+      throw new AppError("INTERNAL_ERROR", "服务正在停止，暂不接受新任务。");
+    }
+
     const activeForUser =
       [...this.#runningControllers.values()].filter(
         (r) => r.userId === input.actor.userId && r.kind === input.kind,
@@ -148,28 +187,50 @@ export class BackgroundJobManager {
       updatedAt: now,
     };
 
-    const evictedIds = this.#repo.insert(record);
+    const { evictedIds, revision } = this.#repo.insert(record);
+    const persistedRecord: StoredJobRecord = {
+      ...record,
+      revision,
+      hasResult: false,
+      artifactExpired: false,
+    };
     for (const evictedId of evictedIds) {
-      this.#emit(input.actor.userId, { type: "job_removed", jobId: evictedId, timestamp: now });
+      this.#emit(input.actor.userId, {
+        type: "job_removed",
+        jobId: evictedId,
+        serverRevision: revision,
+        timestamp: now,
+      });
       void this.#deleteArtifactById(input.actor.userId, evictedId).catch(() => undefined);
     }
-    const view = toJobView(record);
-    this.#emit(input.actor.userId, { type: "job_updated", job: view, timestamp: now });
+    const summaryView = toJobSummaryView(persistedRecord);
+    this.#emit(input.actor.userId, {
+      type: "job_updated",
+      job: summaryView,
+      serverRevision: revision,
+      timestamp: now,
+    });
 
     this.#queue.push({
-      record,
+      record: persistedRecord,
       maxUserConcurrency: Math.max(1, input.maxUserConcurrency ?? 2),
       runner: input.runner,
     });
     this.#drainQueue();
 
-    return view;
+    return toJobView(persistedRecord);
   }
 
-  listForActor(actor: ActorContext, kind?: JobKind): JobView[] {
-    return this.#repo
-      .listRawByUser(actor.userId, kind)
-      .map((record) => toJobView(this.#reconcileArtifactRecord(record, true)));
+  listForActorWithRevision(actor: ActorContext, kind?: JobKind): JobsListResponse {
+    const { jobs, serverRevision, clearedBeforeRevision } = this.#repo.listSummariesWithRevision(
+      actor.userId,
+      kind,
+    );
+    return {
+      jobs: jobs.map(toJobSummaryView),
+      serverRevision,
+      clearedBeforeRevision,
+    };
   }
 
   getOwnedJob(actor: ActorContext, jobId: string): StoredJobRecord {
@@ -180,46 +241,73 @@ export class BackgroundJobManager {
     return this.#reconcileArtifactRecord(record, true);
   }
 
+  getOwnedJobView(actor: ActorContext, jobId: string): JobDetailView {
+    return toJobView(this.getOwnedJob(actor, jobId));
+  }
+
+  mutateOwnedJobResult<TResult = unknown>(
+    actor: ActorContext,
+    jobId: string,
+    mutator: (record: StoredJobRecord) => { result: TResult; subtitle?: string },
+  ): JobDetailView {
+    const updated = this.#repo.mutateOwnedResult(actor.userId, jobId, mutator);
+    if (!updated) {
+      throw new AppError("NOT_FOUND", "任务不存在或无权访问。");
+    }
+    this.#emit(actor.userId, {
+      type: "job_updated",
+      job: toJobSummaryView(updated),
+      serverRevision: updated.revision ?? 0,
+      timestamp: updated.updatedAt,
+    });
+    return toJobView(updated);
+  }
+
   updateOwnedJobResult(
     actor: ActorContext,
     jobId: string,
     patch: { result: unknown; subtitle?: string },
-  ): JobView {
-    const record = this.getOwnedJob(actor, jobId);
-    const updated = this.#repo.update(record.id, {
-      result: patch.result,
-      ...(patch.subtitle !== undefined ? { subtitle: patch.subtitle } : {}),
-    });
-    const view = toJobView(updated ?? record);
-    this.#emit(actor.userId, { type: "job_updated", job: view, timestamp: Date.now() });
-    return view;
+  ): JobDetailView {
+    return this.mutateOwnedJobResult(actor, jobId, () => patch);
   }
 
-  cancelOwnedJob(actor: ActorContext, jobId: string): JobView {
+  cancelOwnedJob(actor: ActorContext, jobId: string): JobDetailView {
     const record = this.getOwnedJob(actor, jobId);
 
     const queueIndex = this.#queue.findIndex((item) => item.record.id === jobId);
     if (queueIndex >= 0) {
       this.#queue.splice(queueIndex, 1);
-      const updated = this.#repo.update(jobId, {
-        status: "cancelled",
-        subtitle: "已取消",
+      const updated = this.#repo.update(
+        jobId,
+        { status: "cancelled", subtitle: "已取消" },
+        { expectedStatus: ["queued", "running"] },
+      );
+      const effective = updated ?? record;
+      this.#emit(actor.userId, {
+        type: "job_updated",
+        job: toJobSummaryView(effective),
+        serverRevision: effective.revision ?? 0,
+        timestamp: Date.now(),
       });
-      const view = toJobView(updated ?? record);
-      this.#emit(actor.userId, { type: "job_updated", job: view, timestamp: Date.now() });
-      return view;
+      return toJobView(effective);
     }
 
     const running = this.#runningControllers.get(jobId);
     if (running) {
       running.controller.abort();
-      const updated = this.#repo.update(jobId, {
-        status: "cancelled",
-        subtitle: "已取消",
+      const updated = this.#repo.update(
+        jobId,
+        { status: "cancelled", subtitle: "已取消" },
+        { expectedStatus: ["queued", "running"] },
+      );
+      const effective = updated ?? record;
+      this.#emit(actor.userId, {
+        type: "job_updated",
+        job: toJobSummaryView(effective),
+        serverRevision: effective.revision ?? 0,
+        timestamp: Date.now(),
       });
-      const view = toJobView(updated ?? record);
-      this.#emit(actor.userId, { type: "job_updated", job: view, timestamp: Date.now() });
-      return view;
+      return toJobView(effective);
     }
 
     return toJobView(record);
@@ -230,24 +318,36 @@ export class BackgroundJobManager {
       const queued = this.#queue[i];
       if (!queued || queued.record.userId !== userId) continue;
       this.#queue.splice(i, 1);
-      const updated = this.#repo.update(queued.record.id, {
-        status: "cancelled",
-        subtitle: "账号权限变更，任务已取消",
-      });
+      const updated = this.#repo.update(
+        queued.record.id,
+        { status: "cancelled", subtitle: "账号权限变更，任务已取消" },
+        { expectedStatus: ["queued", "running"] },
+      );
       if (updated) {
-        this.#emit(userId, { type: "job_updated", job: toJobView(updated), timestamp: Date.now() });
+        this.#emit(userId, {
+          type: "job_updated",
+          job: toJobSummaryView(updated),
+          serverRevision: updated.revision ?? 0,
+          timestamp: Date.now(),
+        });
       }
     }
 
     for (const [jobId, running] of this.#runningControllers.entries()) {
       if (running.userId !== userId) continue;
       running.controller.abort();
-      const updated = this.#repo.update(jobId, {
-        status: "cancelled",
-        subtitle: "账号权限变更，任务已取消",
-      });
+      const updated = this.#repo.update(
+        jobId,
+        { status: "cancelled", subtitle: "账号权限变更，任务已取消" },
+        { expectedStatus: ["queued", "running"] },
+      );
       if (updated) {
-        this.#emit(userId, { type: "job_updated", job: toJobView(updated), timestamp: Date.now() });
+        this.#emit(userId, {
+          type: "job_updated",
+          job: toJobSummaryView(updated),
+          serverRevision: updated.revision ?? 0,
+          timestamp: Date.now(),
+        });
       }
     }
 
@@ -262,22 +362,53 @@ export class BackgroundJobManager {
     }
   }
 
-  clearFinished(actor: ActorContext, kind?: JobKind): number {
-    const removedIds = this.#repo.clearFinished(actor.userId, kind);
-    for (const id of removedIds) {
-      this.#emit(actor.userId, { type: "job_removed", jobId: id, timestamp: Date.now() });
-      void this.#deleteArtifactById(actor.userId, id).catch(() => undefined);
+  clearFinishedWithRevision(
+    actor: ActorContext,
+    kind?: JobKind,
+  ): { removedCount: number; serverRevision: number; clearedBeforeRevision: number } {
+    const { removedIds, serverRevision, clearedBeforeRevision } = this.#repo.clearFinished(
+      actor.userId,
+      kind,
+    );
+    const now = Date.now();
+    if (removedIds.length > 0) {
+      for (const id of removedIds) {
+        this.#emit(actor.userId, {
+          type: "job_removed",
+          jobId: id,
+          serverRevision,
+          clearedBeforeRevision,
+          ...(kind ? { clearedKind: kind } : {}),
+          timestamp: now,
+        });
+        void this.#deleteArtifactById(actor.userId, id).catch(() => undefined);
+      }
+      this.#emit(actor.userId, {
+        type: "jobs_cleared",
+        serverRevision,
+        clearedBeforeRevision,
+        ...(kind ? { clearedKind: kind } : {}),
+        timestamp: now,
+      });
     }
-    return removedIds.length;
+    return {
+      removedCount: removedIds.length,
+      serverRevision,
+      clearedBeforeRevision,
+    };
   }
 
-  async resolveOwnedArtifactFile(
+  #validateArtifactAccess(
     actor: ActorContext,
     jobId: string,
-  ): Promise<{ filePath: string; downloadFilename: string }> {
-    const record = this.getOwnedJob(actor, jobId);
+  ): { record: StoredJobSummaryRecord; artifactFilename: string; safeFilePath: string } {
+    const record = this.#repo.findRawOwnedSummary(actor.userId, jobId);
+    if (!record) {
+      throw new AppError("NOT_FOUND", "任务不存在或无权访问。");
+    }
+
     const isDirectLink = Boolean(record.directUrl) || record.metadata?.mode === "direct_link";
-    const isExpired = Boolean(record.metadata?.artifactExpired);
+    const isExpired = Boolean(record.artifactExpired || record.metadata?.artifactExpired);
     if (
       record.kind !== "download" ||
       record.status !== "completed" ||
@@ -288,21 +419,72 @@ export class BackgroundJobManager {
       throw new AppError("NOT_FOUND", "下载文件尚未就绪或已过期。");
     }
 
-    const safeFilePath = this.#resolveSafeArtifactPath(actor.userId, jobId);
+    return {
+      record,
+      artifactFilename: record.artifactFilename,
+      safeFilePath: this.#resolveSafeArtifactPath(actor.userId, jobId),
+    };
+  }
+
+  async openOwnedArtifactFile(
+    actor: ActorContext,
+    jobId: string,
+  ): Promise<{ fileHandle: fs.FileHandle; downloadFilename: string; sizeBytes: number }> {
+    const { record, artifactFilename, safeFilePath } = this.#validateArtifactAccess(actor, jobId);
+    let fileHandle: fs.FileHandle;
     try {
-      const stat = await fs.stat(safeFilePath);
-      if (!stat.isFile()) {
-        throw new AppError("NOT_FOUND", "下载文件不存在。");
-      }
+      fileHandle = await fs.open(safeFilePath, "r");
     } catch {
       this.#markArtifactExpired(record);
       throw new AppError("NOT_FOUND", "下载文件已过期清理，请重新下载。");
     }
 
-    return { filePath: safeFilePath, downloadFilename: record.artifactFilename };
+    try {
+      const stat = await fileHandle.stat();
+      if (!stat.isFile()) {
+        await fileHandle.close().catch(() => undefined);
+        this.#markArtifactExpired(record);
+        throw new AppError("NOT_FOUND", "下载文件不存在。");
+      }
+      return {
+        fileHandle,
+        downloadFilename: artifactFilename,
+        sizeBytes: stat.size,
+      };
+    } catch (error) {
+      await fileHandle.close().catch(() => undefined);
+      if (isAppError(error)) throw error;
+      this.#markArtifactExpired(record);
+      throw new AppError("NOT_FOUND", "下载文件已过期清理，请重新下载。");
+    }
   }
 
-  #reconcileArtifactRecord(record: StoredJobRecord, emitEvent: boolean): StoredJobRecord {
+  async resolveOwnedArtifactFile(
+    actor: ActorContext,
+    jobId: string,
+  ): Promise<{ filePath: string; downloadFilename: string; sizeBytes: number }> {
+    const { record, artifactFilename, safeFilePath } = this.#validateArtifactAccess(actor, jobId);
+    let sizeBytes = 0;
+    try {
+      const stat = await fs.stat(safeFilePath);
+      if (!stat.isFile()) {
+        this.#markArtifactExpired(record);
+        throw new AppError("NOT_FOUND", "下载文件不存在。");
+      }
+      sizeBytes = stat.size;
+    } catch (error) {
+      if (isAppError(error)) throw error;
+      this.#markArtifactExpired(record);
+      throw new AppError("NOT_FOUND", "下载文件已过期清理，请重新下载。");
+    }
+
+    return { filePath: safeFilePath, downloadFilename: artifactFilename, sizeBytes };
+  }
+
+  #reconcileArtifactRecord<T extends StoredJobSummaryRecord | StoredJobRecord>(
+    record: T,
+    emitEvent: boolean,
+  ): T {
     if (!hasLocalDownloadArtifactExpectation(record)) {
       return record;
     }
@@ -316,13 +498,20 @@ export class BackgroundJobManager {
     if (exists) {
       return record;
     }
-    return this.#markArtifactExpired(record, emitEvent) ?? record;
+    const updated = this.#markArtifactExpired(record, emitEvent);
+    return (updated ? { ...record, ...updated } : record) as T;
   }
 
-  #markArtifactExpired(record: StoredJobRecord, emitEvent = true): StoredJobRecord | null {
-    if (record.metadata?.artifactExpired) return record;
+  #markArtifactExpired(
+    record: StoredJobSummaryRecord | StoredJobRecord,
+    emitEvent = true,
+  ): StoredJobRecord | null {
+    if (record.artifactExpired || record.metadata?.artifactExpired) {
+      return null;
+    }
     const updated = this.#repo.update(record.id, {
       subtitle: "临时文件已过期，请重新下载",
+      artifactExpired: true,
       metadata: {
         ...(record.metadata ?? {}),
         artifactExpired: true,
@@ -331,8 +520,9 @@ export class BackgroundJobManager {
     if (updated && emitEvent) {
       this.#emit(record.userId, {
         type: "job_updated",
-        job: toJobView(updated),
-        timestamp: Date.now(),
+        job: toJobSummaryView(updated),
+        serverRevision: updated.revision ?? 0,
+        timestamp: updated.updatedAt,
       });
     }
     return updated;
@@ -341,6 +531,9 @@ export class BackgroundJobManager {
   #resolveSafeArtifactPath(userId: string, jobId: string): string {
     const safeUser = userId.replace(/[^a-zA-Z0-9_-]/g, "");
     const safeJob = jobId.replace(/[^a-zA-Z0-9_-]/g, "");
+    if (!safeUser || !safeJob) {
+      throw new AppError("FORBIDDEN", "非法的临时文件路径。");
+    }
     const target = path.resolve(this.#tmpDownloadsDir, safeUser, `${safeJob}.bin`);
     if (!target.startsWith(this.#tmpDownloadsDir + path.sep)) {
       throw new AppError("FORBIDDEN", "非法的临时文件路径。");
@@ -366,7 +559,7 @@ export class BackgroundJobManager {
           await fs.unlink(full).catch(() => undefined);
           // J04: Synchronize DB state and SSE event when expired artifact is purged
           const jobId = file.replace(/\.bin$/i, "");
-          const record = this.#repo.findRawById(jobId);
+          const record = this.#repo.findRawSummaryById(jobId);
           if (record) {
             this.#markArtifactExpired(record, true);
           }
@@ -393,7 +586,9 @@ export class BackgroundJobManager {
   }
 
   #drainQueue(): void {
+    if (this.#stopped) return;
     for (let i = 0; i < this.#queue.length; ) {
+      if (this.#stopped) break;
       const item = this.#queue[i];
       if (!item) break;
 
@@ -412,6 +607,7 @@ export class BackgroundJobManager {
   }
 
   async #execute(item: QueuedExecution): Promise<void> {
+    if (this.#stopped) return;
     const { record, runner } = item;
     const controller = new AbortController();
     this.#runningControllers.set(record.id, {
@@ -423,16 +619,27 @@ export class BackgroundJobManager {
     let lastPersistedProgress = 0;
     let lastPersistedSubtitle: string | undefined = record.subtitle;
     let lastPersistedAt = 0;
-    const startRecord = this.#repo.update(record.id, { status: "running", progress: 1 });
-    if (startRecord) {
-      this.#emit(record.userId, { type: "job_updated", job: toJobView(startRecord), timestamp: Date.now() });
+    const startRecord = this.#repo.update(
+      record.id,
+      { status: "running", progress: 1 },
+      { expectedStatus: "queued" },
+    );
+    if (!startRecord) {
+      this.#runningControllers.delete(record.id);
+      return;
     }
+    this.#emit(record.userId, {
+      type: "job_updated",
+      job: toJobSummaryView(startRecord),
+      serverRevision: startRecord.revision ?? 0,
+      timestamp: startRecord.updatedAt,
+    });
 
     const handle: JobRuntimeHandle = {
       jobId: record.id,
       signal: controller.signal,
       updateProgress: (progress, subtitle) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || this.#stopped) return;
         const clamped = Math.min(99, Math.max(1, Math.round(progress)));
         const nextSubtitle = subtitle !== undefined ? subtitle : lastPersistedSubtitle;
         const progressChanged = clamped !== lastPersistedProgress;
@@ -454,14 +661,19 @@ export class BackgroundJobManager {
         lastPersistedProgress = clamped;
         lastPersistedSubtitle = nextSubtitle;
         lastPersistedAt = now;
-        const updated = this.#repo.update(record.id, {
-          progress: clamped,
-          ...(subtitle !== undefined ? { subtitle } : {}),
-        });
+        const updated = this.#repo.update(
+          record.id,
+          {
+            progress: clamped,
+            ...(subtitle !== undefined ? { subtitle } : {}),
+          },
+          { expectedStatus: "running" },
+        );
         if (updated) {
           this.#emit(record.userId, {
             type: "job_updated",
-            job: toJobView(updated),
+            job: toJobSummaryView(updated),
+            serverRevision: updated.revision ?? 0,
             timestamp: now,
           });
         }
@@ -476,51 +688,66 @@ export class BackgroundJobManager {
 
     try {
       const outcome = await runner(handle);
-      if (controller.signal.aborted) {
+      if (controller.signal.aborted || this.#stopped) {
         await this.#deleteArtifactById(record.userId, record.id);
         return;
       }
 
-      const completed = this.#repo.update(record.id, {
-        status: "completed",
-        progress: 100,
-        subtitle: outcome.subtitle ?? "已完成",
-        result: outcome.result,
-        artifactFilename: outcome.artifactFilename,
-        directUrl: outcome.directUrl,
-        metadata: outcome.metadata ?? record.metadata,
-      });
-      if (completed) {
-        this.#emit(record.userId, {
-          type: "job_updated",
-          job: toJobView(completed),
-          timestamp: Date.now(),
-        });
+      // CAS guard: never overwrite a job that was cancelled/stopped concurrently
+      const completed = this.#repo.update(
+        record.id,
+        {
+          status: "completed",
+          progress: 100,
+          subtitle: outcome.subtitle ?? "已完成",
+          result: outcome.result,
+          artifactFilename: outcome.artifactFilename,
+          directUrl: outcome.directUrl,
+          metadata: outcome.metadata ?? record.metadata,
+        },
+        { expectedStatus: "running" },
+      );
+      if (!completed) {
+        await this.#deleteArtifactById(record.userId, record.id);
+        return;
       }
+      this.#emit(record.userId, {
+        type: "job_updated",
+        job: toJobSummaryView(completed),
+        serverRevision: completed.revision ?? 0,
+        timestamp: completed.updatedAt,
+      });
     } catch (error) {
       await this.#deleteArtifactById(record.userId, record.id);
-      if (controller.signal.aborted) {
+      if (controller.signal.aborted || this.#stopped) {
         return;
       }
       const errorCode: ErrorCode = isAppError(error) ? error.code : "INTERNAL_ERROR";
       const errorMessage = error instanceof Error ? error.message : "后台任务执行失败";
-      const failed = this.#repo.update(record.id, {
-        status: "failed",
-        progress: 0,
-        errorCode,
-        errorMessage,
-        subtitle: "执行失败",
-      });
+      const failed = this.#repo.update(
+        record.id,
+        {
+          status: "failed",
+          progress: 0,
+          errorCode,
+          errorMessage,
+          subtitle: "执行失败",
+        },
+        { expectedStatus: "running" },
+      );
       if (failed) {
         this.#emit(record.userId, {
           type: "job_updated",
-          job: toJobView(failed),
-          timestamp: Date.now(),
+          job: toJobSummaryView(failed),
+          serverRevision: failed.revision ?? 0,
+          timestamp: failed.updatedAt,
         });
       }
     } finally {
       this.#runningControllers.delete(record.id);
-      this.#drainQueue();
+      if (!this.#stopped) {
+        this.#drainQueue();
+      }
     }
   }
 }

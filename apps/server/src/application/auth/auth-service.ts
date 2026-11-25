@@ -24,13 +24,16 @@ import {
   hashSessionToken,
   verifyPasswordTimingSafe,
 } from "../../infrastructure/security/password.js";
+import { ProviderAuthResolver } from "./provider-auth-resolver.js";
 
 export class AuthService {
   readonly #sqlite: SqliteClient;
   readonly #users: UserRepository;
   readonly #credentials: CredentialRepository;
+  readonly #authResolver: ProviderAuthResolver;
   readonly #providers: ProviderRegistry;
   readonly #sessionTtlMs: number;
+  readonly #onSessionRevoked?: (sessionTokenHash: string) => void;
   readonly #onUserRevoked?: (userId: string) => void;
   readonly #onUserDeleted?: (userId: string) => void;
 
@@ -38,16 +41,20 @@ export class AuthService {
     sqlite: SqliteClient;
     users: UserRepository;
     credentials: CredentialRepository;
+    authResolver?: ProviderAuthResolver;
     providers: ProviderRegistry;
     sessionTtlMs: number;
+    onSessionRevoked?: (sessionTokenHash: string) => void;
     onUserRevoked?: (userId: string) => void;
     onUserDeleted?: (userId: string) => void;
   }) {
     this.#sqlite = deps.sqlite;
     this.#users = deps.users;
     this.#credentials = deps.credentials;
+    this.#authResolver = deps.authResolver ?? new ProviderAuthResolver(deps.credentials);
     this.#providers = deps.providers;
     this.#sessionTtlMs = deps.sessionTtlMs;
+    this.#onSessionRevoked = deps.onSessionRevoked;
     this.#onUserRevoked = deps.onUserRevoked;
     this.#onUserDeleted = deps.onUserDeleted;
   }
@@ -132,7 +139,9 @@ export class AuthService {
 
   logout(sessionToken: string | undefined): void {
     if (!sessionToken) return;
-    this.#users.deleteSession(hashSessionToken(sessionToken));
+    const tokenHash = hashSessionToken(sessionToken);
+    this.#users.deleteSession(tokenHash);
+    this.#onSessionRevoked?.(tokenHash);
   }
 
   // --- Admin member management ---
@@ -202,7 +211,7 @@ export class AuthService {
   // --- Platform credential bindings (never exposes raw cookies to frontend) ---
 
   listPlatformBindings(actor: ActorContext): Record<MusicPlatform, PlatformBindingView> {
-    return this.#credentials.listBindingViews(actor.userId);
+    return this.#authResolver.listBindingViews(actor.userId);
   }
 
   async bindPlatformCookie(
@@ -232,7 +241,7 @@ export class AuthService {
   unbindPlatform(actor: ActorContext, platform: MusicPlatform): PlatformBindingView {
     this.#credentials.deleteBinding(actor.userId, platform);
     this.#providers.get(platform).invalidateScope?.(actor.userId);
-    return this.#credentials.getBindingView(actor.userId, platform);
+    return this.#authResolver.getBindingView(actor.userId, platform);
   }
 
   async startPlatformQrLogin(actor: ActorContext, platform: MusicPlatform): Promise<QrStartResult> {

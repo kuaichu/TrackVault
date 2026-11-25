@@ -1,919 +1,93 @@
 import type {
-  AuditIssueItem,
   CompareResult,
   CompareStatus,
   ExportFormat,
   ExportPayload,
   ImportAuditResult,
+  JobDetailView,
   JobView,
-  MusicPlatform,
-  Song,
   StartCompareInput,
   StartImportAuditInput,
   StartTransferInput,
-  TransferAvailability,
   TransferResult,
-  TransferTrack,
-  TransferTrackResult,
   UpdateTransferSelectionInput,
 } from "#shared";
 import type { ActorContext } from "../../domain/context.js";
-import { AppError, isAppError } from "../../domain/errors.js";
-import type {
-  AudioResolveTarget,
-  CreatePlaylistResult,
-  MusicProviderAdapter,
-  ProviderAuthContext,
-  ProviderRegistry,
-} from "../../domain/ports/music-provider.js";
-import {
-  type ProviderCandidateTrack,
-  buildTransferDedupKey,
-  comparePlaylistsAsync,
-  matchTransferTrack,
-  summarizeTransferResults,
-} from "../../domain/transfer/matcher.js";
+import { AppError } from "../../domain/errors.js";
+import type { CreatePlaylistResult, ProviderRegistry } from "../../domain/ports/music-provider.js";
 import {
   formatCompareExport,
   formatImportAuditExport,
   formatTransferExport,
-  parseCsvPlaylistWithStats,
-  parseTextPlaylistWithStats,
 } from "../../domain/transfer/text-and-csv.js";
-import type { CredentialRepository } from "../../infrastructure/db/repositories/credential-repository.js";
+import type { ProviderAuthResolver } from "../auth/provider-auth-resolver.js";
 import type { BackgroundJobManager } from "../jobs/background-job-manager.js";
-
-const MAX_TRANSFER_TRACKS = 1000;
-const MAX_SELECTED_SCAN_TRACKS = 10_000;
-const MAX_COMPARE_TRACKS = 1500;
-
-function songToTransferTrack(song: Song): TransferTrack {
-  return {
-    source: song.platform,
-    sourceTrackId: song.id,
-    title: song.title,
-    artists: song.artists?.length ? song.artists.map((a) => a.name) : [song.artist],
-    album: song.album,
-    durationSeconds: song.durationSeconds,
-  };
-}
+import { startImportAuditJobUseCase } from "./audit-playlist-use-case.js";
+import { startCompareJobUseCase } from "./compare-playlists-use-case.js";
+import { importTransferResultToPlatformUseCase } from "./import-playlist-result-use-case.js";
+import {
+  startTransferJobUseCase,
+  updateTransferTrackSelectionUseCase,
+} from "./transfer-playlist-use-case.js";
 
 /**
- * T04: Distinguishes "belongs to VIP catalog" (`status === "vip", locked === false` -> playable for VIP user)
- * from "locked for current account" (`locked === true` -> vip_only).
+ * Slim TransferService facade coordinating the 5 transfer use-case modules.
  */
-function songToAvailability(song: Song): TransferAvailability {
-  const playback = song.availability?.playback;
-  if (!playback) return "playable";
-  if (playback.status === "copyright") return "copyright_unavailable";
-  if (playback.locked) {
-    if (playback.status === "vip" || playback.status === "paid_album" || playback.status === "restricted") {
-      return "vip_only";
-    }
-    return "copyright_unavailable";
-  }
-  return "playable";
-}
-
-function songToCandidate(song: Song): ProviderCandidateTrack {
-  return {
-    provider: song.platform,
-    id: song.id,
-    mediaId: song.mediaId,
-    title: song.title,
-    artists: song.artists?.length ? song.artists.map((a) => a.name) : [song.artist],
-    album: song.album,
-    durationSeconds: song.durationSeconds,
-    availability: songToAvailability(song),
-  };
-}
-
-interface LoadedSourceBundle {
-  tracks: TransferTrack[];
-  sourceTotal: number;
-  playlistTotal?: number;
-  selectedMode?: boolean;
-  truncated: boolean;
-  sourceMetaByKey: Map<string, { availability: TransferAvailability; mediaId?: string }>;
-}
-
-interface LoadedProviderPlaylist {
-  songs: Song[];
-  sourceTotal: number;
-  rawSlotTotal?: number;
-  truncated: boolean;
-}
-
-function buildTransferSubtitle(
-  summary: TransferResult["summary"],
-  sourceTotal?: number,
-  truncated?: boolean,
-  playlistTotal?: number,
-): string {
-  if (summary.total === 0 && sourceTotal && sourceTotal > 0) {
-    if (truncated) {
-      const playlistPrefix = playlistTotal !== undefined ? `源歌单共 ${playlistTotal} 首，` : "";
-      return `${playlistPrefix}所选 ${sourceTotal} 首超出前 ${MAX_SELECTED_SCAN_TRACKS} 首扫描范围（未处理 ${sourceTotal} 首）`;
-    }
-    return `所选 ${sourceTotal} 首未获取到有效曲目详情（未处理 ${sourceTotal} 首）`;
-  }
-  const base = `共 ${summary.total} 首 · 匹配 ${summary.matched} · 待确认 ${summary.manualReview}`;
-  if (truncated && sourceTotal && sourceTotal > summary.total) {
-    return `${base}（已截取前 ${summary.total}/${sourceTotal} 首）`;
-  }
-  if (!truncated && sourceTotal && sourceTotal > summary.total) {
-    return `${base}（未处理 ${sourceTotal - summary.total} 首）`;
-  }
-  return base;
-}
-
 export class TransferService {
   readonly #providers: ProviderRegistry;
-  readonly #credentials: CredentialRepository;
+  readonly #authResolver: ProviderAuthResolver;
   readonly #jobs: BackgroundJobManager;
 
   constructor(deps: {
     providers: ProviderRegistry;
-    credentials: CredentialRepository;
+    authResolver: ProviderAuthResolver;
     jobs: BackgroundJobManager;
   }) {
     this.#providers = deps.providers;
-    this.#credentials = deps.credentials;
+    this.#authResolver = deps.authResolver;
     this.#jobs = deps.jobs;
   }
 
-  #buildAuth(actor: ActorContext, platform: MusicPlatform, signal?: AbortSignal): ProviderAuthContext {
-    const binding =
-      typeof this.#credentials.getBindingView === "function"
-        ? this.#credentials.getBindingView(actor.userId, platform)
-        : null;
-    return {
-      platform,
-      cookie: this.#credentials.getDecryptedCookie(actor.userId, platform),
-      scopeKey: actor.userId,
-      accountUid: binding?.accountUid ?? null,
-      signal,
-    };
-  }
-
-  /**
-   * C015: Read-only public candidate search/probe auth context for transfer/audit matching.
-   * NEVER used for reading private user playlists or creating/modifying playlists.
-   */
-  #buildPublicSearchAuth(
-    actor: ActorContext,
-    platform: MusicPlatform,
-    signal?: AbortSignal,
-  ): ProviderAuthContext {
-    const personal = this.#buildAuth(actor, platform, signal);
-    if (personal.cookie) return personal;
-    if (actor.trustedFallback && typeof this.#credentials.getDecryptedSystemFallbackCookie === "function") {
-      const fallbackCookie = this.#credentials.getDecryptedSystemFallbackCookie(platform);
-      if (fallbackCookie) {
-        return {
-          platform,
-          cookie: fallbackCookie,
-          scopeKey: "system-fallback",
-          accountUid: null,
-          signal,
-        };
-      }
-    }
-    return personal;
-  }
-
-  async #fetchProviderPlaylistBounded(
-    adapter: MusicProviderAdapter,
-    playlistId: string,
-    auth: ProviderAuthContext,
-    cap: number,
-  ): Promise<LoadedProviderPlaylist> {
-    // Request cap + 1 so truncation is detected even when mocks only implement getAllPlaylistTracks
-    const fetched = await adapter.getAllPlaylistTracks(playlistId, auth, cap + 1);
-    const songs = fetched.slice(0, cap);
-    let sourceTotal = fetched.length;
-    let rawSlotTotal: number | undefined;
-
-    if (typeof adapter.getPlaylistTracks === "function") {
-      try {
-        const page = await adapter.getPlaylistTracks(playlistId, { page: 1, limit: 1 }, auth);
-        if (typeof page.total === "number" && Number.isFinite(page.total)) {
-          rawSlotTotal = page.total;
-          sourceTotal = Math.max(sourceTotal, page.total);
-        }
-      } catch {
-        // Non-fatal: keep fetched count
-      }
-    }
-
-    const truncated = fetched.length > cap || (rawSlotTotal !== undefined && rawSlotTotal > cap);
-
-    return {
-      songs,
-      sourceTotal,
-      rawSlotTotal,
-      truncated,
-    };
-  }
-
-  /**
-   * T09: Actively probes real stream availability via adapter.resolveAudio when checkAvailability === true.
-   * Distinguishes unsupported adapters, verified business states, and transient/upstream probe failures
-   * so failed probes are never conflated with verified playable streams.
-   */
-  async #probeTrackAvailability(
-    adapter: MusicProviderAdapter,
-    target: AudioResolveTarget,
-    auth: ProviderAuthContext,
-  ): Promise<
-    | { kind: "unsupported" }
-    | { kind: "resolved"; availability: TransferAvailability }
-    | { kind: "error"; message: string }
-  > {
-    if (typeof adapter.resolveAudio !== "function") return { kind: "unsupported" };
-    try {
-      const resolved = await adapter.resolveAudio(target, "standard", "playback", auth);
-      if (typeof resolved.url === "string" && resolved.url.trim().length === 0) {
-        return { kind: "resolved", availability: "copyright_unavailable" };
-      }
-      return { kind: "resolved", availability: resolved.trial ? "trial_only" : "playable" };
-    } catch (error) {
-      if (isAppError(error)) {
-        if (error.code === "COPYRIGHT_UNAVAILABLE") {
-          return { kind: "resolved", availability: "copyright_unavailable" };
-        }
-        if (error.code === "TRIAL_ONLY") {
-          return { kind: "resolved", availability: "trial_only" };
-        }
-        if (error.code === "VIP_REQUIRED") {
-          return { kind: "resolved", availability: "vip_only" };
-        }
-        return { kind: "error", message: error.message || "音源探测请求异常" };
-      }
-      return {
-        kind: "error",
-        message: error instanceof Error && error.message ? error.message : "音源探测请求失败",
-      };
-    }
-  }
-
-  async #matchWithOptionalProbe(
-    track: TransferTrack,
-    candidates: ProviderCandidateTrack[],
-    targetAdapter: MusicProviderAdapter,
-    targetAuth: ProviderAuthContext,
-    checkAvailability: boolean,
-  ): Promise<TransferTrackResult> {
-    const working = candidates.map((c) => ({ ...c }));
-    const initialMatched = matchTransferTrack(track, working);
-
-    if (!checkAvailability || typeof targetAdapter.resolveAudio !== "function") {
-      return initialMatched;
-    }
-
-    const highConfidenceIds = initialMatched.candidates
-      .filter((c) => c.confidenceScore >= 85)
-      .map((c) => c.targetTrackId);
-
-    if (highConfidenceIds.length === 0) {
-      return initialMatched;
-    }
-
-    const verifiedPlayableIds = new Set<string>();
-    const probeErrorsById = new Map<string, string>();
-
-    // T09: Probe high-confidence (>= 85) candidates in ranked order until we find a verified playable stream.
-    // If the top candidate's probe times out or degrades, continue probing high-confidence alternatives (including
-    // statically VIP-marked ones) so a genuinely playable edition is selected.
-    for (const targetId of highConfidenceIds) {
-      const candidate = working.find((c) => c.id === targetId);
-      if (!candidate) continue;
-
-      const outcome = await this.#probeTrackAvailability(
-        targetAdapter,
-        {
-          id: candidate.id,
-          mediaId: candidate.mediaId,
-          title: candidate.title,
-          durationSeconds: candidate.durationSeconds,
-        },
-        targetAuth,
-      );
-
-      if (outcome.kind === "resolved") {
-        candidate.availability = outcome.availability;
-        if (outcome.availability === "playable") {
-          verifiedPlayableIds.add(targetId);
-          break;
-        }
-      } else if (outcome.kind === "error") {
-        probeErrorsById.set(targetId, outcome.message);
-        if (candidate.availability === "playable" || candidate.availability === undefined) {
-          candidate.availability = "unknown";
-        }
-      }
-    }
-
-    const matched = matchTransferTrack(track, working);
-
-    // 1. Prefer a probe-verified playable high-confidence candidate over any unverified/probe-errored candidate
-    const verifiedBest = matched.candidates.find(
-      (c) =>
-        c.confidenceScore >= 85 && c.availability === "playable" && verifiedPlayableIds.has(c.targetTrackId),
-    );
-    if (verifiedBest) {
-      return {
-        sourceTrack: track,
-        status: "matched",
-        candidates: matched.candidates,
-        selectedCandidate: verifiedBest,
-      };
-    }
-
-    // 2. If the chosen candidate was statically playable/unknown and its probe errored, require manual review
-    if (matched.status === "matched" && matched.selectedCandidate) {
-      const probeErr = probeErrorsById.get(matched.selectedCandidate.targetTrackId);
-      if (probeErr) {
-        return {
-          sourceTrack: track,
-          status: "manual_review",
-          candidates: matched.candidates,
-          reason: `音源实测未完成（${probeErr}），请人工确认可用性`,
-        };
-      }
-      return matched;
-    }
-
-    // 3. If only statically locked/unavailable candidates remain and probing the chosen candidate also errored,
-    // preserve the locked status while explicitly disclosing the probe failure in `reason`.
-    if (matched.selectedCandidate) {
-      const probeErr = probeErrorsById.get(matched.selectedCandidate.targetTrackId);
-      if (probeErr) {
-        return {
-          ...matched,
-          reason: `音源实测未完成（${probeErr}）：${matched.reason ?? "目标平台曲目受限"}`,
-        };
-      }
-    }
-
-    return matched;
-  }
-
-  async #loadSourceTracks(
-    actor: ActorContext,
-    input: StartTransferInput,
-    signal?: AbortSignal,
-  ): Promise<LoadedSourceBundle> {
-    const sourceMetaByKey = new Map<string, { availability: TransferAvailability; mediaId?: string }>();
-    const requestedIds = input.selectedSourceTrackIds
-      ? [...new Set(input.selectedSourceTrackIds.map((id) => id.trim()).filter(Boolean))]
-      : [];
-    const selectedSet = requestedIds.length > 0 ? new Set(requestedIds) : null;
-
-    if (input.sourceTracks && input.sourceTracks.length > 0) {
-      if (selectedSet) {
-        const seen = new Set<string>();
-        const filtered: TransferTrack[] = [];
-        for (const item of input.sourceTracks) {
-          const tid = item.sourceTrackId?.trim();
-          if (tid && selectedSet.has(tid) && !seen.has(tid) && filtered.length < MAX_TRANSFER_TRACKS) {
-            seen.add(tid);
-            filtered.push(item);
-          }
-        }
-        const hitTransferCap =
-          selectedSet.size > MAX_TRANSFER_TRACKS && filtered.length >= MAX_TRANSFER_TRACKS;
-        return {
-          tracks: filtered,
-          sourceTotal: selectedSet.size,
-          playlistTotal: input.sourceTracks.length,
-          selectedMode: true,
-          truncated: hitTransferCap,
-          sourceMetaByKey,
-        };
-      }
-      const sourceTotal = input.sourceTracks.length;
-      const tracks = input.sourceTracks.slice(0, MAX_TRANSFER_TRACKS);
-      return { tracks, sourceTotal, truncated: sourceTotal > tracks.length, sourceMetaByKey };
-    }
-
-    if (input.sourceProvider === "text") {
-      const parsed = parseTextPlaylistWithStats(input.rawText ?? "", MAX_TRANSFER_TRACKS);
-      return { ...parsed, sourceMetaByKey };
-    }
-    if (input.sourceProvider === "csv") {
-      const parsed = parseCsvPlaylistWithStats(input.rawText ?? "", MAX_TRANSFER_TRACKS);
-      return { ...parsed, sourceMetaByKey };
-    }
-
-    if (!input.playlistId) {
-      throw new AppError("VALIDATION_ERROR", "请提供源歌单 ID。");
-    }
-
-    const sourceAdapter = this.#providers.get(input.sourceProvider);
-    const sourceAuth = this.#buildAuth(actor, input.sourceProvider, signal);
-    const loaded = await this.#fetchProviderPlaylistBounded(
-      sourceAdapter,
-      input.playlistId,
-      sourceAuth,
-      MAX_TRANSFER_TRACKS,
-    );
-
-    if (selectedSet) {
-      // T11: Reconcile against the deduplicated requested selection set; scan further when >1,000 playlist had selected tracks past index 999
-      const collectSelected = (songs: readonly Song[]): Song[] => {
-        const seen = new Set<string>();
-        const picked: Song[] = [];
-        for (const song of songs) {
-          if (selectedSet.has(song.id) && !seen.has(song.id) && picked.length < MAX_TRANSFER_TRACKS) {
-            seen.add(song.id);
-            picked.push(song);
-          }
-        }
-        return picked;
-      };
-
-      let filteredSongs = collectSelected(loaded.songs);
-      const targetCollectCount = Math.min(selectedSet.size, MAX_TRANSFER_TRACKS);
-      let scanExhaustedPlaylist = !loaded.truncated;
-      if (filteredSongs.length < targetCollectCount && loaded.truncated) {
-        const deepScanned = await sourceAdapter.getAllPlaylistTracks(
-          input.playlistId,
-          sourceAuth,
-          MAX_SELECTED_SCAN_TRACKS,
-        );
-        filteredSongs = collectSelected(deepScanned);
-        // T11: Compare raw slot total against the 10,000 scan ceiling so missing song_detail entries
-        // inside a <=10,000 playlist are NEVER misreported as exceeding the 10,000-track scan limit.
-        scanExhaustedPlaylist =
-          loaded.rawSlotTotal !== undefined
-            ? loaded.rawSlotTotal <= MAX_SELECTED_SCAN_TRACKS
-            : deepScanned.length < MAX_SELECTED_SCAN_TRACKS;
-      }
-
-      for (const song of filteredSongs) {
-        sourceMetaByKey.set(`${song.platform}:${song.id}`, {
-          availability: songToAvailability(song),
-          mediaId: song.mediaId,
-        });
-      }
-
-      const hitTransferCap =
-        selectedSet.size > MAX_TRANSFER_TRACKS && filteredSongs.length >= MAX_TRANSFER_TRACKS;
-      const truncatedByScan = filteredSongs.length < selectedSet.size && !scanExhaustedPlaylist;
-
-      return {
-        tracks: filteredSongs.map(songToTransferTrack),
-        sourceTotal: selectedSet.size,
-        playlistTotal: loaded.sourceTotal,
-        selectedMode: true,
-        truncated: hitTransferCap || truncatedByScan,
-        sourceMetaByKey,
-      };
-    }
-
-    for (const song of loaded.songs) {
-      sourceMetaByKey.set(`${song.platform}:${song.id}`, {
-        availability: songToAvailability(song),
-        mediaId: song.mediaId,
-      });
-    }
-
-    return {
-      tracks: loaded.songs.map(songToTransferTrack),
-      sourceTotal: loaded.sourceTotal,
-      truncated: loaded.truncated,
-      sourceMetaByKey,
-    };
-  }
-
   startTransferJob(actor: ActorContext, input: StartTransferInput): JobView {
-    const playlistName = input.playlistName?.trim() || "歌单互转任务";
-
-    return this.#jobs.enqueue({
+    return startTransferJobUseCase({
+      providers: this.#providers,
+      authResolver: this.#authResolver,
+      jobs: this.#jobs,
       actor,
-      kind: "transfer",
-      title: playlistName,
-      subtitle: `${input.sourceProvider} → ${input.targetProvider}`,
-      maxUserConcurrency: 2,
-      runner: async (handle) => {
-        handle.updateProgress(5, "加载源曲目列表...");
-        const {
-          tracks: sourceTracks,
-          sourceTotal,
-          playlistTotal,
-          selectedMode,
-          truncated,
-          sourceMetaByKey,
-        } = await this.#loadSourceTracks(actor, input, handle.signal);
-
-        if (sourceTracks.length === 0) {
-          // T11: Disclose either beyond-10,000 scan truncation OR selected track IDs whose upstream song_detail
-          // was missing within an existing playlist, without conflating the two or reporting playlist size as 1.
-          if (
-            (truncated && sourceTotal > 0) ||
-            (selectedMode && sourceTotal > 0 && (playlistTotal ?? 0) > 0)
-          ) {
-            const emptySummary = summarizeTransferResults([]);
-            const emptySelectedResult: TransferResult = {
-              sourceProvider: input.sourceProvider,
-              targetProvider: input.targetProvider,
-              playlistName,
-              summary: emptySummary,
-              results: [],
-              sourceTotal,
-              ...(playlistTotal !== undefined ? { playlistTotal } : {}),
-              processedCount: 0,
-              unprocessedCount: sourceTotal,
-              truncated,
-            };
-            return {
-              result: emptySelectedResult,
-              subtitle: buildTransferSubtitle(emptySummary, sourceTotal, truncated, playlistTotal),
-            };
-          }
-          throw new AppError("VALIDATION_ERROR", "源歌单或文本中没有解析到有效歌曲。");
-        }
-
-        const targetAdapter = this.#providers.get(input.targetProvider);
-        const targetAuth = this.#buildPublicSearchAuth(actor, input.targetProvider, handle.signal);
-        const seenKeys = new Set<string>();
-        const results: TransferTrackResult[] = [];
-        const shouldProbe = Boolean(input.checkAvailability);
-
-        for (let i = 0; i < sourceTracks.length; i += 1) {
-          if (handle.signal.aborted) throw new AppError("INTERNAL_ERROR", "任务已取消。");
-          const track = sourceTracks[i];
-          if (!track) continue;
-
-          // T03: Dedup by platform track ID first; preserve version tags when ID is absent
-          const dedupKey = buildTransferDedupKey(track);
-          if (seenKeys.has(dedupKey)) {
-            results.push({
-              sourceTrack: track,
-              status: "duplicate",
-              candidates: [],
-              reason: "重复曲目已跳过",
-            });
-            continue;
-          }
-          seenKeys.add(dedupKey);
-
-          // T05: Same-platform shortcut preserves true source availability instead of hardcoding "playable"
-          if (track.source === input.targetProvider && track.sourceTrackId) {
-            const sourceMeta = sourceMetaByKey.get(`${track.source}:${track.sourceTrackId}`);
-            const candidate: ProviderCandidateTrack = {
-              provider: input.targetProvider,
-              id: track.sourceTrackId,
-              mediaId: sourceMeta?.mediaId,
-              title: track.title,
-              artists: track.artists,
-              album: track.album,
-              durationSeconds: track.durationSeconds,
-              availability: sourceMeta?.availability ?? "playable",
-            };
-            results.push(
-              await this.#matchWithOptionalProbe(track, [candidate], targetAdapter, targetAuth, shouldProbe),
-            );
-          } else {
-            const searchQuery = `${track.title} ${track.artists[0] ?? ""}`.trim();
-            try {
-              const found = await targetAdapter.searchTracks(searchQuery, targetAuth, 8);
-              results.push(
-                await this.#matchWithOptionalProbe(
-                  track,
-                  found.map(songToCandidate),
-                  targetAdapter,
-                  targetAuth,
-                  shouldProbe,
-                ),
-              );
-            } catch (error) {
-              // Single track network failure must NOT abort the entire batch
-              results.push({
-                sourceTrack: track,
-                status: "not_found",
-                candidates: [],
-                reason: error instanceof Error ? `搜索失败：${error.message}` : "搜索请求异常",
-              });
-            }
-          }
-
-          const pct = Math.min(96, Math.round(((i + 1) / sourceTracks.length) * 90) + 5);
-          handle.updateProgress(pct, `已匹配 ${i + 1}/${sourceTracks.length} 首`);
-        }
-
-        const summary = summarizeTransferResults(results);
-        const processedCount = results.length;
-        const unprocessedCount = Math.max(0, sourceTotal - processedCount);
-        const result: TransferResult = {
-          sourceProvider: input.sourceProvider,
-          targetProvider: input.targetProvider,
-          playlistName,
-          summary,
-          results,
-          sourceTotal,
-          ...(playlistTotal !== undefined ? { playlistTotal } : {}),
-          processedCount,
-          unprocessedCount,
-          truncated,
-        };
-
-        return {
-          result,
-          subtitle: buildTransferSubtitle(summary, sourceTotal, truncated, playlistTotal),
-        };
-      },
+      input,
     });
   }
 
-  /**
-   * F15: Persists user manual review selection (choose candidate / skip / reset),
-   * recalculates summary statistics, and broadcasts `job_updated` via SSE.
-   */
   updateTransferTrackSelection(
     actor: ActorContext,
     jobId: string,
     input: UpdateTransferSelectionInput,
-  ): JobView {
-    const record = this.#jobs.getOwnedJob(actor, jobId);
-    if (record.kind !== "transfer") {
-      throw new AppError("VALIDATION_ERROR", "仅跨平台互转任务支持人工确认曲目。");
-    }
-    if (record.status !== "completed" || !record.result) {
-      throw new AppError("VALIDATION_ERROR", "任务尚未完成，无法更新曲目确认状态。");
-    }
-
-    const data = record.result as TransferResult;
-    const item = data.results[input.index];
-    if (!item) {
-      throw new AppError("VALIDATION_ERROR", "目标曲目序号超出范围。");
-    }
-
-    let updatedItem: TransferTrackResult;
-    if (input.action === "select") {
-      if (!input.targetTrackId) {
-        throw new AppError("VALIDATION_ERROR", "请选择要确认的候选曲目。");
-      }
-      const chosen = item.candidates.find((c) => c.targetTrackId === input.targetTrackId);
-      if (!chosen) {
-        throw new AppError("VALIDATION_ERROR", "所选候选曲目不存在于该条目的候选列表中。");
-      }
-      updatedItem = {
-        ...item,
-        status: "matched",
-        selectedCandidate: chosen,
-        reason: "已人工确认",
-      };
-    } else if (input.action === "skip") {
-      updatedItem = {
-        ...item,
-        status: "skipped",
-        selectedCandidate: undefined,
-        reason: "已人工跳过",
-      };
-    } else {
-      updatedItem = {
-        ...item,
-        status: item.candidates.length > 0 ? "manual_review" : "not_found",
-        selectedCandidate: undefined,
-        reason: item.candidates.length > 0 ? "存在相似候选，建议人工确认" : "目标平台未找到匹配候选",
-      };
-    }
-
-    const nextResults = data.results.map((entry, idx) => (idx === input.index ? updatedItem : entry));
-    const nextSummary = summarizeTransferResults(nextResults);
-    const nextResult: TransferResult = {
-      ...data,
-      summary: nextSummary,
-      results: nextResults,
-    };
-
-    return this.#jobs.updateOwnedJobResult(actor, jobId, {
-      result: nextResult,
-      subtitle: buildTransferSubtitle(
-        nextSummary,
-        nextResult.sourceTotal,
-        nextResult.truncated,
-        nextResult.playlistTotal,
-      ),
+  ): JobDetailView {
+    return updateTransferTrackSelectionUseCase({
+      jobs: this.#jobs,
+      actor,
+      jobId,
+      input,
     });
   }
 
   startImportAuditJob(actor: ActorContext, input: StartImportAuditInput): JobView {
-    const playlistName = input.playlistName?.trim() || `网易云歌单 ${input.playlistId}`;
-
-    return this.#jobs.enqueue({
+    return startImportAuditJobUseCase({
+      providers: this.#providers,
+      authResolver: this.#authResolver,
+      jobs: this.#jobs,
       actor,
-      kind: "import_audit",
-      title: `可用性审计 · ${playlistName}`,
-      subtitle: "准备扫描...",
-      maxUserConcurrency: 1,
-      runner: async (handle) => {
-        const netease = this.#providers.get("netease");
-        const auth = this.#buildAuth(actor, "netease", handle.signal);
-        const searchAuth = this.#buildPublicSearchAuth(actor, "netease", handle.signal);
-
-        handle.updateProgress(5, "拉取歌单曲目...");
-        const loaded = await this.#fetchProviderPlaylistBounded(
-          netease,
-          input.playlistId,
-          auth,
-          input.maxTracks,
-        );
-        const songs = loaded.songs;
-        if (songs.length === 0) {
-          throw new AppError("VALIDATION_ERROR", "该歌单没有可扫描的曲目。");
-        }
-
-        const playableTrackIds: string[] = [];
-        const issues: AuditIssueItem[] = [];
-        const shouldProbe = Boolean(input.checkAvailability);
-
-        for (let i = 0; i < songs.length; i += 1) {
-          if (handle.signal.aborted) throw new AppError("INTERNAL_ERROR", "审计任务已取消。");
-          const song = songs[i];
-          if (!song) continue;
-
-          const status = song.availability?.playback.status ?? "available";
-          const locked = Boolean(song.availability?.playback.locked);
-
-          // T04: VIP tracks with `locked === false` are playable for the current VIP account
-          let staticIssueType: AuditIssueItem["issueType"] | null = null;
-          let reason = song.availability?.playback.reason ?? "曲目当前不可直接完整播放";
-
-          if (status === "copyright") {
-            staticIssueType = "copyright_unavailable";
-          } else if (locked) {
-            // B27: Preserve distinct paid_album / restricted categories instead of collapsing all to vip_only
-            if (status === "paid_album") staticIssueType = "paid_album";
-            else if (status === "restricted") staticIssueType = "restricted";
-            else staticIssueType = "vip_only";
-          }
-
-          let issueType: AuditIssueItem["issueType"] | null = staticIssueType;
-
-          // T09: When checkAvailability is explicitly enabled, probe real audio stream even for statically locked songs
-          if (shouldProbe) {
-            const outcome = await this.#probeTrackAvailability(
-              netease,
-              {
-                id: song.id,
-                mediaId: song.mediaId,
-                title: song.title,
-                durationSeconds: song.durationSeconds,
-              },
-              searchAuth,
-            );
-            if (outcome.kind === "resolved") {
-              const probed = outcome.availability;
-              if (probed === "playable") {
-                issueType = null;
-              } else if (probed === "trial_only") {
-                issueType = "trial_only";
-                reason = "实测音源仅提供试听片段";
-              } else if (probed === "copyright_unavailable") {
-                issueType = "copyright_unavailable";
-                reason = "实测音源无可用版权";
-              } else if (probed === "vip_only") {
-                issueType =
-                  staticIssueType === "paid_album" || staticIssueType === "restricted"
-                    ? staticIssueType
-                    : "vip_only";
-                if (!staticIssueType) {
-                  reason = "实测音源需要会员权限";
-                }
-              }
-            } else if (outcome.kind === "error") {
-              if (staticIssueType) {
-                issueType = staticIssueType;
-                reason = `音源实测未完成（${outcome.message}）：${reason}`;
-              } else {
-                issueType = "restricted";
-                reason = `音源实测未完成（${outcome.message}），暂未确认为可直接播放`;
-              }
-            }
-          }
-
-          if (!issueType) {
-            playableTrackIds.push(song.id);
-          } else {
-            let replacements: AuditIssueItem["replacements"] = [];
-            try {
-              const found = await netease.searchTracks(
-                `${song.title} ${song.artist}`,
-                searchAuth,
-                input.candidateLimit + 2,
-              );
-              const matched = matchTransferTrack(
-                songToTransferTrack(song),
-                found.filter((f) => f.id !== song.id).map(songToCandidate),
-              );
-              replacements = matched.candidates.slice(0, input.candidateLimit);
-            } catch {
-              replacements = [];
-            }
-
-            issues.push({
-              trackId: song.id,
-              title: song.title,
-              artists: song.artists?.length ? song.artists.map((a) => a.name) : [song.artist],
-              album: song.album,
-              issueType,
-              reason,
-              replacements,
-            });
-          }
-
-          handle.updateProgress(
-            Math.min(96, Math.round(((i + 1) / songs.length) * 90) + 5),
-            `已扫描 ${i + 1}/${songs.length} 首`,
-          );
-        }
-
-        const unprocessedCount = Math.max(0, loaded.sourceTotal - songs.length);
-        const result: ImportAuditResult = {
-          playlistId: input.playlistId,
-          playlistName,
-          scannedCount: songs.length,
-          playableCount: playableTrackIds.length,
-          issueCount: issues.length,
-          playableTrackIds,
-          issues,
-          sourceTotal: loaded.sourceTotal,
-          unprocessedCount,
-          truncated: loaded.truncated,
-        };
-
-        const truncNote = loaded.truncated
-          ? `（源歌单共 ${loaded.sourceTotal} 首，已截取前 ${songs.length} 首）`
-          : "";
-        return {
-          result,
-          subtitle: `扫描 ${result.scannedCount} 首 · 正常 ${result.playableCount} · 异常 ${result.issueCount}${truncNote}`,
-        };
-      },
+      input,
     });
   }
 
   startCompareJob(actor: ActorContext, input: StartCompareInput): JobView {
-    const leftName = input.leftPlaylistName?.trim() || `${input.leftProvider} 歌单 ${input.leftPlaylistId}`;
-    const rightName =
-      input.rightPlaylistName?.trim() || `${input.rightProvider} 歌单 ${input.rightPlaylistId}`;
-
-    return this.#jobs.enqueue({
+    return startCompareJobUseCase({
+      providers: this.#providers,
+      authResolver: this.#authResolver,
+      jobs: this.#jobs,
       actor,
-      kind: "compare",
-      title: `对比 · ${leftName} vs ${rightName}`,
-      subtitle: "加载两侧歌单...",
-      maxUserConcurrency: 2,
-      runner: async (handle) => {
-        const [leftLoaded, rightLoaded] = await Promise.all([
-          this.#fetchProviderPlaylistBounded(
-            this.#providers.get(input.leftProvider),
-            input.leftPlaylistId,
-            this.#buildAuth(actor, input.leftProvider, handle.signal),
-            MAX_COMPARE_TRACKS,
-          ),
-          this.#fetchProviderPlaylistBounded(
-            this.#providers.get(input.rightProvider),
-            input.rightPlaylistId,
-            this.#buildAuth(actor, input.rightProvider, handle.signal),
-            MAX_COMPARE_TRACKS,
-          ),
-        ]);
-
-        handle.updateProgress(25, "比对曲目...");
-        const result = await comparePlaylistsAsync({
-          left: {
-            provider: input.leftProvider,
-            playlistId: input.leftPlaylistId,
-            playlistName: leftName,
-            tracks: leftLoaded.songs.map(songToTransferTrack),
-            sourceTotal: leftLoaded.sourceTotal,
-            unprocessedCount: Math.max(0, leftLoaded.sourceTotal - leftLoaded.songs.length),
-            truncated: leftLoaded.truncated,
-          },
-          right: {
-            provider: input.rightProvider,
-            playlistId: input.rightPlaylistId,
-            playlistName: rightName,
-            tracks: rightLoaded.songs.map(songToTransferTrack),
-            sourceTotal: rightLoaded.sourceTotal,
-            unprocessedCount: Math.max(0, rightLoaded.sourceTotal - rightLoaded.songs.length),
-            truncated: rightLoaded.truncated,
-          },
-          signal: handle.signal,
-          onProgress: (pct) => handle.updateProgress(Math.round(25 + pct * 0.72), `比对进度 ${pct}%`),
-        });
-
-        const truncSuffix =
-          leftLoaded.truncated || rightLoaded.truncated ? "（部分超长歌单已截取前 1500 首）" : "";
-        return {
-          result,
-          subtitle: `一致 ${result.summary.exact} · 仅左 ${result.summary.leftOnly} · 仅右 ${result.summary.rightOnly}${truncSuffix}`,
-        };
-      },
+      input,
     });
   }
 
@@ -941,103 +115,18 @@ export class TransferService {
     throw new AppError("VALIDATION_ERROR", "该任务类型不支持文本导出。");
   }
 
-  async importTransferResultToPlatform(
+  importTransferResultToPlatform(
     actor: ActorContext,
     jobId: string,
     options: { name?: string; existingPlaylistId?: string },
   ): Promise<CreatePlaylistResult & { skippedCount: number }> {
-    const record = this.#jobs.getOwnedJob(actor, jobId);
-    if (record.status !== "completed" || !record.result) {
-      throw new AppError("VALIDATION_ERROR", "任务尚未完成，不能导入歌单。");
-    }
-
-    const existingPlaylistId = options.existingPlaylistId?.trim();
-
-    if (record.kind === "transfer") {
-      const data = record.result as TransferResult;
-      const trackIds = data.results
-        .filter((r) => r.status === "matched" && r.selectedCandidate?.targetTrackId)
-        .map((r) => r.selectedCandidate?.targetTrackId ?? "")
-        .filter(Boolean);
-
-      if (trackIds.length === 0) {
-        throw new AppError("VALIDATION_ERROR", "没有已匹配的歌曲可供导入。");
-      }
-
-      const adapter = this.#providers.get(data.targetProvider);
-      const auth = this.#buildAuth(actor, data.targetProvider);
-
-      // T10: When caller explicitly specifies existingPlaylistId, NEVER silently fall through to creating a new playlist
-      if (existingPlaylistId) {
-        if (!adapter.addTracksToPlaylist) {
-          throw new AppError(
-            "FEATURE_UNSUPPORTED",
-            `${data.targetProvider === "qq" ? "QQ 音乐" : data.targetProvider} 暂不支持向已有歌单追加曲目。`,
-          );
-        }
-        const { addedCount } = await adapter.addTracksToPlaylist(existingPlaylistId, trackIds, auth);
-        return {
-          playlistId: existingPlaylistId,
-          playlistName: options.name?.trim() || data.playlistName,
-          playlistUrl:
-            data.targetProvider === "netease"
-              ? `https://music.163.com/#/playlist?id=${encodeURIComponent(existingPlaylistId)}`
-              : `https://y.qq.com/n/ryqq/playlist/${encodeURIComponent(existingPlaylistId)}`,
-          addedCount,
-          // B28: Count skipped among attempted matched tracks rather than mixing matched/total denominators
-          skippedCount: Math.max(0, trackIds.length - addedCount),
-        };
-      }
-
-      if (!adapter.createPlaylistWithTracks) {
-        throw new AppError("FEATURE_UNSUPPORTED", `${data.targetProvider} 暂不支持直接建单导入。`);
-      }
-      const created = await adapter.createPlaylistWithTracks(
-        options.name?.trim() || `${data.playlistName} 转换结果`,
-        trackIds,
-        auth,
-      );
-      return { ...created, skippedCount: Math.max(0, trackIds.length - created.addedCount) };
-    }
-
-    if (record.kind === "import_audit") {
-      const data = record.result as ImportAuditResult;
-      if (data.playableTrackIds.length === 0) {
-        throw new AppError("VALIDATION_ERROR", "没有正常可播歌曲可以创建新歌单。");
-      }
-      const adapter = this.#providers.get("netease");
-      const auth = this.#buildAuth(actor, "netease");
-
-      // T10: Support existingPlaylistId for import_audit too (explicitly reject if unsupported)
-      if (existingPlaylistId) {
-        if (!adapter.addTracksToPlaylist) {
-          throw new AppError("FEATURE_UNSUPPORTED", "暂不支持向已有网易云歌单追加曲目。");
-        }
-        const { addedCount } = await adapter.addTracksToPlaylist(
-          existingPlaylistId,
-          data.playableTrackIds,
-          auth,
-        );
-        return {
-          playlistId: existingPlaylistId,
-          playlistName: options.name?.trim() || data.playlistName,
-          playlistUrl: `https://music.163.com/#/playlist?id=${encodeURIComponent(existingPlaylistId)}`,
-          addedCount,
-          skippedCount: Math.max(0, data.playableTrackIds.length - addedCount),
-        };
-      }
-
-      if (!adapter.createPlaylistWithTracks) {
-        throw new AppError("FEATURE_UNSUPPORTED", "暂不支持网易云建单。");
-      }
-      const created = await adapter.createPlaylistWithTracks(
-        options.name?.trim() || `${data.playlistName} - 正常歌曲`,
-        data.playableTrackIds,
-        auth,
-      );
-      return { ...created, skippedCount: Math.max(0, data.playableTrackIds.length - created.addedCount) };
-    }
-
-    throw new AppError("VALIDATION_ERROR", "该任务类型不支持直接导入歌单。");
+    return importTransferResultToPlatformUseCase({
+      providers: this.#providers,
+      authResolver: this.#authResolver,
+      jobs: this.#jobs,
+      actor,
+      jobId,
+      options,
+    });
   }
 }

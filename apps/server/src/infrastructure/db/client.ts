@@ -105,18 +105,48 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_jobs_user_kind_updated ON background_jobs(user_id, kind, updated_at DESC);
     `,
   },
+  {
+    version: 2,
+    name: "p1_revisions_and_job_columns",
+    sql: `
+      ALTER TABLE background_jobs ADD COLUMN artifact_expired INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE background_jobs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+
+      CREATE TABLE IF NOT EXISTS user_revisions (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        job_revision INTEGER NOT NULL DEFAULT 0,
+        job_cleared_before_revision INTEGER NOT NULL DEFAULT 0,
+        download_cleared_before_revision INTEGER NOT NULL DEFAULT 0,
+        transfer_cleared_before_revision INTEGER NOT NULL DEFAULT 0,
+        import_audit_cleared_before_revision INTEGER NOT NULL DEFAULT 0,
+        compare_cleared_before_revision INTEGER NOT NULL DEFAULT 0,
+        history_revision INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_lower_username ON users(lower(username));
+    `,
+  },
 ];
+
+export type SqliteJournalMode = "WAL" | "TRUNCATE" | "DELETE";
+
+const ALLOWED_JOURNAL_MODES = new Set<SqliteJournalMode>(["WAL", "TRUNCATE", "DELETE"]);
 
 export class SqliteClient {
   readonly db: DatabaseSync;
+  #txDepth = 0;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, options?: { journalMode?: SqliteJournalMode }) {
+    const journalMode: SqliteJournalMode = options?.journalMode ?? "WAL";
+    if (!ALLOWED_JOURNAL_MODES.has(journalMode)) {
+      throw new Error(`Unsupported SQLite journal_mode: ${String(journalMode)}`);
+    }
     if (dbPath !== ":memory:") {
       fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     }
     this.db = new DatabaseSync(dbPath);
     this.db.exec(`
-      PRAGMA journal_mode = WAL;
+      PRAGMA journal_mode = ${journalMode};
       PRAGMA synchronous = NORMAL;
       PRAGMA foreign_keys = ON;
       PRAGMA busy_timeout = 5000;
@@ -150,26 +180,50 @@ export class SqliteClient {
   }
 
   transaction<T>(fn: () => T): T {
-    this.db.exec("BEGIN");
-    try {
-      const result = fn();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    return this.#runInTransaction("DEFERRED", fn);
   }
 
   immediateTransaction<T>(fn: () => T): T {
-    this.db.exec("BEGIN IMMEDIATE");
+    return this.#runInTransaction("IMMEDIATE", fn);
+  }
+
+  #runInTransaction<T>(mode: "DEFERRED" | "IMMEDIATE", fn: () => T): T {
+    if (this.#txDepth === 0) {
+      this.db.exec(mode === "IMMEDIATE" ? "BEGIN IMMEDIATE" : "BEGIN");
+      this.#txDepth = 1;
+      try {
+        const result = fn();
+        this.db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {
+          // Ignore rollback error if transaction was already closed
+        }
+        throw error;
+      } finally {
+        this.#txDepth = 0;
+      }
+    }
+
+    const spName = `sp_${this.#txDepth}`;
+    this.db.exec(`SAVEPOINT ${spName}`);
+    this.#txDepth += 1;
     try {
       const result = fn();
-      this.db.exec("COMMIT");
+      this.db.exec(`RELEASE SAVEPOINT ${spName}`);
       return result;
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      try {
+        this.db.exec(`ROLLBACK TO SAVEPOINT ${spName}`);
+        this.db.exec(`RELEASE SAVEPOINT ${spName}`);
+      } catch {
+        // Ignore savepoint rollback error
+      }
       throw error;
+    } finally {
+      this.#txDepth -= 1;
     }
   }
 

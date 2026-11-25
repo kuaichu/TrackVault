@@ -1,58 +1,45 @@
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
-import type { ImportAuditResult, JobEvent, JobView, MusicPlatform, Song, TransferResult } from "#shared";
-import type { ActorContext } from "../../domain/context.js";
+import type { ImportAuditResult, JobEvent, JobView, Song, TransferResult } from "#shared";
 import { AppError } from "../../domain/errors.js";
-import { type MusicProviderAdapter, ProviderRegistry } from "../../domain/ports/music-provider.js";
-import { SqliteClient } from "../../infrastructure/db/client.js";
-import type { CredentialRepository } from "../../infrastructure/db/repositories/credential-repository.js";
-import { JobRepository, toJobView } from "../../infrastructure/db/repositories/job-repository.js";
-import { BackgroundJobManager } from "../jobs/background-job-manager.js";
+import type { MusicProviderAdapter } from "../../domain/ports/music-provider.js";
+import {
+  createServerTestHarness,
+  createStubProviderAdapter,
+  makeTestActor,
+  makeTestSong,
+  waitForJobTerminal,
+} from "../../test-utils/fixtures.js";
+import { ProviderAuthResolver } from "../auth/provider-auth-resolver.js";
+import type { BackgroundJobManager } from "../jobs/background-job-manager.js";
 import { TransferService } from "./transfer-service.js";
 
-const actor: ActorContext = {
+const actor = makeTestActor({
   userId: "u-transfer-1",
   username: "tester",
   role: "admin",
   trustedFallback: true,
-};
+});
 
 function makeSong(
-  platform: MusicPlatform,
+  platform: Song["platform"],
   id: string,
   title: string,
   artist = "周杰伦",
   availability?: Song["availability"],
 ): Song {
-  return {
-    id,
-    mediaId: platform === "qq" ? `mid-${id}` : undefined,
-    platform,
-    title,
+  return makeTestSong(platform, id, title, {
     artist,
-    artists: [{ name: artist }],
+    mediaId: platform === "qq" ? `mid-${id}` : undefined,
     album: "专辑A",
     durationSeconds: 240,
-    duration: "04:00",
-    quality: "320K",
     availableQualities: [],
     availability,
-  };
+  });
 }
 
-async function waitForJobDone(jobs: BackgroundJobManager, jobId: string): Promise<JobView> {
-  const deadline = Date.now() + 5000;
-  while (Date.now() < deadline) {
-    const view = toJobView(jobs.getOwnedJob(actor, jobId));
-    if (view.status === "completed" || view.status === "failed" || view.status === "cancelled") {
-      return view;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 15));
-  }
-  throw new Error(`Timed out waiting for job ${jobId}`);
+function waitForJobDone(jobs: BackgroundJobManager, jobId: string): Promise<JobView> {
+  return waitForJobTerminal(jobs, actor, jobId);
 }
 
 async function withTransferHarness(
@@ -66,61 +53,27 @@ async function withTransferHarness(
     events: JobEvent[];
   }) => Promise<void>,
 ): Promise<void> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tv-transfer-test-"));
-  const sqlite = new SqliteClient(path.join(tmpDir, "test.db"));
-  sqlite.db
-    .prepare(
-      `INSERT INTO users (id, username, password_hash, role, trusted_fallback, created_at)
-       VALUES (?, ?, 'hash', 'admin', 1, ?)`,
-    )
-    .run(actor.userId, actor.username, Date.now());
+  const harness = await createServerTestHarness({
+    actor,
+    prefix: "tv-transfer-test-",
+  });
+  const events: JobEvent[] = [];
+  const unsubscribe = harness.jobs.subscribe(actor.userId, (evt) => events.push(evt));
 
-  const jobRepo = new JobRepository(sqlite);
-  const jobs = new BackgroundJobManager({
-    repo: jobRepo,
-    tmpDownloadsDir: path.join(tmpDir, "downloads"),
-    globalMaxConcurrentDownloads: 2,
-    globalMaxConcurrentJobs: 2,
+  harness.providers.register(createStubProviderAdapter("netease", adapters.netease));
+  harness.providers.register(createStubProviderAdapter("qq", adapters.qq));
+
+  const service = new TransferService({
+    providers: harness.providers,
+    authResolver: new ProviderAuthResolver(harness.credentials),
+    jobs: harness.jobs,
   });
 
-  const events: JobEvent[] = [];
-  const unsubscribe = jobs.subscribe(actor.userId, (evt) => events.push(evt));
-
-  const baseNetease: Partial<MusicProviderAdapter> = {
-    platform: "netease",
-    getAllPlaylistTracks: async () => [],
-    searchTracks: async () => [],
-    ...adapters.netease,
-  };
-  const baseQq: Partial<MusicProviderAdapter> = {
-    platform: "qq",
-    getAllPlaylistTracks: async () => [],
-    searchTracks: async () => [],
-    ...adapters.qq,
-  };
-
-  const providers = new ProviderRegistry();
-  providers.register(baseNetease as MusicProviderAdapter);
-  providers.register(baseQq as MusicProviderAdapter);
-  const credentials = {
-    getDecryptedCookie: () => "MUSIC_U=mock-cookie",
-    getBindingView: () => ({
-      platform: "netease",
-      bound: true,
-      accountUid: "1001",
-    }),
-    getDecryptedSystemFallbackCookie: () => null,
-  } as unknown as CredentialRepository;
-
-  const service = new TransferService({ providers, credentials, jobs });
-
   try {
-    await fn({ service, jobs, events });
+    await fn({ service, jobs: harness.jobs, events });
   } finally {
     unsubscribe();
-    jobs.stop();
-    sqlite.close();
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await harness.cleanup();
   }
 }
 

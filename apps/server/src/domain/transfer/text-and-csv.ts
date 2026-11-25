@@ -7,6 +7,7 @@ import {
   type TransferResult,
   type TransferTrack,
   escapeCsvCell,
+  formatScanStatsSummary,
   sanitizeDownloadFilename,
 } from "#shared";
 
@@ -261,10 +262,12 @@ export function formatTransferExport(result: TransferResult, format: ExportForma
     };
   }
 
-  const truncationNote =
-    result.truncated && result.sourceTotal
-      ? `- 注意：源歌单共 ${result.sourceTotal} 首，本次仅处理前 ${result.processedCount ?? result.summary.total} 首（未处理 ${result.unprocessedCount ?? Math.max(0, result.sourceTotal - result.summary.total)} 首）`
-      : null;
+  const scanSummary = formatScanStatsSummary(result, {
+    subjectLabel: "源歌单",
+    processedVerb: "已处理",
+    limitLabel: "扫描或单次处理上限",
+  });
+  const truncationNote = scanSummary.hasOmissions ? `- 注意：${scanSummary.summaryText}` : null;
 
   const mdLines = [
     `# 歌单互转报告：${result.playlistName}`,
@@ -346,11 +349,18 @@ export function formatCompareExport(
   }
 
   const truncationNotes: string[] = [];
-  if (result.left.truncated && result.left.sourceTotal) {
-    truncationNotes.push(`- 左侧歌单共 ${result.left.sourceTotal} 首，仅比对前 ${result.left.total} 首`);
-  }
-  if (result.right.truncated && result.right.sourceTotal) {
-    truncationNotes.push(`- 右侧歌单共 ${result.right.sourceTotal} 首，仅比对前 ${result.right.total} 首`);
+  for (const [sideLabel, side] of [
+    ["左侧歌单", result.left],
+    ["右侧歌单", result.right],
+  ] as const) {
+    const sideSummary = formatScanStatsSummary(side, {
+      subjectLabel: sideLabel,
+      processedVerb: "已比对",
+      limitLabel: "单次对比上限",
+    });
+    if (sideSummary.hasOmissions) {
+      truncationNotes.push(`- ${sideSummary.summaryText}`);
+    }
   }
 
   return {
@@ -420,8 +430,12 @@ export function formatImportAuditExport(result: ImportAuditResult, format: Expor
   const lines = result.issues.map(
     (issue, idx) => `${idx + 1}. ${issue.title} - ${issue.artists.join(" / ")} (${issue.reason})`,
   );
-  const truncationSuffix =
-    result.truncated && result.sourceTotal ? `（源歌单共 ${result.sourceTotal} 首，已截断）` : "";
+  const auditSummary = formatScanStatsSummary(result, {
+    subjectLabel: "源歌单",
+    processedVerb: "已扫描",
+    limitLabel: "单次扫描上限",
+  });
+  const truncationSuffix = auditSummary.hasOmissions ? `（${auditSummary.summaryText}）` : "";
 
   return {
     filename: `${safeBase}.md`,

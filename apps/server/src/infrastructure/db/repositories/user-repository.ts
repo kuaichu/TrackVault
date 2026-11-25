@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import type { UserRole, UserSummary } from "#shared";
 import type { SqliteClient } from "../client.js";
 
+const SESSION_LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000;
+
 export interface UserRecord extends UserSummary {
   passwordHash: string;
 }
@@ -143,15 +145,19 @@ export class UserRepository {
     const now = Date.now();
     const row = this.#sqlite.db
       .prepare(
-        `SELECT u.* FROM sessions s
+        `SELECT u.*, s.last_seen_at AS session_last_seen_at FROM sessions s
          INNER JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ? AND s.expires_at > ?`,
       )
-      .get(tokenHash, now) as RawUserRow | undefined;
+      .get(tokenHash, now) as (RawUserRow & { session_last_seen_at: number }) | undefined;
 
     if (!row) return null;
 
-    this.#sqlite.db.prepare("UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?").run(now, tokenHash);
+    if (now - row.session_last_seen_at >= SESSION_LAST_SEEN_THROTTLE_MS) {
+      this.#sqlite.db
+        .prepare("UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?")
+        .run(now, tokenHash);
+    }
 
     return toUserSummary(mapUser(row));
   }

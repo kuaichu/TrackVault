@@ -1,4 +1,5 @@
 import {
+  type PlayHistoryResponse,
   type PlayerState,
   PlayerStateSchema,
   type Song,
@@ -130,9 +131,33 @@ export class UserStateRepository {
     return sanitized;
   }
 
+  #getHistoryRevision(userId: string): number {
+    const row = this.#sqlite.db
+      .prepare("SELECT history_revision FROM user_revisions WHERE user_id = ?")
+      .get(userId) as { history_revision: number } | undefined;
+    return row?.history_revision ?? 0;
+  }
+
+  #bumpHistoryRevision(userId: string): number {
+    this.#sqlite.db
+      .prepare(
+        `INSERT INTO user_revisions (user_id, history_revision)
+         VALUES (?, 1)
+         ON CONFLICT(user_id) DO UPDATE SET
+           history_revision = user_revisions.history_revision + 1`,
+      )
+      .run(userId);
+    const row = this.#sqlite.db
+      .prepare("SELECT history_revision FROM user_revisions WHERE user_id = ?")
+      .get(userId) as { history_revision: number };
+    return row.history_revision;
+  }
+
   getPlayHistory(userId: string): Song[] {
     const rows = this.#sqlite.db
-      .prepare("SELECT song_json FROM play_history WHERE user_id = ? ORDER BY played_at DESC LIMIT ?")
+      .prepare(
+        "SELECT song_json FROM play_history WHERE user_id = ? ORDER BY played_at DESC, rowid DESC LIMIT ?",
+      )
       .all(userId, MAX_PLAY_HISTORY) as Array<{ song_json: string }>;
 
     const songs: Song[] = [];
@@ -147,7 +172,36 @@ export class UserStateRepository {
     return songs;
   }
 
-  recordPlayHistory(userId: string, song: Song, playedAt?: number): Song[] {
+  getPlayHistoryWithRevision(userId: string): PlayHistoryResponse {
+    return this.#sqlite.transaction(() => ({
+      items: this.getPlayHistory(userId),
+      revision: this.#getHistoryRevision(userId),
+    }));
+  }
+
+  #trimPlayHistory(userId: string): void {
+    this.#sqlite.db
+      .prepare(
+        `DELETE FROM play_history
+         WHERE user_id = ? AND song_key NOT IN (
+           SELECT song_key FROM play_history WHERE user_id = ? ORDER BY played_at DESC, rowid DESC LIMIT ?
+         )`,
+      )
+      .run(userId, userId, MAX_PLAY_HISTORY);
+  }
+
+  #trimSearchHistory(userId: string): void {
+    this.#sqlite.db
+      .prepare(
+        `DELETE FROM search_history
+         WHERE user_id = ? AND keyword NOT IN (
+           SELECT keyword FROM search_history WHERE user_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT ?
+         )`,
+      )
+      .run(userId, userId, MAX_SEARCH_HISTORY);
+  }
+
+  recordPlayHistoryWithRevision(userId: string, song: Song, playedAt?: number): PlayHistoryResponse {
     const sanitized = SongSchema.parse(song);
     const songKey = getSongKey(sanitized);
     const now =
@@ -155,37 +209,77 @@ export class UserStateRepository {
         ? Math.floor(playedAt)
         : Date.now();
 
-    this.#sqlite.transaction(() => {
+    return this.#sqlite.transaction(() => {
       this.#sqlite.db
         .prepare(
-          `INSERT INTO play_history (user_id, song_key, song_json, played_at)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(user_id, song_key) DO UPDATE SET
-             song_json = excluded.song_json,
-             played_at = excluded.played_at`,
+          `INSERT OR REPLACE INTO play_history (user_id, song_key, song_json, played_at)
+           VALUES (?, ?, ?, ?)`,
         )
         .run(userId, songKey, JSON.stringify(sanitized), now);
 
-      this.#sqlite.db
-        .prepare(
-          `DELETE FROM play_history
-           WHERE user_id = ? AND song_key NOT IN (
-             SELECT song_key FROM play_history WHERE user_id = ? ORDER BY played_at DESC LIMIT ?
-           )`,
-        )
-        .run(userId, userId, MAX_PLAY_HISTORY);
+      this.#trimPlayHistory(userId);
+      const revision = this.#bumpHistoryRevision(userId);
+      const items = this.getPlayHistory(userId);
+      return { items, revision };
+    });
+  }
+
+  recordPlayHistory(userId: string, song: Song, playedAt?: number): Song[] {
+    return this.recordPlayHistoryWithRevision(userId, song, playedAt).items;
+  }
+
+  /**
+   * Pure write-only single-transaction batch import for play history (avoids N transactions and N*100 Zod parses).
+   */
+  importPlayHistoryBatch(userId: string, entries: ReadonlyArray<{ song: Song; playedAt?: number }>): number {
+    if (entries.length === 0) return 0;
+    const fallbackNow = Date.now();
+    let count = 0;
+
+    this.#sqlite.transaction(() => {
+      const upsertStmt = this.#sqlite.db.prepare(
+        `INSERT INTO play_history (user_id, song_key, song_json, played_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, song_key) DO UPDATE SET
+           song_json = excluded.song_json,
+           played_at = excluded.played_at`,
+      );
+      for (const entry of entries) {
+        const sanitized = SongSchema.parse(entry.song);
+        const songKey = getSongKey(sanitized);
+        const ts =
+          typeof entry.playedAt === "number" && Number.isFinite(entry.playedAt) && entry.playedAt > 0
+            ? Math.floor(entry.playedAt)
+            : fallbackNow;
+        upsertStmt.run(userId, songKey, JSON.stringify(sanitized), ts);
+        count += 1;
+      }
+      this.#trimPlayHistory(userId);
+      if (count > 0) {
+        this.#bumpHistoryRevision(userId);
+      }
     });
 
-    return this.getPlayHistory(userId);
+    return count;
+  }
+
+  clearPlayHistoryWithRevision(userId: string): PlayHistoryResponse {
+    return this.#sqlite.transaction(() => {
+      this.#sqlite.db.prepare("DELETE FROM play_history WHERE user_id = ?").run(userId);
+      const revision = this.#bumpHistoryRevision(userId);
+      return { items: [], revision };
+    });
   }
 
   clearPlayHistory(userId: string): void {
-    this.#sqlite.db.prepare("DELETE FROM play_history WHERE user_id = ?").run(userId);
+    this.clearPlayHistoryWithRevision(userId);
   }
 
   getSearchHistory(userId: string): string[] {
     const rows = this.#sqlite.db
-      .prepare("SELECT keyword FROM search_history WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?")
+      .prepare(
+        "SELECT keyword FROM search_history WHERE user_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT ?",
+      )
       .all(userId, MAX_SEARCH_HISTORY) as Array<{ keyword: string }>;
     return rows.map((row) => row.keyword);
   }
@@ -201,24 +295,54 @@ export class UserStateRepository {
     this.#sqlite.transaction(() => {
       this.#sqlite.db
         .prepare(
-          `INSERT INTO search_history (user_id, keyword, updated_at)
-           VALUES (?, ?, ?)
-           ON CONFLICT(user_id, keyword) DO UPDATE SET
-             updated_at = excluded.updated_at`,
+          `INSERT OR REPLACE INTO search_history (user_id, keyword, updated_at)
+           VALUES (?, ?, ?)`,
         )
         .run(userId, trimmed, now);
 
-      this.#sqlite.db
-        .prepare(
-          `DELETE FROM search_history
-           WHERE user_id = ? AND keyword NOT IN (
-             SELECT keyword FROM search_history WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?
-           )`,
-        )
-        .run(userId, userId, MAX_SEARCH_HISTORY);
+      this.#trimSearchHistory(userId);
     });
 
     return this.getSearchHistory(userId);
+  }
+
+  /**
+   * Pure write-only single-transaction batch import for search history.
+   */
+  importSearchHistoryBatch(
+    userId: string,
+    entries: ReadonlyArray<{ keyword: string; updatedAt?: number }>,
+  ): number {
+    const normalized = entries
+      .map((entry) => ({
+        keyword: entry.keyword.trim().slice(0, 120),
+        updatedAt: entry.updatedAt,
+      }))
+      .filter((entry) => entry.keyword.length > 0);
+    if (normalized.length === 0) return 0;
+
+    const fallbackNow = Date.now();
+    let count = 0;
+
+    this.#sqlite.transaction(() => {
+      const upsertStmt = this.#sqlite.db.prepare(
+        `INSERT INTO search_history (user_id, keyword, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(user_id, keyword) DO UPDATE SET
+           updated_at = excluded.updated_at`,
+      );
+      for (const entry of normalized) {
+        const ts =
+          typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt) && entry.updatedAt > 0
+            ? Math.floor(entry.updatedAt)
+            : fallbackNow;
+        upsertStmt.run(userId, entry.keyword, ts);
+        count += 1;
+      }
+      this.#trimSearchHistory(userId);
+    });
+
+    return count;
   }
 
   removeSearchHistory(userId: string, keyword: string): string[] {

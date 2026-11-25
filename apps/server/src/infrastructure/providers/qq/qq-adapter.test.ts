@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AppError } from "../../../domain/errors.js";
-import type { ProviderAuthContext } from "../../../domain/ports/music-provider.js";
+import {
+  type MusicProviderAdapter,
+  type ProviderAuthContext,
+  supportsPlaylistMutation,
+} from "../../../domain/ports/music-provider.js";
 import { SafeHttpClient } from "../../security/safe-http-client.js";
 import { QqMusicAdapter } from "./qq-adapter.js";
 import { computeQqGtk, extractEssentialQqCookie, parseQqCookie } from "./qq-cookie.js";
@@ -173,17 +177,15 @@ test("QqMusicAdapter QR login handles 302 manual redirect chain + OAuth qm_keyst
 });
 
 test("QqMusicAdapter rejects code=1000 playlists, distinguishes 503 vs copyright, supports RS01/trial, resolves mid comments, disables createPlaylist, isolates cache (A11/A12/B12/C034/C037/C039)", async () => {
-  // 1. B12 / C037: canCreatePlaylist is false & createPlaylistWithTracks throws FEATURE_UNSUPPORTED
+  // 1. SM-01 / C037: canCreatePlaylist is false & QqMusicAdapter omits unsupported PlaylistMutationPort methods
   const dummyHttp = new SafeHttpClient({
     resolveHost: async () => [{ address: "1.2.3.4" }],
     fetchImpl: async () => new Response("{}", { status: 200 }),
   });
-  const baseAdapter = new QqMusicAdapter(dummyHttp);
+  const baseAdapter: MusicProviderAdapter = new QqMusicAdapter(dummyHttp);
   assert.equal(baseAdapter.capabilities.canCreatePlaylist, false);
-  await assert.rejects(
-    () => baseAdapter.createPlaylistWithTracks("My List", ["mid1"], qqAuth),
-    (err: unknown) => err instanceof AppError && err.code === "FEATURE_UNSUPPORTED",
-  );
+  assert.equal(baseAdapter.createPlaylistWithTracks, undefined);
+  assert.equal(supportsPlaylistMutation(baseAdapter), false);
 
   // 2. A11: code=1000 throws CREDENTIAL_INVALID and is NEVER cached as empty playlist
   let detailCalls = 0;

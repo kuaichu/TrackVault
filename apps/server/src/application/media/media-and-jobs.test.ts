@@ -10,9 +10,11 @@ import { loadServerConfig } from "../../config/env.js";
 import type { ActorContext } from "../../domain/context.js";
 import { type MusicProviderAdapter, ProviderRegistry } from "../../domain/ports/music-provider.js";
 import { SqliteClient } from "../../infrastructure/db/client.js";
-import { JobRepository, toJobView } from "../../infrastructure/db/repositories/job-repository.js";
+import { JobRepository } from "../../infrastructure/db/repositories/job-repository.js";
 import { SafeHttpClient } from "../../infrastructure/security/safe-http-client.js";
+import { ProviderAuthResolver } from "../auth/provider-auth-resolver.js";
 import { BackgroundJobManager } from "../jobs/background-job-manager.js";
+import { toJobView } from "../jobs/job-view-mapper.js";
 import {
   MediaService,
   hasValidAudioSignature,
@@ -163,10 +165,10 @@ test("J01 + BUG-25 + J07 + B35 + C017: MediaService rejects fake MP3, allows val
 
   const media = new MediaService({
     providers,
-    credentials: {
+    authResolver: new ProviderAuthResolver({
       getDecryptedCookie: () => null,
       getDecryptedSystemFallbackCookie: () => "FALLBACK_COOKIE",
-    } as never,
+    } as never),
     userState: {
       getSettings: () => ({ maxConcurrentDownloads: 2 }),
     } as never,
@@ -292,10 +294,10 @@ test("J01 + BUG-25 + J07 + B35 + C017: MediaService rejects fake MP3, allows val
     });
     const brokenMedia = new MediaService({
       providers,
-      credentials: {
+      authResolver: new ProviderAuthResolver({
         getDecryptedCookie: () => "OWN",
         getDecryptedSystemFallbackCookie: () => null,
-      } as never,
+      } as never),
       userState: { getSettings: () => ({ maxConcurrentDownloads: 2 }) } as never,
       http: httpClient,
       jobs: brokenJobs,

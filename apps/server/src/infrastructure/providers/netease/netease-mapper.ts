@@ -3,7 +3,10 @@ import {
   type QualityOption,
   type Song,
   type SongComment,
+  formatDurationSeconds,
+  formatTimestampText,
   normalizeCoverUrl,
+  truncateCodePoints,
 } from "#shared";
 import { evaluateNeteaseAvailability } from "../../../domain/policies/song-availability.js";
 
@@ -33,7 +36,6 @@ export interface RawNeteaseSong {
   fee?: number | string | null;
   st?: number | string | null;
   cp?: number | string | null;
-  noCopyrightRcmd?: unknown;
   privilege?: RawNeteasePrivilege | null;
   hr?: unknown;
   sq?: unknown;
@@ -43,33 +45,7 @@ export interface RawNeteaseSong {
   pc?: unknown;
 }
 
-export function truncateCodePoints(text: string, maxLength: number): string {
-  const nativeFn = (text as { toWellFormed?: () => string }).toWellFormed;
-  const safe = typeof nativeFn === "function" ? nativeFn.call(text) : text;
-  const chars = Array.from(safe);
-  if (chars.length <= maxLength) return safe;
-  return maxLength > 3 ? `${chars.slice(0, maxLength - 3).join("")}...` : chars.slice(0, maxLength).join("");
-}
-
-export function formatDurationSeconds(seconds: number): string {
-  const safe = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
-  const mins = Math.floor(safe / 60);
-  const secs = safe % 60;
-  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-}
-
-export function formatNeteaseTime(ms: number | undefined): string {
-  if (!ms || !Number.isFinite(ms)) return "";
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(ms));
-}
+export const formatNeteaseTime = formatTimestampText;
 
 function deriveQualities(song: RawNeteaseSong): QualityOption[] {
   const list: QualityOption[] = [{ level: "standard", label: "128K" }];
@@ -131,7 +107,6 @@ export function mapNeteaseSong(
     dl: privilege?.dl,
     st: privilege?.st ?? raw.st,
     cp: privilege?.cp ?? raw.cp,
-    noCopyrightRcmd: raw.noCopyrightRcmd,
     isCloud,
   });
 
@@ -204,7 +179,7 @@ export function mapNeteaseComment(raw: RawNeteaseComment): SongComment | null {
     nickname: raw.user?.nickname?.trim() || "网易云用户",
     avatarUrl: normalizeCoverUrl(raw.user?.avatarUrl, 120),
     content,
-    timeText: raw.time ? formatNeteaseTime(raw.time) : (raw.timeStr?.trim() ?? ""),
+    timeText: raw.time ? formatTimestampText(raw.time) : (raw.timeStr?.trim() ?? ""),
     time: typeof raw.time === "number" ? raw.time : undefined,
     liked: Boolean(raw.liked),
     likedCount: Math.max(0, Number(raw.likedCount ?? 0) || 0),

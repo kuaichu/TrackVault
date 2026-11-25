@@ -9,10 +9,13 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { ZodError } from "zod";
 import { AuthService } from "./application/auth/auth-service.js";
+import { ProviderAuthResolver } from "./application/auth/provider-auth-resolver.js";
 import { CatalogService } from "./application/catalog/catalog-service.js";
+import { SessionEventHub } from "./application/events/session-event-hub.js";
 import { BackgroundJobManager } from "./application/jobs/background-job-manager.js";
 import { MediaService } from "./application/media/media-service.js";
 import { TransferService } from "./application/transfer/transfer-service.js";
+import { UserStateService } from "./application/user-state/user-state-service.js";
 import type { ServerConfig } from "./config/env.js";
 import { AppError, isAppError } from "./domain/errors.js";
 import { ProviderRegistry } from "./domain/ports/music-provider.js";
@@ -24,15 +27,13 @@ import { UserStateRepository } from "./infrastructure/db/repositories/user-state
 import { NeteaseAdapter } from "./infrastructure/providers/netease/netease-adapter.js";
 import { QqMusicAdapter } from "./infrastructure/providers/qq/qq-adapter.js";
 import { AesGcmCredentialVault, loadOrCreateMasterKey } from "./infrastructure/security/credential-vault.js";
+import { hashSessionToken } from "./infrastructure/security/password.js";
 import { SafeHttpClient } from "./infrastructure/security/safe-http-client.js";
 import { SESSION_COOKIE_NAME } from "./interfaces/http/auth-plugin.js";
 import { registerAuthRoutes } from "./interfaces/http/routes/auth-routes.js";
 import { registerCatalogRoutes } from "./interfaces/http/routes/catalog-routes.js";
 import { registerMediaRoutes } from "./interfaces/http/routes/media-routes.js";
-import {
-  type SseConnectionRegistry,
-  registerTransferAndJobRoutes,
-} from "./interfaces/http/routes/transfer-and-jobs-routes.js";
+import { registerTransferAndJobRoutes } from "./interfaces/http/routes/transfer-and-jobs-routes.js";
 import { registerUserStateRoutes } from "./interfaces/http/routes/user-state-routes.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -60,7 +61,9 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
   const { config } = options;
 
   // 1) Infrastructure layer
-  const sqlite = new SqliteClient(options.dbPathOverride ?? config.dbPath);
+  const sqlite = new SqliteClient(options.dbPathOverride ?? config.dbPath, {
+    journalMode: config.sqliteJournalMode,
+  });
   const masterKey = loadOrCreateMasterKey(config.dataDir, config.masterKey);
   const vault = new AesGcmCredentialVault(masterKey);
   const httpClient =
@@ -69,7 +72,7 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
   const userRepo = new UserRepository(sqlite);
   const credentialRepo = new CredentialRepository(sqlite, vault);
   const userStateRepo = new UserStateRepository(sqlite);
-  const jobRepo = new JobRepository(sqlite, { tmpDownloadsDir: config.tmpDownloadsDir });
+  const jobRepo = new JobRepository(sqlite);
 
   let providers: ProviderRegistry;
   if (options.providersOverride) {
@@ -91,31 +94,36 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
   });
   jobs.startPeriodicCleanup();
 
-  let sseRegistry: SseConnectionRegistry | null = null;
+  const sseRegistry = new SessionEventHub();
+  const authResolver = new ProviderAuthResolver(credentialRepo);
 
   const authService = new AuthService({
     sqlite,
     users: userRepo,
     credentials: credentialRepo,
+    authResolver,
     providers,
     sessionTtlMs: config.sessionTtlMs,
+    onSessionRevoked: (tokenHash) => {
+      sseRegistry.closeSessionConnections(tokenHash);
+    },
     onUserRevoked: (userId) => {
       jobs.cancelJobsForUser(userId);
-      sseRegistry?.closeUserConnections(userId);
+      sseRegistry.closeUserConnections(userId);
     },
     onUserDeleted: (userId) => {
       jobs.cancelJobsForUser(userId, { removeArtifactsDir: true });
-      sseRegistry?.closeUserConnections(userId);
+      sseRegistry.closeUserConnections(userId);
     },
   });
   const catalogService = new CatalogService({
     providers,
-    credentials: credentialRepo,
+    authResolver,
     userState: userStateRepo,
   });
   const mediaService = new MediaService({
     providers,
-    credentials: credentialRepo,
+    authResolver,
     userState: userStateRepo,
     http: httpClient,
     jobs,
@@ -124,9 +132,10 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
   });
   const transferService = new TransferService({
     providers,
-    credentials: credentialRepo,
+    authResolver,
     jobs,
   });
+  const userStateService = new UserStateService({ userStateRepo });
 
   // 3) Interface layer (Fastify 5)
   const trustProxyOption =
@@ -155,9 +164,12 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
 
   // Attach verified ActorContext in onRequest (after fastifyCookie, BEFORE rate-limit keyGenerator)
   app.decorateRequest("actor", null);
+  app.decorateRequest("sessionTokenHash", null);
   app.addHook("onRequest", async (request) => {
     const token = request.cookies?.[SESSION_COOKIE_NAME];
-    request.actor = authService.resolveActorFromToken(token);
+    const actor = authService.resolveActorFromToken(token);
+    request.actor = actor;
+    request.sessionTokenHash = actor && token ? hashSessionToken(token) : null;
   });
 
   await app.register(fastifyHelmet, {
@@ -189,18 +201,18 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
   });
 
   await app.register(fastifyCors, {
-    credentials: true,
-    origin: (origin, callback) => {
-      // Allow same-origin / server-to-server / curl requests with no Origin header
-      if (!origin) {
-        callback(null, true);
-        return;
-      }
-      if (allowedOriginSet.has(origin)) {
-        callback(null, true);
-        return;
-      }
-      callback(null, false);
+    delegator: (request, callback) => {
+      callback(null, {
+        credentials: true,
+        origin: (origin, originCallback) => {
+          // Allow same-origin / server-to-server / curl requests with no Origin header
+          if (!origin) {
+            originCallback(null, true);
+            return;
+          }
+          originCallback(null, isAllowedOrigin(origin, request));
+        },
+      });
     },
   });
 
@@ -296,12 +308,12 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
   registerAuthRoutes(app, { authService, config });
   registerCatalogRoutes(app, { catalogService, providers });
   registerMediaRoutes(app, { mediaService });
-  sseRegistry = registerTransferAndJobRoutes(app, { jobs, transferService, isAllowedOrigin });
-  registerUserStateRoutes(app, { userStateRepo });
+  registerTransferAndJobRoutes(app, { jobs, transferService, sseRegistry, isAllowedOrigin });
+  registerUserStateRoutes(app, { userStateService });
 
   // J05: Close all hijacked SSE streams & heartbeats even when app.close() is invoked directly
   app.addHook("preClose", async () => {
-    sseRegistry?.closeAllConnections();
+    sseRegistry.closeAllConnections();
   });
 
   // Serve built frontend bundle when present (self-hosted single-container / production mode)
@@ -339,8 +351,9 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
     sqlite,
     jobs,
     async close() {
-      sseRegistry?.closeAllConnections();
+      sseRegistry.closeAllConnections();
       jobs.stop();
+      providers.closeAll();
       httpClient.close();
       await app.close();
       sqlite.close();

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { QrCheckResult, QrStartResult } from "#shared";
 import { AppError } from "../../../domain/errors.js";
 import type { SafeHttpClient } from "../../security/safe-http-client.js";
+import { QrSessionStore } from "../common/qr-session-store.js";
 import { computeQqGtk, hash33, serializeQqCookie } from "./qq-cookie.js";
 
 const QQ_LOGIN_APP_ID = "1006102";
@@ -13,19 +14,15 @@ const QQ_LOGIN_REFERER = "https://xui.ptlogin2.qq.com/cgi-bin/xlogin";
 const QQ_LOGIN_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-const QR_TTL_MS = 5 * 60 * 1000;
-const MAX_ACTIVE_QR_SESSIONS = 100;
 const MAX_QR_IMAGE_BYTES = 2 * 1024 * 1024;
 const MAX_QR_TEXT_BYTES = 256 * 1024;
 const QR_ALLOWED_HOSTS = ["qq.com", "y.qq.com"] as const;
 const textDecoder = new TextDecoder("utf-8", { fatal: false });
 
 interface QqQrSession {
-  scopeKey: string;
   qrsig: string;
   loginSig: string;
   cookies: Map<string, string>;
-  createdAt: number;
   completing: boolean;
 }
 
@@ -64,28 +61,17 @@ function parsePtuiCallback(input: string): {
  */
 export class QqQrAuthManager {
   readonly #http: SafeHttpClient;
-  readonly #sessions = new Map<string, QqQrSession>();
+  readonly #sessions = new QrSessionStore<QqQrSession>();
 
   constructor(http: SafeHttpClient) {
     this.#http = http;
   }
 
-  #cleanup(): void {
-    const now = Date.now();
-    for (const [key, session] of this.#sessions.entries()) {
-      if (now - session.createdAt > QR_TTL_MS) {
-        this.#sessions.delete(key);
-      }
-    }
-    while (this.#sessions.size >= MAX_ACTIVE_QR_SESSIONS) {
-      const oldest = this.#sessions.keys().next().value;
-      if (!oldest) break;
-      this.#sessions.delete(oldest);
-    }
+  invalidateScope(scopeKey: string): void {
+    this.#sessions.invalidateScope(scopeKey);
   }
 
   async start(scopeKey: string): Promise<QrStartResult> {
-    this.#cleanup();
     const cookies = new Map<string, string>();
 
     const xloginParams = new URLSearchParams({
@@ -143,12 +129,10 @@ export class QqQrAuthManager {
 
     const qrBytes = Buffer.from(qrRawBytes);
     const key = crypto.randomUUID();
-    this.#sessions.set(key, {
-      scopeKey,
+    this.#sessions.set(scopeKey, key, {
       qrsig,
       loginSig: cookies.get("pt_login_sig") ?? "",
       cookies,
-      createdAt: Date.now(),
       completing: false,
     });
 
@@ -287,9 +271,9 @@ export class QqQrAuthManager {
   }
 
   async check(scopeKey: string, key: string): Promise<QrCheckResult & { rawCookie?: string }> {
-    this.#cleanup();
-    const session = this.#sessions.get(key.trim());
-    if (!session || session.scopeKey !== scopeKey) {
+    const trimmedKey = key.trim();
+    const session = this.#sessions.get(scopeKey, trimmedKey);
+    if (!session) {
       return { status: "expired", code: 65, message: "二维码已过期或不属于当前账号，请重新生成。" };
     }
     if (session.completing) {
@@ -336,7 +320,7 @@ export class QqQrAuthManager {
     const code = Number(parsed.code || -1);
 
     if (parsed.code === "65") {
-      this.#sessions.delete(key.trim());
+      this.#sessions.delete(scopeKey, trimmedKey);
       return { status: "expired", code, message: "二维码已过期，请重新生成。" };
     }
     if (parsed.code === "66") return { status: "waiting", code, message: "等待手机 QQ 扫码。" };
@@ -352,7 +336,7 @@ export class QqQrAuthManager {
       return { status: "error", code, message: parsed.message || "QQ 扫码登录失败。" };
     }
 
-    // Acquire completion lock before following redirect chain (A01: manual redirect mode per hop)
+    // Acquire completion lock before following redirect chain (manual redirect mode per hop)
     session.completing = true;
     try {
       let nextUrl = parsed.redirectUrl;
@@ -367,7 +351,7 @@ export class QqQrAuthManager {
           allowHttp: false,
           maxRedirects: 0,
           redirectMode: "manual",
-          stripSensitiveHeadersOnHostChange: false, // safe because every hop is strictly validated against *.qq.com
+          stripSensitiveHeadersOnHostChange: false,
         });
         mergeSetCookies(session.cookies, hopRes.headers);
         const location = hopRes.headers.get("location");
@@ -376,9 +360,9 @@ export class QqQrAuthManager {
         nextUrl = new URL(location, nextUrl).toString();
       }
 
-      // C032: Exchange ptlogin2 skey/p_skey for QQ Music qm_keyst via OAuth2 + LoginServer
-      const hasMusicKey = await this.#exchangeMusicKey(session.cookies).catch(() => false);
-      this.#sessions.delete(key.trim());
+      // PP-08: Propagate UPSTREAM_TIMEOUT / AbortError / transport failures instead of misreporting as risk-control
+      const hasMusicKey = await this.#exchangeMusicKey(session.cookies);
+      this.#sessions.delete(scopeKey, trimmedKey);
       if (!hasMusicKey) {
         return {
           status: "error",
@@ -396,7 +380,7 @@ export class QqQrAuthManager {
         rawCookie,
       };
     } catch (error) {
-      this.#sessions.delete(key.trim());
+      this.#sessions.delete(scopeKey, trimmedKey);
       throw error;
     }
   }

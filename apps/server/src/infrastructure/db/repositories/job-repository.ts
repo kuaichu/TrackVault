@@ -1,55 +1,24 @@
-import fs from "node:fs";
-import path from "node:path";
-import type { ErrorCode, JobKind, JobStatus, JobView } from "#shared";
+import type { ErrorCode, JobKind, JobStatus } from "#shared";
+import {
+  hasLocalDownloadArtifactExpectation,
+  toJobSummaryView,
+  toJobView,
+} from "../../../application/jobs/job-view-mapper.js";
+import type {
+  JobRepositoryPort,
+  JobRevisionState,
+  JobUpdatePatch,
+  StoredJobRecord,
+  StoredJobSummaryRecord,
+} from "../../../domain/ports/job-repository.js";
 import type { SqliteClient } from "../client.js";
+
+export type { JobRevisionState, JobUpdatePatch, StoredJobRecord, StoredJobSummaryRecord };
+export { hasLocalDownloadArtifactExpectation, toJobSummaryView, toJobView };
 
 const MAX_JOBS_PER_USER_AND_KIND = 50;
 
-export function resolveJobArtifactPath(
-  tmpDownloadsDir: string,
-  userId: string,
-  jobId: string,
-): string | null {
-  const root = path.resolve(tmpDownloadsDir);
-  const safeUser = userId.replace(/[^a-zA-Z0-9_-]/g, "");
-  const safeJob = jobId.replace(/[^a-zA-Z0-9_-]/g, "");
-  if (!safeUser || !safeJob) return null;
-  const target = path.resolve(root, safeUser, `${safeJob}.bin`);
-  if (!target.startsWith(root + path.sep)) return null;
-  return target;
-}
-
-export function hasLocalDownloadArtifactExpectation(record: StoredJobRecord): boolean {
-  const isDirectLink = Boolean(record.directUrl) || record.metadata?.mode === "direct_link";
-  const artifactExpired = Boolean(record.metadata?.artifactExpired);
-  return (
-    record.kind === "download" &&
-    record.status === "completed" &&
-    Boolean(record.artifactFilename) &&
-    !isDirectLink &&
-    !artifactExpired
-  );
-}
-
-export interface StoredJobRecord {
-  id: string;
-  userId: string;
-  kind: JobKind;
-  status: JobStatus;
-  progress: number;
-  title: string;
-  subtitle?: string;
-  metadata?: Record<string, unknown>;
-  result?: unknown;
-  errorCode?: ErrorCode;
-  errorMessage?: string;
-  artifactFilename?: string;
-  directUrl?: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-interface RawJobRow {
+interface RawJobSummaryRow {
   id: string;
   user_id: string;
   kind: JobKind;
@@ -58,14 +27,27 @@ interface RawJobRow {
   title: string;
   subtitle: string | null;
   metadata_json: string | null;
-  result_json: string | null;
+  has_result: number;
   error_code: ErrorCode | null;
   error_message: string | null;
   artifact_filename: string | null;
+  artifact_expired: number | null;
   direct_url: string | null;
+  revision: number | null;
   created_at: number;
   updated_at: number;
 }
+
+interface RawJobRow extends Omit<RawJobSummaryRow, "has_result"> {
+  result_json: string | null;
+}
+
+const SUMMARY_SELECT_COLUMNS = `
+  id, user_id, kind, status, progress, title, subtitle, metadata_json,
+  (result_json IS NOT NULL) AS has_result,
+  error_code, error_message, artifact_filename, artifact_expired,
+  direct_url, revision, created_at, updated_at
+`;
 
 function safeParseJson<T>(raw: string | null): T | undefined {
   if (!raw) return undefined;
@@ -76,7 +58,9 @@ function safeParseJson<T>(raw: string | null): T | undefined {
   }
 }
 
-function mapRow(row: RawJobRow): StoredJobRecord {
+function mapSummaryRow(row: RawJobSummaryRow): StoredJobSummaryRecord {
+  const metadata = safeParseJson<Record<string, unknown>>(row.metadata_json);
+  const artifactExpired = Boolean(row.artifact_expired) || Boolean(metadata?.artifactExpired);
   return {
     id: row.id,
     userId: row.user_id,
@@ -85,54 +69,127 @@ function mapRow(row: RawJobRow): StoredJobRecord {
     progress: row.progress,
     title: row.title,
     subtitle: row.subtitle ?? undefined,
-    metadata: safeParseJson<Record<string, unknown>>(row.metadata_json),
-    result: safeParseJson<unknown>(row.result_json),
+    metadata,
+    hasResult: Boolean(row.has_result),
+    revision: Number(row.revision ?? 0) || 0,
     errorCode: row.error_code ?? undefined,
     errorMessage: row.error_message ?? undefined,
     artifactFilename: row.artifact_filename ?? undefined,
+    artifactExpired,
     directUrl: row.direct_url ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-export function toJobView(record: StoredJobRecord): JobView {
-  const artifactExpired = Boolean(record.metadata?.artifactExpired);
-  const isDirectLink = Boolean(record.directUrl) || record.metadata?.mode === "direct_link";
-
+function mapRow(row: RawJobRow): StoredJobRecord {
+  const metadata = safeParseJson<Record<string, unknown>>(row.metadata_json);
+  const result = safeParseJson<unknown>(row.result_json);
+  const artifactExpired = Boolean(row.artifact_expired) || Boolean(metadata?.artifactExpired);
   return {
-    id: record.id,
-    kind: record.kind,
-    status: record.status,
-    progress: record.progress,
-    title: record.title,
-    subtitle: record.subtitle,
-    metadata: record.metadata,
-    result: record.result,
-    errorCode: record.errorCode,
-    errorMessage: record.errorMessage,
-    // J04: Separate local server artifact availability from directUrl / expired artifacts (zero DB migration)
-    downloadReady:
-      record.kind === "download" &&
-      record.status === "completed" &&
-      Boolean(record.artifactFilename) &&
-      !isDirectLink &&
-      !artifactExpired,
-    artifactExpired: artifactExpired || undefined,
-    directUrl: record.directUrl,
-    artifactFilename: record.artifactFilename,
-    createdAt: record.createdAt,
-    updatedAt: record.updatedAt,
+    id: row.id,
+    userId: row.user_id,
+    kind: row.kind,
+    status: row.status,
+    progress: row.progress,
+    title: row.title,
+    subtitle: row.subtitle ?? undefined,
+    metadata,
+    hasResult: row.result_json !== null && result !== undefined,
+    result,
+    revision: Number(row.revision ?? 0) || 0,
+    errorCode: row.error_code ?? undefined,
+    errorMessage: row.error_message ?? undefined,
+    artifactFilename: row.artifact_filename ?? undefined,
+    artifactExpired,
+    directUrl: row.direct_url ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
-export class JobRepository {
-  readonly #sqlite: SqliteClient;
-  readonly #tmpDownloadsDir: string | null;
+function getClearedColumnForKind(kind: JobKind): string {
+  switch (kind) {
+    case "download":
+      return "download_cleared_before_revision";
+    case "transfer":
+      return "transfer_cleared_before_revision";
+    case "import_audit":
+      return "import_audit_cleared_before_revision";
+    case "compare":
+      return "compare_cleared_before_revision";
+  }
+}
 
-  constructor(sqlite: SqliteClient, options?: { tmpDownloadsDir?: string }) {
+export class JobRepository implements JobRepositoryPort {
+  readonly #sqlite: SqliteClient;
+
+  constructor(sqlite: SqliteClient, _options?: { tmpDownloadsDir?: string }) {
     this.#sqlite = sqlite;
-    this.#tmpDownloadsDir = options?.tmpDownloadsDir ? path.resolve(options.tmpDownloadsDir) : null;
+  }
+
+  bumpJobRevision(userId: string): number {
+    return this.#sqlite.transaction(() => {
+      this.#sqlite.db
+        .prepare(
+          `INSERT INTO user_revisions (user_id, job_revision)
+           VALUES (?, 1)
+           ON CONFLICT(user_id) DO UPDATE SET
+             job_revision = user_revisions.job_revision + 1`,
+        )
+        .run(userId);
+      const row = this.#sqlite.db
+        .prepare("SELECT job_revision FROM user_revisions WHERE user_id = ?")
+        .get(userId) as { job_revision: number };
+      return row.job_revision;
+    });
+  }
+
+  getJobRevisionState(userId: string, kind?: JobKind): JobRevisionState {
+    const row = this.#sqlite.db
+      .prepare(
+        `SELECT job_revision, job_cleared_before_revision,
+                download_cleared_before_revision, transfer_cleared_before_revision,
+                import_audit_cleared_before_revision, compare_cleared_before_revision
+         FROM user_revisions
+         WHERE user_id = ?`,
+      )
+      .get(userId) as
+      | {
+          job_revision: number;
+          job_cleared_before_revision: number;
+          download_cleared_before_revision: number;
+          transfer_cleared_before_revision: number;
+          import_audit_cleared_before_revision: number;
+          compare_cleared_before_revision: number;
+        }
+      | undefined;
+
+    if (!row) {
+      return { serverRevision: 0, clearedBeforeRevision: 0 };
+    }
+
+    const serverRevision = row.job_revision;
+    if (!kind) {
+      return {
+        serverRevision,
+        clearedBeforeRevision: row.job_cleared_before_revision,
+      };
+    }
+
+    const kindCleared =
+      kind === "download"
+        ? row.download_cleared_before_revision
+        : kind === "transfer"
+          ? row.transfer_cleared_before_revision
+          : kind === "import_audit"
+            ? row.import_audit_cleared_before_revision
+            : row.compare_cleared_before_revision;
+
+    return {
+      serverRevision,
+      clearedBeforeRevision: Math.max(row.job_cleared_before_revision, kindCleared),
+    };
   }
 
   findRawById(id: string): StoredJobRecord | null {
@@ -142,11 +199,58 @@ export class JobRepository {
     return row ? mapRow(row) : null;
   }
 
+  findRawSummaryById(id: string): StoredJobSummaryRecord | null {
+    const row = this.#sqlite.db
+      .prepare(`SELECT ${SUMMARY_SELECT_COLUMNS} FROM background_jobs WHERE id = ?`)
+      .get(id) as RawJobSummaryRow | undefined;
+    return row ? mapSummaryRow(row) : null;
+  }
+
   findRawOwned(userId: string, id: string): StoredJobRecord | null {
     const row = this.#sqlite.db
       .prepare("SELECT * FROM background_jobs WHERE id = ? AND user_id = ?")
       .get(id, userId) as RawJobRow | undefined;
     return row ? mapRow(row) : null;
+  }
+
+  findRawOwnedSummary(userId: string, id: string): StoredJobSummaryRecord | null {
+    const row = this.#sqlite.db
+      .prepare(`SELECT ${SUMMARY_SELECT_COLUMNS} FROM background_jobs WHERE id = ? AND user_id = ?`)
+      .get(id, userId) as RawJobSummaryRow | undefined;
+    return row ? mapSummaryRow(row) : null;
+  }
+
+  listSummariesByUser(userId: string, kind?: JobKind): StoredJobSummaryRecord[] {
+    const rows = kind
+      ? (this.#sqlite.db
+          .prepare(
+            `SELECT ${SUMMARY_SELECT_COLUMNS}
+             FROM background_jobs
+             WHERE user_id = ? AND kind = ?
+             ORDER BY created_at DESC LIMIT ?`,
+          )
+          .all(userId, kind, MAX_JOBS_PER_USER_AND_KIND) as unknown as RawJobSummaryRow[])
+      : (this.#sqlite.db
+          .prepare(
+            `SELECT ${SUMMARY_SELECT_COLUMNS}
+             FROM background_jobs
+             WHERE user_id = ?
+             ORDER BY created_at DESC LIMIT 100`,
+          )
+          .all(userId) as unknown as RawJobSummaryRow[]);
+
+    return rows.map(mapSummaryRow);
+  }
+
+  listSummariesWithRevision(
+    userId: string,
+    kind?: JobKind,
+  ): { jobs: StoredJobSummaryRecord[]; serverRevision: number; clearedBeforeRevision: number } {
+    return this.#sqlite.transaction(() => {
+      const jobs = this.listSummariesByUser(userId, kind);
+      const { serverRevision, clearedBeforeRevision } = this.getJobRevisionState(userId, kind);
+      return { jobs, serverRevision, clearedBeforeRevision };
+    });
   }
 
   listRawByUser(userId: string, kind?: JobKind): StoredJobRecord[] {
@@ -163,92 +267,70 @@ export class JobRepository {
     return rows.map(mapRow);
   }
 
-  #reconcileMissingArtifact(record: StoredJobRecord): StoredJobRecord {
-    if (!this.#tmpDownloadsDir || !hasLocalDownloadArtifactExpectation(record)) {
-      return record;
-    }
-    const artifactPath = resolveJobArtifactPath(this.#tmpDownloadsDir, record.userId, record.id);
-    let exists = false;
-    if (artifactPath) {
-      try {
-        exists = fs.statSync(artifactPath).isFile();
-      } catch {
-        exists = false;
-      }
-    }
-    if (exists) {
-      return record;
-    }
-
-    const updatedAt = Date.now();
-    const nextMetadata: Record<string, unknown> = {
-      ...(record.metadata ?? {}),
-      artifactExpired: true,
-    };
-    const nextSubtitle = "临时文件已过期，请重新下载";
-    this.#sqlite.db
-      .prepare(
-        `UPDATE background_jobs
-         SET subtitle = ?, metadata_json = ?, updated_at = ?
-         WHERE id = ?`,
-      )
-      .run(nextSubtitle, JSON.stringify(nextMetadata), updatedAt, record.id);
-
-    return {
-      ...record,
-      subtitle: nextSubtitle,
-      metadata: nextMetadata,
-      updatedAt,
-    };
-  }
-
-  listActiveCompletedDownloads(): StoredJobRecord[] {
+  listActiveCompletedDownloads(): StoredJobSummaryRecord[] {
     const rows = this.#sqlite.db
       .prepare(
-        `SELECT * FROM background_jobs
+        `SELECT ${SUMMARY_SELECT_COLUMNS}
+         FROM background_jobs
          WHERE kind = 'download'
            AND status = 'completed'
            AND artifact_filename IS NOT NULL
-           AND direct_url IS NULL`,
+           AND direct_url IS NULL
+           AND artifact_expired = 0`,
       )
-      .all() as unknown as RawJobRow[];
-    return rows.map(mapRow).filter(hasLocalDownloadArtifactExpectation);
+      .all() as unknown as RawJobSummaryRow[];
+    return rows
+      .map(mapSummaryRow)
+      .filter((record) => !record.artifactExpired && record.metadata?.mode !== "direct_link");
   }
 
   /**
    * On server startup, mark any previously queued/running jobs as interrupted so they never hang.
    * Returns recovered jobs so partial temp artifacts can be cleaned up (C021).
    */
-  recoverInterruptedJobs(): Array<{ id: string; userId: string }> {
-    const interrupted = this.#sqlite.db
-      .prepare("SELECT id, user_id FROM background_jobs WHERE status IN ('queued', 'running')")
-      .all() as Array<{ id: string; user_id: string }>;
+  recoverInterruptedJobs(errorMessage?: string): Array<{ id: string; userId: string }> {
+    return this.#sqlite.immediateTransaction(() => {
+      const interrupted = this.#sqlite.db
+        .prepare("SELECT id, user_id FROM background_jobs WHERE status IN ('queued', 'running')")
+        .all() as Array<{ id: string; user_id: string }>;
 
-    if (interrupted.length > 0) {
-      this.#sqlite.db
-        .prepare(
+      if (interrupted.length > 0) {
+        const now = Date.now();
+        const revByUser = new Map<string, number>();
+        for (const row of interrupted) {
+          if (!revByUser.has(row.user_id)) {
+            revByUser.set(row.user_id, this.bumpJobRevision(row.user_id));
+          }
+        }
+        const updateStmt = this.#sqlite.db.prepare(
           `UPDATE background_jobs
            SET status = 'failed',
                error_code = 'INTERNAL_ERROR',
-               error_message = '任务在服务重启前被中断，请重试。',
+               error_message = ?,
+               revision = ?,
                updated_at = ?
-           WHERE status IN ('queued', 'running')`,
-        )
-        .run(Date.now());
-    }
+           WHERE id = ? AND status IN ('queued', 'running')`,
+        );
+        for (const row of interrupted) {
+          updateStmt.run(errorMessage ?? null, revByUser.get(row.user_id) ?? 0, now, row.id);
+        }
+      }
 
-    return interrupted.map((row) => ({ id: row.id, userId: row.user_id }));
+      return interrupted.map((row) => ({ id: row.id, userId: row.user_id }));
+    });
   }
 
-  insert(record: StoredJobRecord): string[] {
-    let evictedIds: string[] = [];
-    this.#sqlite.transaction(() => {
+  insert(record: StoredJobRecord): { evictedIds: string[]; revision: number } {
+    return this.#sqlite.transaction(() => {
+      const revision = this.bumpJobRevision(record.userId);
+      const artifactExpired = Boolean(record.artifactExpired || record.metadata?.artifactExpired);
       this.#sqlite.db
         .prepare(
           `INSERT INTO background_jobs (
             id, user_id, kind, status, progress, title, subtitle, metadata_json, result_json,
-            error_code, error_message, artifact_filename, direct_url, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            error_code, error_message, artifact_filename, artifact_expired, direct_url, revision,
+            created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           record.id,
@@ -263,7 +345,9 @@ export class JobRepository {
           record.errorCode ?? null,
           record.errorMessage ?? null,
           record.artifactFilename ?? null,
+          artifactExpired ? 1 : 0,
           record.directUrl ?? null,
+          revision,
           record.createdAt,
           record.updatedAt,
         );
@@ -283,7 +367,7 @@ export class JobRepository {
         id: string;
       }>;
 
-      evictedIds = evictedRows.map((row) => row.id);
+      const evictedIds = evictedRows.map((row) => row.id);
       if (evictedIds.length > 0) {
         this.#sqlite.db
           .prepare(
@@ -297,102 +381,247 @@ export class JobRepository {
           )
           .run(record.userId, record.kind, record.userId, record.kind, MAX_JOBS_PER_USER_AND_KIND);
       }
+
+      return { evictedIds, revision };
     });
-    return evictedIds;
   }
 
   update(
     id: string,
-    patch: Partial<
-      Pick<
-        StoredJobRecord,
-        | "status"
-        | "progress"
-        | "subtitle"
-        | "metadata"
-        | "result"
-        | "errorCode"
-        | "errorMessage"
-        | "artifactFilename"
-        | "directUrl"
-      >
-    >,
+    patch: JobUpdatePatch,
+    options?: { expectedStatus?: JobStatus | readonly JobStatus[] },
   ): StoredJobRecord | null {
-    const current = this.findRawById(id);
-    if (!current) return null;
+    return this.#sqlite.immediateTransaction(() => {
+      const current = this.findRawSummaryById(id);
+      if (!current) return null;
 
-    const next: StoredJobRecord = {
-      ...current,
-      ...patch,
-      updatedAt: Date.now(),
-    };
+      if (options?.expectedStatus !== undefined) {
+        const allowed = Array.isArray(options.expectedStatus)
+          ? options.expectedStatus
+          : [options.expectedStatus];
+        if (!allowed.includes(current.status)) {
+          return null;
+        }
+      }
 
-    this.#sqlite.db
-      .prepare(
-        `UPDATE background_jobs SET
-           status = ?,
-           progress = ?,
-           subtitle = ?,
-           metadata_json = ?,
-           result_json = ?,
-           error_code = ?,
-           error_message = ?,
-           artifact_filename = ?,
-           direct_url = ?,
-           updated_at = ?
-         WHERE id = ?`,
-      )
-      .run(
-        next.status,
-        next.progress,
-        next.subtitle ?? null,
-        next.metadata ? JSON.stringify(next.metadata) : null,
-        next.result !== undefined ? JSON.stringify(next.result) : null,
-        next.errorCode ?? null,
-        next.errorMessage ?? null,
-        next.artifactFilename ?? null,
-        next.directUrl ?? null,
-        next.updatedAt,
-        id,
-      );
+      const revision = this.bumpJobRevision(current.userId);
+      const hasResultPatch = Object.prototype.hasOwnProperty.call(patch, "result");
+      const nextMetadata = patch.metadata !== undefined ? patch.metadata : current.metadata;
+      const nextArtifactExpired =
+        patch.artifactExpired !== undefined
+          ? patch.artifactExpired
+          : Boolean(current.artifactExpired || nextMetadata?.artifactExpired);
+      const updatedAt = Date.now();
+      const nextStatus = patch.status ?? current.status;
+      const nextProgress = patch.progress ?? current.progress;
+      const nextSubtitle = patch.subtitle !== undefined ? patch.subtitle : current.subtitle;
+      const nextErrorCode = patch.errorCode !== undefined ? patch.errorCode : current.errorCode;
+      const nextErrorMessage = patch.errorMessage !== undefined ? patch.errorMessage : current.errorMessage;
+      const nextArtifactFilename =
+        patch.artifactFilename !== undefined ? patch.artifactFilename : current.artifactFilename;
+      const nextDirectUrl = patch.directUrl !== undefined ? patch.directUrl : current.directUrl;
+      const nextHasResult = hasResultPatch ? patch.result !== undefined : current.hasResult;
 
-    return next;
+      if (hasResultPatch) {
+        this.#sqlite.db
+          .prepare(
+            `UPDATE background_jobs SET
+               status = ?,
+               progress = ?,
+               subtitle = ?,
+               metadata_json = ?,
+               result_json = ?,
+               error_code = ?,
+               error_message = ?,
+               artifact_filename = ?,
+               artifact_expired = ?,
+               direct_url = ?,
+               revision = ?,
+               updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(
+            nextStatus,
+            nextProgress,
+            nextSubtitle ?? null,
+            nextMetadata ? JSON.stringify(nextMetadata) : null,
+            patch.result !== undefined ? JSON.stringify(patch.result) : null,
+            nextErrorCode ?? null,
+            nextErrorMessage ?? null,
+            nextArtifactFilename ?? null,
+            nextArtifactExpired ? 1 : 0,
+            nextDirectUrl ?? null,
+            revision,
+            updatedAt,
+            id,
+          );
+      } else {
+        this.#sqlite.db
+          .prepare(
+            `UPDATE background_jobs SET
+               status = ?,
+               progress = ?,
+               subtitle = ?,
+               metadata_json = ?,
+               error_code = ?,
+               error_message = ?,
+               artifact_filename = ?,
+               artifact_expired = ?,
+               direct_url = ?,
+               revision = ?,
+               updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(
+            nextStatus,
+            nextProgress,
+            nextSubtitle ?? null,
+            nextMetadata ? JSON.stringify(nextMetadata) : null,
+            nextErrorCode ?? null,
+            nextErrorMessage ?? null,
+            nextArtifactFilename ?? null,
+            nextArtifactExpired ? 1 : 0,
+            nextDirectUrl ?? null,
+            revision,
+            updatedAt,
+            id,
+          );
+      }
+
+      return {
+        ...current,
+        status: nextStatus,
+        progress: nextProgress,
+        subtitle: nextSubtitle,
+        metadata: nextMetadata,
+        hasResult: nextHasResult,
+        ...(hasResultPatch ? { result: patch.result } : {}),
+        errorCode: nextErrorCode,
+        errorMessage: nextErrorMessage,
+        artifactFilename: nextArtifactFilename,
+        artifactExpired: nextArtifactExpired,
+        directUrl: nextDirectUrl,
+        revision,
+        updatedAt,
+      };
+    });
+  }
+
+  mutateOwnedResult<TResult = unknown>(
+    userId: string,
+    jobId: string,
+    mutator: (record: StoredJobRecord) => { result: TResult; subtitle?: string },
+  ): StoredJobRecord | null {
+    return this.#sqlite.immediateTransaction(() => {
+      const row = this.#sqlite.db
+        .prepare("SELECT * FROM background_jobs WHERE id = ? AND user_id = ?")
+        .get(jobId, userId) as RawJobRow | undefined;
+      if (!row) return null;
+
+      const current = mapRow(row);
+      const mutated = mutator(current);
+      const revision = this.bumpJobRevision(userId);
+      const updatedAt = Date.now();
+      const nextSubtitle = mutated.subtitle !== undefined ? mutated.subtitle : current.subtitle;
+
+      this.#sqlite.db
+        .prepare(
+          `UPDATE background_jobs
+           SET result_json = ?,
+               subtitle = ?,
+               revision = ?,
+               updated_at = ?
+           WHERE id = ? AND user_id = ?`,
+        )
+        .run(
+          mutated.result !== undefined ? JSON.stringify(mutated.result) : null,
+          nextSubtitle ?? null,
+          revision,
+          updatedAt,
+          jobId,
+          userId,
+        );
+
+      return {
+        ...current,
+        result: mutated.result,
+        hasResult: mutated.result !== undefined,
+        subtitle: nextSubtitle,
+        revision,
+        updatedAt,
+      };
+    });
   }
 
   findById(id: string): StoredJobRecord | null {
-    const record = this.findRawById(id);
-    return record ? this.#reconcileMissingArtifact(record) : null;
+    return this.findRawById(id);
   }
 
   findOwned(userId: string, id: string): StoredJobRecord | null {
-    const record = this.findRawOwned(userId, id);
-    return record ? this.#reconcileMissingArtifact(record) : null;
+    return this.findRawOwned(userId, id);
   }
 
   listByUser(userId: string, kind?: JobKind): StoredJobRecord[] {
-    return this.listRawByUser(userId, kind).map((record) => this.#reconcileMissingArtifact(record));
+    return this.listRawByUser(userId, kind);
   }
 
-  clearFinished(userId: string, kind?: JobKind): string[] {
-    const selectSql = kind
-      ? "SELECT id FROM background_jobs WHERE user_id = ? AND kind = ? AND status IN ('completed', 'failed', 'cancelled')"
-      : "SELECT id FROM background_jobs WHERE user_id = ? AND status IN ('completed', 'failed', 'cancelled')";
-    const rows = (
-      kind
-        ? this.#sqlite.db.prepare(selectSql).all(userId, kind)
-        : this.#sqlite.db.prepare(selectSql).all(userId)
-    ) as Array<{ id: string }>;
+  clearFinished(
+    userId: string,
+    kind?: JobKind,
+  ): { removedIds: string[]; serverRevision: number; clearedBeforeRevision: number } {
+    return this.#sqlite.immediateTransaction(() => {
+      const selectSql = kind
+        ? "SELECT id FROM background_jobs WHERE user_id = ? AND kind = ? AND status IN ('completed', 'failed', 'cancelled')"
+        : "SELECT id FROM background_jobs WHERE user_id = ? AND status IN ('completed', 'failed', 'cancelled')";
+      const rows = (
+        kind
+          ? this.#sqlite.db.prepare(selectSql).all(userId, kind)
+          : this.#sqlite.db.prepare(selectSql).all(userId)
+      ) as Array<{ id: string }>;
 
-    if (rows.length === 0) return [];
+      if (rows.length === 0) {
+        const state = this.getJobRevisionState(userId, kind);
+        return {
+          removedIds: [],
+          serverRevision: state.serverRevision,
+          clearedBeforeRevision: state.clearedBeforeRevision,
+        };
+      }
 
-    const deleteSql = kind
-      ? "DELETE FROM background_jobs WHERE user_id = ? AND kind = ? AND status IN ('completed', 'failed', 'cancelled')"
-      : "DELETE FROM background_jobs WHERE user_id = ? AND status IN ('completed', 'failed', 'cancelled')";
-    if (kind) {
-      this.#sqlite.db.prepare(deleteSql).run(userId, kind);
-    } else {
-      this.#sqlite.db.prepare(deleteSql).run(userId);
-    }
-    return rows.map((r) => r.id);
+      const deleteSql = kind
+        ? "DELETE FROM background_jobs WHERE user_id = ? AND kind = ? AND status IN ('completed', 'failed', 'cancelled')"
+        : "DELETE FROM background_jobs WHERE user_id = ? AND status IN ('completed', 'failed', 'cancelled')";
+      if (kind) {
+        this.#sqlite.db.prepare(deleteSql).run(userId, kind);
+      } else {
+        this.#sqlite.db.prepare(deleteSql).run(userId);
+      }
+
+      const nextRev = this.bumpJobRevision(userId);
+      if (kind) {
+        const col = getClearedColumnForKind(kind);
+        this.#sqlite.db
+          .prepare(`UPDATE user_revisions SET ${col} = ? WHERE user_id = ?`)
+          .run(nextRev, userId);
+      } else {
+        this.#sqlite.db
+          .prepare(
+            `UPDATE user_revisions
+             SET job_cleared_before_revision = ?,
+                 download_cleared_before_revision = ?,
+                 transfer_cleared_before_revision = ?,
+                 import_audit_cleared_before_revision = ?,
+                 compare_cleared_before_revision = ?
+             WHERE user_id = ?`,
+          )
+          .run(nextRev, nextRev, nextRev, nextRev, nextRev, userId);
+      }
+
+      return {
+        removedIds: rows.map((r) => r.id),
+        serverRevision: nextRev,
+        clearedBeforeRevision: nextRev,
+      };
+    });
   }
 }

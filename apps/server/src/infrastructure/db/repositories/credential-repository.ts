@@ -21,6 +21,26 @@ interface RawFallbackRow {
   updated_at: number;
 }
 
+export interface ResolvedBindingCredential {
+  readonly view: PlatformBindingView;
+  readonly cookie: string | null;
+}
+
+const CORRUPTED_CREDENTIAL_MESSAGE = "已保存的平台凭据解密失败，请重新绑定。";
+
+function emptyBindingView(platform: MusicPlatform): PlatformBindingView {
+  return {
+    platform,
+    connected: false,
+    accountUid: null,
+    displayName: null,
+    avatarUrl: null,
+    vipEnabled: false,
+    vipExpireAt: null,
+    verifiedAt: null,
+  };
+}
+
 export class CredentialRepository {
   readonly #sqlite: SqliteClient;
   readonly #vault: CredentialVault;
@@ -28,6 +48,68 @@ export class CredentialRepository {
   constructor(sqlite: SqliteClient, vault: CredentialVault) {
     this.#sqlite = sqlite;
     this.#vault = vault;
+  }
+
+  #resolveRow(userId: string, platform: MusicPlatform, row?: RawBindingRow): ResolvedBindingCredential {
+    if (!row) {
+      return { view: emptyBindingView(platform), cookie: null };
+    }
+
+    if (!row.encrypted_cookie) {
+      console.warn(`[CredentialRepository] Empty encrypted_cookie for ${platform} (user ${userId})`);
+      return {
+        view: {
+          platform: row.platform,
+          connected: false,
+          accountUid: null,
+          displayName: row.display_name,
+          avatarUrl: row.avatar_url,
+          vipEnabled: false,
+          vipExpireAt: null,
+          verifiedAt: row.verified_at,
+          credentialCorrupted: true,
+          message: CORRUPTED_CREDENTIAL_MESSAGE,
+        },
+        cookie: null,
+      };
+    }
+
+    try {
+      const cookie = this.#vault.decrypt(row.encrypted_cookie);
+      return {
+        view: {
+          platform: row.platform,
+          connected: true,
+          accountUid: row.account_uid,
+          displayName: row.display_name,
+          avatarUrl: row.avatar_url,
+          vipEnabled: Boolean(row.vip_enabled),
+          vipExpireAt: row.vip_expire_at,
+          verifiedAt: row.verified_at,
+        },
+        cookie,
+      };
+    } catch (error) {
+      console.warn(
+        `[CredentialRepository] Failed to decrypt ${platform} credential for user ${userId}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+      return {
+        view: {
+          platform: row.platform,
+          connected: false,
+          accountUid: null,
+          displayName: row.display_name,
+          avatarUrl: row.avatar_url,
+          vipEnabled: false,
+          vipExpireAt: null,
+          verifiedAt: row.verified_at,
+          credentialCorrupted: true,
+          message: CORRUPTED_CREDENTIAL_MESSAGE,
+        },
+        cookie: null,
+      };
+    }
   }
 
   saveBinding(
@@ -90,40 +172,34 @@ export class CredentialRepository {
       .run(userId, platform);
   }
 
-  getBindingView(userId: string, platform: MusicPlatform): PlatformBindingView {
+  /**
+   * Single-query reader returning both the desensitized binding view and the decrypted cookie
+   * (or flagging `credentialCorrupted: true` when master-key decryption fails).
+   */
+  resolveBindingWithCookie(userId: string, platform: MusicPlatform): ResolvedBindingCredential {
     const row = this.#sqlite.db
       .prepare("SELECT * FROM platform_credentials WHERE user_id = ? AND platform = ?")
       .get(userId, platform) as RawBindingRow | undefined;
+    return this.#resolveRow(userId, platform, row);
+  }
 
-    if (!row) {
-      return {
-        platform,
-        connected: false,
-        accountUid: null,
-        displayName: null,
-        avatarUrl: null,
-        vipEnabled: false,
-        vipExpireAt: null,
-        verifiedAt: null,
-      };
-    }
-
-    return {
-      platform: row.platform,
-      connected: true,
-      accountUid: row.account_uid,
-      displayName: row.display_name,
-      avatarUrl: row.avatar_url,
-      vipEnabled: Boolean(row.vip_enabled),
-      vipExpireAt: row.vip_expire_at,
-      verifiedAt: row.verified_at,
-    };
+  getBindingView(userId: string, platform: MusicPlatform): PlatformBindingView {
+    return this.resolveBindingWithCookie(userId, platform).view;
   }
 
   listBindingViews(userId: string): Record<MusicPlatform, PlatformBindingView> {
+    const rows = this.#sqlite.db
+      .prepare("SELECT * FROM platform_credentials WHERE user_id = ?")
+      .all(userId) as unknown as RawBindingRow[];
+
+    const byPlatform = new Map<MusicPlatform, RawBindingRow>();
+    for (const row of rows) {
+      byPlatform.set(row.platform, row);
+    }
+
     return {
-      netease: this.getBindingView(userId, "netease"),
-      qq: this.getBindingView(userId, "qq"),
+      netease: this.#resolveRow(userId, "netease", byPlatform.get("netease")).view,
+      qq: this.#resolveRow(userId, "qq", byPlatform.get("qq")).view,
     };
   }
 
@@ -131,16 +207,7 @@ export class CredentialRepository {
    * Server-internal only: decrypts the stored platform cookie for outbound API calls.
    */
   getDecryptedCookie(userId: string, platform: MusicPlatform): string | null {
-    const row = this.#sqlite.db
-      .prepare("SELECT encrypted_cookie FROM platform_credentials WHERE user_id = ? AND platform = ?")
-      .get(userId, platform) as { encrypted_cookie: string } | undefined;
-
-    if (!row?.encrypted_cookie) return null;
-    try {
-      return this.#vault.decrypt(row.encrypted_cookie);
-    } catch {
-      return null;
-    }
+    return this.resolveBindingWithCookie(userId, platform).cookie;
   }
 
   getSystemFallbackView(platform: MusicPlatform): SystemFallbackView {
@@ -211,7 +278,11 @@ export class CredentialRepository {
     if (!row || !row.enabled || !row.encrypted_cookie) return null;
     try {
       return this.#vault.decrypt(row.encrypted_cookie);
-    } catch {
+    } catch (error) {
+      console.warn(
+        `[CredentialRepository] Failed to decrypt system fallback credential for ${platform}:`,
+        error instanceof Error ? error.message : String(error),
+      );
       return null;
     }
   }

@@ -23,70 +23,30 @@ import type {
   ProviderAuthContext,
   ProviderRegistry,
 } from "../../domain/ports/music-provider.js";
-import type { CredentialRepository } from "../../infrastructure/db/repositories/credential-repository.js";
 import type { UserStateRepository } from "../../infrastructure/db/repositories/user-state-repository.js";
+import type { ProviderAuthResolver } from "../auth/provider-auth-resolver.js";
 
 export class CatalogService {
   readonly #providers: ProviderRegistry;
-  readonly #credentials: CredentialRepository;
+  readonly #authResolver: ProviderAuthResolver;
   readonly #userState: UserStateRepository;
 
   constructor(deps: {
     providers: ProviderRegistry;
-    credentials: CredentialRepository;
+    authResolver: ProviderAuthResolver;
     userState: UserStateRepository;
   }) {
     this.#providers = deps.providers;
-    this.#credentials = deps.credentials;
+    this.#authResolver = deps.authResolver;
     this.#userState = deps.userState;
   }
 
-  /**
-   * Strictly personal auth context — NEVER falls back to admin/system credentials.
-   * Used for private reads (user playlists, cloud disk, FM, daily recommend, likes) and all write operations.
-   */
   #buildPersonalAuth(actor: ActorContext, platform: MusicPlatform): ProviderAuthContext {
-    const binding = this.#credentials.getBindingView(actor.userId, platform);
-    return {
-      platform,
-      cookie: this.#credentials.getDecryptedCookie(actor.userId, platform),
-      scopeKey: actor.userId,
-      accountUid: binding.accountUid,
-    };
+    return this.#authResolver.buildPersonalAuth(actor, platform);
   }
 
-  /**
-   * C015: Read-only public catalog auth context.
-   * Allows trustedFallback members without their own binding to use system fallback ONLY for public read queries.
-   */
   #buildPublicReadAuth(actor: ActorContext, platform: MusicPlatform): ProviderAuthContext {
-    const personalCookie = this.#credentials.getDecryptedCookie(actor.userId, platform);
-    if (personalCookie) {
-      const binding = this.#credentials.getBindingView(actor.userId, platform);
-      return {
-        platform,
-        cookie: personalCookie,
-        scopeKey: actor.userId,
-        accountUid: binding.accountUid,
-      };
-    }
-    if (actor.trustedFallback) {
-      const fallbackCookie = this.#credentials.getDecryptedSystemFallbackCookie(platform);
-      if (fallbackCookie) {
-        return {
-          platform,
-          cookie: fallbackCookie,
-          scopeKey: "system-fallback",
-          accountUid: null,
-        };
-      }
-    }
-    return {
-      platform,
-      cookie: null,
-      scopeKey: actor.userId,
-      accountUid: null,
-    };
+    return this.#authResolver.buildPublicReadAuth(actor, platform);
   }
 
   async search(
@@ -314,14 +274,6 @@ export class CatalogService {
     return adapter.getDailyRecommendTracks(this.#buildPersonalAuth(actor, "netease"));
   }
 
-  async getCloudTracks(actor: ActorContext): Promise<Song[]> {
-    const adapter = this.#providers.get("netease");
-    if (!adapter.getCloudTracks) {
-      throw new AppError("FEATURE_UNSUPPORTED", "暂不支持云盘音乐。");
-    }
-    return adapter.getCloudTracks(this.#buildPersonalAuth(actor, "netease"));
-  }
-
   async getCloudTracksPage(
     actor: ActorContext,
     options?: { offset?: number; limit?: number },
@@ -425,12 +377,6 @@ export class CatalogService {
       throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持评论点赞。`);
     }
     return adapter.setCommentLiked(songId, commentId, liked, this.#buildPersonalAuth(actor, platform));
-  }
-
-  async isSongLiked(actor: ActorContext, platform: MusicPlatform, songId: string): Promise<boolean> {
-    const adapter = this.#providers.get(platform);
-    if (!adapter.isSongLiked) return false;
-    return adapter.isSongLiked(songId, this.#buildPersonalAuth(actor, platform));
   }
 
   async toggleSongLike(

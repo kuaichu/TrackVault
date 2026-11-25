@@ -8,6 +8,7 @@ export const SESSION_COOKIE_NAME = "tv_session";
 declare module "fastify" {
   interface FastifyRequest {
     actor: ActorContext | null;
+    sessionTokenHash: string | null;
   }
 }
 

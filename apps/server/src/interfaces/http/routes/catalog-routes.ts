@@ -192,12 +192,6 @@ export function registerCatalogRoutes(
     return { ids: await catalogService.getLikedSongIds(actor, params.platform) };
   });
 
-  app.get("/api/likes/:platform/:id", async (request) => {
-    const actor = requireActor(request);
-    const params = z.object({ platform: MusicPlatformSchema, id: z.string().min(1) }).parse(request.params);
-    return { liked: await catalogService.isSongLiked(actor, params.platform, params.id) };
-  });
-
   app.post("/api/likes/:platform/:id", async (request) => {
     const actor = requireActor(request);
     const params = z.object({ platform: MusicPlatformSchema, id: z.string().min(1) }).parse(request.params);

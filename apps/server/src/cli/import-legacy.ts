@@ -254,18 +254,18 @@ export function importLegacyHistory(options: {
         ts: number | null;
       }>;
 
+      const searchEntries: Array<{ keyword: string; updatedAt?: number }> = [];
       for (const row of searchRows) {
         if (typeof row.keyword === "string" && row.keyword.trim()) {
-          userStateRepo.addSearchHistory(
-            user.id,
-            row.keyword,
-            typeof row.ts === "number" && row.ts > 0 ? row.ts : undefined,
-          );
-          importedSearch += 1;
+          searchEntries.push({
+            keyword: row.keyword,
+            updatedAt: typeof row.ts === "number" && row.ts > 0 ? row.ts : undefined,
+          });
         } else {
           skippedSearch += 1;
         }
       }
+      importedSearch = userStateRepo.importSearchHistoryBatch(user.id, searchEntries);
     }
 
     let importedPlay = 0;
@@ -285,17 +285,16 @@ export function importLegacyHistory(options: {
         ts: number | null;
       }>;
 
+      const playEntries: Array<{ song: Song; playedAt?: number }> = [];
       for (const row of playRows) {
         try {
           const raw = JSON.parse(row.song_json) as Record<string, unknown>;
           const mapped = mapLegacySong(raw);
           if (mapped) {
-            userStateRepo.recordPlayHistory(
-              user.id,
-              mapped,
-              typeof row.ts === "number" && row.ts > 0 ? row.ts : undefined,
-            );
-            importedPlay += 1;
+            playEntries.push({
+              song: mapped,
+              playedAt: typeof row.ts === "number" && row.ts > 0 ? row.ts : undefined,
+            });
           } else {
             skippedPlay += 1;
           }
@@ -303,6 +302,7 @@ export function importLegacyHistory(options: {
           skippedPlay += 1;
         }
       }
+      importedPlay = userStateRepo.importPlayHistoryBatch(user.id, playEntries);
     }
 
     return {

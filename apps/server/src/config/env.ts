@@ -1,11 +1,20 @@
 import path from "node:path";
 import { z } from "zod";
 
+export type SqliteJournalMode = "WAL" | "TRUNCATE" | "DELETE";
+
+const SqliteJournalModeSchema = z
+  .string()
+  .trim()
+  .transform((value) => value.toUpperCase())
+  .pipe(z.enum(["WAL", "TRUNCATE", "DELETE"]));
+
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   HOST: z.string().trim().min(1).default("127.0.0.1"),
   PORT: z.coerce.number().int().min(0).max(65535).default(3010),
   DATA_DIR: z.string().trim().min(1).default("data"),
+  SQLITE_JOURNAL_MODE: SqliteJournalModeSchema.default("WAL"),
   ALLOWED_ORIGINS: z
     .string()
     .default("http://localhost:5173,http://127.0.0.1:5173,http://localhost:3010,http://127.0.0.1:3010"),
@@ -37,6 +46,7 @@ export interface ServerConfig {
   port: number;
   dataDir: string;
   dbPath: string;
+  sqliteJournalMode: SqliteJournalMode;
   tmpDownloadsDir: string;
   allowedOrigins: string[];
   masterKey?: string;
@@ -75,6 +85,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     port: parsed.PORT,
     dataDir,
     dbPath: path.join(dataDir, "trackvault-v2.db"),
+    sqliteJournalMode: parsed.SQLITE_JOURNAL_MODE,
     tmpDownloadsDir: path.join(dataDir, "tmp-downloads"),
     allowedOrigins,
     masterKey: parsed.TRACKVAULT_MASTER_KEY || undefined,

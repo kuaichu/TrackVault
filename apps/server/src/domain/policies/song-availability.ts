@@ -99,7 +99,14 @@ export interface QqPrivilegeInput {
   tryEnd?: number | string | null;
 }
 
-export function evaluateQqAvailability(input: QqPrivilegeInput): SongAvailability | undefined {
+export interface QqAvailabilityOptions {
+  vipEnabled?: boolean;
+}
+
+export function evaluateQqAvailability(
+  input: QqPrivilegeInput,
+  options?: QqAvailabilityOptions,
+): SongAvailability | undefined {
   const actionSwitch = parseOptionalNumber(input.actionSwitch);
   const payPlay = parseOptionalNumber(input.payPlay);
   const payDownload = parseOptionalNumber(input.payDownload);
@@ -121,18 +128,33 @@ export function evaluateQqAvailability(input: QqPrivilegeInput): SongAvailabilit
   const isVipPlay = payPlay !== null && payPlay > 0;
   const isVipDown = (payDownload !== null && payDownload > 0) || isVipPlay;
   const hasTrialHint = tryEnd !== null && tryEnd > 0;
+  const nonVipKnown = options?.vipEnabled === false;
+
+  const playbackLocked = nonVipKnown && (isVipPlay || hasTrialHint);
+  const downloadLocked = nonVipKnown && (isVipDown || hasTrialHint);
 
   return {
-    playback: isVipPlay
-      ? {
-          status: "vip",
-          locked: false,
-          label: hasTrialHint ? "绿钻 / 试听" : "绿钻 VIP",
-          reason: "需要 QQ 音乐绿钻 VIP 播放完整版。",
-        }
-      : { status: "available", locked: false, label: "可播放", reason: "可正常播放。" },
-    download: isVipDown
-      ? { status: "vip", locked: false, label: "绿钻 VIP", reason: "需要 QQ 音乐绿钻 VIP 下载。" }
-      : { status: "available", locked: false, label: "可下载", reason: "支持下载。" },
+    playback:
+      isVipPlay || playbackLocked
+        ? {
+            status: "vip",
+            locked: playbackLocked,
+            label: hasTrialHint ? "绿钻 / 试听" : "绿钻 VIP",
+            reason: playbackLocked
+              ? "当前 QQ 音乐账号未开通绿钻 VIP，无法播放完整版。"
+              : "需要 QQ 音乐绿钻 VIP 播放完整版。",
+          }
+        : { status: "available", locked: false, label: "可播放", reason: "可正常播放。" },
+    download:
+      isVipDown || downloadLocked
+        ? {
+            status: "vip",
+            locked: downloadLocked,
+            label: "绿钻 VIP",
+            reason: downloadLocked
+              ? "当前 QQ 音乐账号未开通绿钻 VIP，无法下载完整版。"
+              : "需要 QQ 音乐绿钻 VIP 下载。",
+          }
+        : { status: "available", locked: false, label: "可下载", reason: "支持下载。" },
   };
 }

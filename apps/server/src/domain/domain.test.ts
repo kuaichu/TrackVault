@@ -6,13 +6,7 @@ import {
   evaluateQqAvailability,
   parseOptionalNumber,
 } from "./policies/song-availability.js";
-import {
-  buildTransferDedupKey,
-  comparePlaylistsAsync,
-  hasArtistOverlap,
-  matchTransferTrack,
-  normalizeMatchText,
-} from "./transfer/matcher.js";
+import { comparePlaylistsAsync } from "./transfer/playlist-comparator.js";
 import {
   formatImportAuditExport,
   formatTransferExport,
@@ -21,6 +15,8 @@ import {
   parseTextPlaylist,
   parseTextPlaylistWithStats,
 } from "./transfer/text-and-csv.js";
+import { matchTransferTrack } from "./transfer/track-matcher.js";
+import { buildTransferDedupKey, hasArtistOverlap, normalizeMatchText } from "./transfer/track-normalizer.js";
 
 test("parseOptionalNumber distinguishes null and empty string from 0", () => {
   assert.equal(parseOptionalNumber(null), null);

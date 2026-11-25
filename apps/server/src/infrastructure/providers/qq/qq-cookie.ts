@@ -1,3 +1,7 @@
+import { AppError } from "../../../domain/errors.js";
+import type { ProviderAuthContext } from "../../../domain/ports/music-provider.js";
+import { parseCookieEntries, serializeCookieMap } from "../common/cookie-parser.js";
+
 const ESSENTIAL_QQ_COOKIE_KEYS = new Set([
   "uin",
   "wxuin",
@@ -16,38 +20,14 @@ const ESSENTIAL_QQ_COOKIE_KEYS = new Set([
 ]);
 
 /**
- * Single canonical QQ cookie parser supporting "Cookie:" prefixes, ";" separators, line breaks, and Base64 values containing "=".
+ * Single canonical QQ cookie parser supporting "Cookie:" prefixes, ";" separators,
+ * line breaks, Set-Cookie attribute filtering, and Base64 values containing "=".
  */
 export function parseQqCookie(raw: string): Record<string, string> {
+  const entries = parseCookieEntries(raw, { allowColonSeparator: true, stripQuotes: true });
   const map: Record<string, string> = {};
-  const cleanedRaw = raw
-    .split(/\r?\n+/)
-    .map((line) => line.trim().replace(/^cookie\s*:\s*/i, ""))
-    .filter(Boolean)
-    .join("; ");
-
-  const parts = cleanedRaw
-    .split(/;\s*/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-
-  for (const part of parts) {
-    const eqIndex = part.indexOf("=");
-    const colonIndex = part.indexOf(":");
-    const sep = eqIndex >= 0 ? eqIndex : colonIndex;
-    if (sep <= 0) continue;
-
-    const key = part
-      .slice(0, sep)
-      .trim()
-      .replace(/^"+|"+$/g, "");
-    const value = part
-      .slice(sep + 1)
-      .trim()
-      .replace(/^"+|"+$/g, "");
-    if (key && value) {
-      map[key] = value;
-    }
+  for (const [key, value] of entries.entries()) {
+    map[key] = value;
   }
 
   if (Number(map.login_type) === 2 && map.wxuin) {
@@ -74,10 +54,7 @@ export function extractEssentialQqCookie(raw: string): Record<string, string> {
 }
 
 export function serializeQqCookie(cookieMap: Record<string, string>): string {
-  return Object.entries(cookieMap)
-    .filter(([, value]) => Boolean(value))
-    .map(([key, value]) => `${key}=${value}`)
-    .join("; ");
+  return serializeCookieMap(cookieMap);
 }
 
 /**
@@ -99,4 +76,18 @@ export function computeQqGtk(cookieMap: Record<string, string>): number {
     hash += (hash << 5) + key.charCodeAt(i);
   }
   return hash & 0x7fffffff;
+}
+
+export function parseQqAuthCookie(auth: ProviderAuthContext): Record<string, string> | undefined {
+  if (!auth.cookie?.trim()) return undefined;
+  const parsed = parseQqCookie(auth.cookie);
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
+}
+
+export function requireQqAuthCookie(auth: ProviderAuthContext): Record<string, string> {
+  const parsed = parseQqAuthCookie(auth);
+  if (!parsed?.uin || !(parsed.qm_keyst || parsed.qqmusic_key)) {
+    throw new AppError("CREDENTIAL_REQUIRED", "请先绑定有效的 QQ 音乐账号凭证。");
+  }
+  return parsed;
 }

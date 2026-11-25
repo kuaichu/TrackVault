@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
@@ -10,18 +9,15 @@ import {
   StartTransferInputSchema,
   UpdateTransferSelectionInputSchema,
 } from "#shared";
+import {
+  SessionEventHub,
+  type SseConnectionRegistry,
+} from "../../../application/events/session-event-hub.js";
 import type { BackgroundJobManager } from "../../../application/jobs/background-job-manager.js";
 import type { TransferService } from "../../../application/transfer/transfer-service.js";
 import { AppError } from "../../../domain/errors.js";
-import { toJobView } from "../../../infrastructure/db/repositories/job-repository.js";
-import { requireActor } from "../auth-plugin.js";
-
-const MAX_SSE_CONNECTIONS_PER_USER = 8;
-
-export interface SseConnectionRegistry {
-  closeUserConnections(userId: string): void;
-  closeAllConnections(): void;
-}
+import { hashSessionToken } from "../../../infrastructure/security/password.js";
+import { SESSION_COOKIE_NAME, requireActor } from "../auth-plugin.js";
 
 function buildContentDisposition(filename: string): string {
   const asciiFallback = filename.replace(/[^\x20-\x7E]/g, "_").replace(/["\\]/g, "_");
@@ -33,39 +29,25 @@ export function registerTransferAndJobRoutes(
   deps: {
     jobs: BackgroundJobManager;
     transferService: TransferService;
+    sseRegistry?: SseConnectionRegistry;
     isAllowedOrigin: (origin: string, request: FastifyRequest) => boolean;
   },
 ): SseConnectionRegistry {
   const { jobs, transferService, isAllowedOrigin } = deps;
-  const activeSseByUser = new Map<string, Set<() => void>>();
-
-  const closeUserConnections = (userId: string) => {
-    const set = activeSseByUser.get(userId);
-    if (!set) return;
-    for (const closeFn of [...set]) {
-      closeFn();
-    }
-    activeSseByUser.delete(userId);
-  };
-
-  const closeAllConnections = () => {
-    for (const userId of [...activeSseByUser.keys()]) {
-      closeUserConnections(userId);
-    }
-  };
+  const sseRegistry = deps.sseRegistry ?? new SessionEventHub();
 
   // --- Unified Owner-Scoped Background Jobs ---
 
   app.get("/api/jobs", async (request) => {
     const actor = requireActor(request);
     const query = z.object({ kind: JobKindSchema.optional() }).parse(request.query);
-    return { jobs: jobs.listForActor(actor, query.kind) };
+    return jobs.listForActorWithRevision(actor, query.kind);
   });
 
   app.get("/api/jobs/:id", async (request) => {
     const actor = requireActor(request);
     const { id } = z.object({ id: z.string().min(1) }).parse(request.params);
-    return { job: toJobView(jobs.getOwnedJob(actor, id)) };
+    return { job: jobs.getOwnedJobView(actor, id) };
   });
 
   app.post("/api/jobs/:id/cancel", async (request) => {
@@ -77,31 +59,25 @@ export function registerTransferAndJobRoutes(
   app.delete("/api/jobs/finished", async (request) => {
     const actor = requireActor(request);
     const query = z.object({ kind: JobKindSchema.optional() }).parse(request.query);
-    return { removedCount: jobs.clearFinished(actor, query.kind) };
+    return jobs.clearFinishedWithRevision(actor, query.kind);
   });
 
   app.get("/api/jobs/:id/file", async (request, reply) => {
     const actor = requireActor(request);
     const { id } = z.object({ id: z.string().min(1) }).parse(request.params);
-    const { filePath, downloadFilename } = await jobs.resolveOwnedArtifactFile(actor, id);
-    let stat: fs.Stats;
-    try {
-      stat = await fs.promises.stat(filePath);
-    } catch {
-      throw new AppError("NOT_FOUND", "下载文件已过期清理，请重新下载。");
-    }
+    const { fileHandle, downloadFilename, sizeBytes } = await jobs.openOwnedArtifactFile(actor, id);
 
-    const readStream = fs.createReadStream(filePath);
-    readStream.on("error", () => {
-      if (!reply.raw.headersSent) {
-        reply.raw.statusCode = 404;
-      }
-      reply.raw.end();
-    });
+    let readStream: ReturnType<typeof fileHandle.createReadStream>;
+    try {
+      readStream = fileHandle.createReadStream();
+    } catch (error) {
+      await fileHandle.close().catch(() => undefined);
+      throw error;
+    }
 
     return reply
       .header("Content-Type", "application/octet-stream")
-      .header("Content-Length", String(stat.size))
+      .header("Content-Length", String(sizeBytes))
       .header("Content-Disposition", buildContentDisposition(downloadFilename))
       .header("Cache-Control", "no-store")
       .send(readStream);
@@ -134,15 +110,11 @@ export function registerTransferAndJobRoutes(
       reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
     };
 
-    const userConns = activeSseByUser.get(actor.userId) ?? new Set<() => void>();
-    activeSseByUser.set(actor.userId, userConns);
-    while (userConns.size >= MAX_SSE_CONNECTIONS_PER_USER) {
-      const oldestClose = userConns.values().next().value;
-      if (!oldestClose) break;
-      oldestClose();
-    }
+    const rawToken = request.cookies?.[SESSION_COOKIE_NAME];
+    const sessionTokenHash = request.sessionTokenHash ?? (rawToken ? hashSessionToken(rawToken) : null);
 
     let closed = false;
+    let unregister = () => {};
     const unsubscribe = jobs.subscribe(actor.userId, writeEvent);
     const heartbeat = setInterval(() => {
       writeEvent({ type: "heartbeat", timestamp: Date.now() });
@@ -154,16 +126,17 @@ export function registerTransferAndJobRoutes(
       closed = true;
       clearInterval(heartbeat);
       unsubscribe();
-      userConns.delete(closeConnection);
-      if (userConns.size === 0) {
-        activeSseByUser.delete(actor.userId);
-      }
+      unregister();
       if (!reply.raw.writableEnded) {
         reply.raw.end();
       }
     };
 
-    userConns.add(closeConnection);
+    unregister = sseRegistry.register({
+      userId: actor.userId,
+      sessionTokenHash,
+      close: closeConnection,
+    });
     writeEvent({ type: "heartbeat", timestamp: Date.now() });
     request.raw.once("close", closeConnection);
   });
@@ -236,8 +209,5 @@ export function registerTransferAndJobRoutes(
     return transferService.importTransferResultToPlatform(actor, id, body);
   });
 
-  return {
-    closeUserConnections,
-    closeAllConnections,
-  };
+  return sseRegistry;
 }

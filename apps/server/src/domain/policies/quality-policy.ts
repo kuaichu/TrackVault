@@ -1,4 +1,10 @@
-import { QUALITY_FALLBACK_ORDER, QUALITY_META, QUALITY_RANK, type QualityLevel } from "#shared";
+import {
+  QUALITY_FALLBACK_ORDER,
+  QUALITY_META,
+  QUALITY_RANK,
+  type QualityLevel,
+  classifyAudioFormat,
+} from "#shared";
 
 /**
  * Deterministic downward-only fallback list starting from requestedLevel.
@@ -47,11 +53,11 @@ export function isQualityDowngraded(
   }
 
   const meta = QUALITY_META[requestedLevel];
-  const ext = actual.format.replace(/^\./, "").toLowerCase();
-  const isLosslessExt = ext === "flac" || ext === "wav" || ext === "ape";
+  const { isLossless, isExplicitLossy } = classifyAudioFormat(actual.format);
 
   if (meta.lossless) {
-    if (isLosslessExt) return false;
+    if (isLossless) return false;
+    if (isExplicitLossy) return true;
     if (actual.bitrate && actual.bitrate >= meta.minBitrate) return false;
     return true;
   }
