@@ -2,6 +2,7 @@ import { CheckCircle2, ChevronDown, ChevronUp, Info, Music2, X, XCircle } from "
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { sanitizeExternalUrl } from "#shared";
 import { useToastStore } from "../store/toast-store.js";
+export { AppleSelect, type AppleSelectOption } from "./AppleSelect.js";
 
 export function CoverArt({
   src,

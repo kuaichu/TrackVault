@@ -284,9 +284,11 @@ describe("Phase 5 · Routing, providerMode defaults, URL state, QR polling, erro
       expect(screen.getByText("首页曲目")).toBeInTheDocument();
     });
 
-    // title-desc option must be present
-    const sortSelect = screen.getByLabelText("歌单排序") as HTMLSelectElement;
-    expect(Array.from(sortSelect.options).map((o) => o.value)).toContain("title-desc");
+    // AppleSelect custom combobox exposes '按歌名 Z–A' (title-desc) option in portaled listbox
+    const sortTrigger = screen.getByRole("combobox", { name: "歌单排序" });
+    fireEvent.click(sortTrigger);
+    expect(screen.getByRole("option", { name: "按歌名 Z–A" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: "默认排序" }));
 
     // Go to page 2
     fireEvent.click(screen.getByRole("button", { name: "下一页" }));

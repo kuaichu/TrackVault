@@ -15,10 +15,32 @@ import { api } from "../../shared/api/endpoints.js";
 import { SETTINGS_QUERY_KEY, useSettingsQuery } from "../../shared/hooks/use-settings-query.js";
 import { type ThemePreference, useThemeStore } from "../../shared/store/theme-store.js";
 import { toast } from "../../shared/store/toast-store.js";
-import { SegmentedTabs } from "../../shared/ui/primitives.js";
+import { AppleSelect, SegmentedTabs } from "../../shared/ui/primitives.js";
 
 const USERNAME_PATTERN = "^[a-zA-Z0-9_.-]+$";
 const USERNAME_REGEX = /^[a-zA-Z0-9_.-]{2,32}$/;
+
+const PROVIDER_MODE_OPTIONS: ReadonlyArray<{ value: ProviderMode; label: string }> = [
+  { value: "netease", label: "网易云音乐" },
+  { value: "qq", label: "QQ 音乐" },
+  { value: "aggregate", label: "双平台聚合" },
+];
+
+const QUALITY_SELECT_OPTIONS: ReadonlyArray<{ value: PreferenceQualityLevel; label: string }> =
+  PREFERENCE_QUALITY_OPTIONS.map((opt) => ({ value: opt.level, label: opt.label }));
+
+const CONCURRENCY_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
+  { value: 1, label: "1 首并发" },
+  { value: 2, label: "2 首并发" },
+  { value: 3, label: "3 首并发" },
+];
+
+const STARTUP_VIEW_OPTIONS: ReadonlyArray<{ value: StartupView; label: string }> = [
+  { value: "discover", label: "发现" },
+  { value: "search", label: "搜索" },
+  { value: "playlists", label: "歌单" },
+  { value: "downloads", label: "下载管理" },
+];
 
 function SettingRow({
   label,
@@ -39,9 +61,6 @@ function SettingRow({
     </div>
   );
 }
-
-const SELECT_CLASS =
-  "rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-2.5 py-1.5 text-xs leading-normal text-[var(--tv-text)] focus:border-[var(--tv-border-strong)] focus:outline-none";
 
 function AdminConsole() {
   const queryClient = useQueryClient();
@@ -412,16 +431,12 @@ export function SettingsPage({ user }: { user: UserSummary }) {
               <SettingRow
                 label="默认音乐源"
                 control={
-                  <select
-                    aria-label="默认音乐源"
+                  <AppleSelect
+                    ariaLabel="默认音乐源"
                     value={settings.providerMode}
-                    onChange={(e) => updateMutation.mutate({ providerMode: e.target.value as ProviderMode })}
-                    className={SELECT_CLASS}
-                  >
-                    <option value="netease">网易云音乐</option>
-                    <option value="qq">QQ 音乐</option>
-                    <option value="aggregate">双平台聚合</option>
-                  </select>
+                    options={PROVIDER_MODE_OPTIONS}
+                    onChange={(providerMode) => updateMutation.mutate({ providerMode })}
+                  />
                 }
               />
 
@@ -429,22 +444,12 @@ export function SettingsPage({ user }: { user: UserSummary }) {
                 label="在线试听音质"
                 hint="独立于下载音质，仅用于在线播放"
                 control={
-                  <select
-                    aria-label="在线试听音质"
+                  <AppleSelect
+                    ariaLabel="在线试听音质"
                     value={settings.defaultPlaybackQuality}
-                    onChange={(e) =>
-                      updateMutation.mutate({
-                        defaultPlaybackQuality: e.target.value as PreferenceQualityLevel,
-                      })
-                    }
-                    className={SELECT_CLASS}
-                  >
-                    {PREFERENCE_QUALITY_OPTIONS.map((opt) => (
-                      <option key={opt.level} value={opt.level}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
+                    options={QUALITY_SELECT_OPTIONS}
+                    onChange={(defaultPlaybackQuality) => updateMutation.mutate({ defaultPlaybackQuality })}
+                  />
                 }
               />
 
@@ -452,59 +457,36 @@ export function SettingsPage({ user }: { user: UserSummary }) {
                 label="默认下载音质"
                 hint="点击下载按钮时优先选择的无损或高品音质"
                 control={
-                  <select
-                    aria-label="默认下载音质"
+                  <AppleSelect
+                    ariaLabel="默认下载音质"
                     value={settings.defaultDownloadQuality}
-                    onChange={(e) =>
-                      updateMutation.mutate({
-                        defaultDownloadQuality: e.target.value as PreferenceQualityLevel,
-                      })
-                    }
-                    className={SELECT_CLASS}
-                  >
-                    {PREFERENCE_QUALITY_OPTIONS.map((opt) => (
-                      <option key={opt.level} value={opt.level}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
+                    options={QUALITY_SELECT_OPTIONS}
+                    onChange={(defaultDownloadQuality) => updateMutation.mutate({ defaultDownloadQuality })}
+                  />
                 }
               />
 
               <SettingRow
                 label="同时下载上限"
                 control={
-                  <select
-                    aria-label="同时下载上限"
+                  <AppleSelect
+                    ariaLabel="同时下载上限"
                     value={settings.maxConcurrentDownloads}
-                    onChange={(e) =>
-                      updateMutation.mutate({ maxConcurrentDownloads: Number(e.target.value) })
-                    }
-                    className={SELECT_CLASS}
-                  >
-                    {[1, 2, 3].map((n) => (
-                      <option key={n} value={n}>
-                        {n} 首并发
-                      </option>
-                    ))}
-                  </select>
+                    options={CONCURRENCY_OPTIONS}
+                    onChange={(maxConcurrentDownloads) => updateMutation.mutate({ maxConcurrentDownloads })}
+                  />
                 }
               />
 
               <SettingRow
                 label="启动页"
                 control={
-                  <select
-                    aria-label="启动页"
+                  <AppleSelect
+                    ariaLabel="启动页"
                     value={settings.startupView}
-                    onChange={(e) => updateMutation.mutate({ startupView: e.target.value as StartupView })}
-                    className={SELECT_CLASS}
-                  >
-                    <option value="discover">发现</option>
-                    <option value="search">搜索</option>
-                    <option value="playlists">歌单</option>
-                    <option value="downloads">下载管理</option>
-                  </select>
+                    options={STARTUP_VIEW_OPTIONS}
+                    onChange={(startupView) => updateMutation.mutate({ startupView })}
+                  />
                 }
               />
             </>

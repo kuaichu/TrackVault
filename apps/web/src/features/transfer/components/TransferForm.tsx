@@ -3,7 +3,23 @@ import { useState } from "react";
 import type { MusicPlatform } from "#shared";
 import { api } from "../../../shared/api/endpoints.js";
 import { toast } from "../../../shared/store/toast-store.js";
+import { AppleSelect } from "../../../shared/ui/primitives.js";
 import { TRANSFER_INPUT_CLASS } from "../transfer-constants.js";
+
+const SOURCE_PROVIDER_OPTIONS: ReadonlyArray<{
+  value: "netease" | "qq" | "text" | "csv";
+  label: string;
+}> = [
+  { value: "text", label: "纯文本曲目列表" },
+  { value: "csv", label: "CSV 表格" },
+  { value: "netease", label: "网易云歌单 ID" },
+  { value: "qq", label: "QQ 音乐歌单 ID" },
+];
+
+const TARGET_PROVIDER_OPTIONS: ReadonlyArray<{ value: MusicPlatform; label: string }> = [
+  { value: "netease", label: "网易云音乐" },
+  { value: "qq", label: "QQ 音乐" },
+];
 
 export function TransferForm({ onJobCreated }: { onJobCreated: (jobId: string) => void }) {
   const queryClient = useQueryClient();
@@ -40,31 +56,29 @@ export function TransferForm({ onJobCreated }: { onJobCreated: (jobId: string) =
   return (
     <>
       <div className="grid gap-4 sm:grid-cols-3">
-        <label className="space-y-1.5 text-xs">
-          <span className="font-medium text-[var(--tv-text-muted)]">来源</span>
-          <select
+        <div className="space-y-1.5 text-xs">
+          <span className="block font-medium text-[var(--tv-text-muted)]">来源</span>
+          <AppleSelect
+            ariaLabel="迁移来源"
+            variant="field"
             value={sourceProvider}
-            onChange={(e) => setSourceProvider(e.target.value as typeof sourceProvider)}
-            className={TRANSFER_INPUT_CLASS}
-          >
-            <option value="text">纯文本曲目列表</option>
-            <option value="csv">CSV 表格</option>
-            <option value="netease">网易云歌单 ID</option>
-            <option value="qq">QQ 音乐歌单 ID</option>
-          </select>
-        </label>
+            options={SOURCE_PROVIDER_OPTIONS}
+            onChange={setSourceProvider}
+            className="w-full"
+          />
+        </div>
 
-        <label className="space-y-1.5 text-xs">
-          <span className="font-medium text-[var(--tv-text-muted)]">目标平台</span>
-          <select
+        <div className="space-y-1.5 text-xs">
+          <span className="block font-medium text-[var(--tv-text-muted)]">目标平台</span>
+          <AppleSelect
+            ariaLabel="目标平台"
+            variant="field"
             value={targetProvider}
-            onChange={(e) => setTargetProvider(e.target.value as MusicPlatform)}
-            className={TRANSFER_INPUT_CLASS}
-          >
-            <option value="netease">网易云音乐</option>
-            <option value="qq">QQ 音乐</option>
-          </select>
-        </label>
+            options={TARGET_PROVIDER_OPTIONS}
+            onChange={setTargetProvider}
+            className="w-full"
+          />
+        </div>
 
         <label className="space-y-1.5 text-xs">
           <span className="font-medium text-[var(--tv-text-muted)]">新歌单名称（可选）</span>

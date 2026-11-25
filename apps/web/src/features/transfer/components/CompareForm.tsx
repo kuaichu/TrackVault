@@ -3,7 +3,13 @@ import { useState } from "react";
 import type { MusicPlatform } from "#shared";
 import { api } from "../../../shared/api/endpoints.js";
 import { toast } from "../../../shared/store/toast-store.js";
+import { AppleSelect } from "../../../shared/ui/primitives.js";
 import { TRANSFER_INPUT_CLASS } from "../transfer-constants.js";
+
+const COMPARE_PLATFORM_OPTIONS: ReadonlyArray<{ value: MusicPlatform; label: string }> = [
+  { value: "netease", label: "网易云" },
+  { value: "qq", label: "QQ 音乐" },
+];
 
 export function CompareForm({ onJobCreated }: { onJobCreated: (jobId: string) => void }) {
   const queryClient = useQueryClient();
@@ -34,14 +40,14 @@ export function CompareForm({ onJobCreated }: { onJobCreated: (jobId: string) =>
         <div className="space-y-1.5">
           <div className="text-xs font-medium text-[var(--tv-text-muted)]">歌单 A</div>
           <div className="flex gap-2">
-            <select
+            <AppleSelect
+              ariaLabel="歌单 A 平台"
+              variant="field"
               value={leftProvider}
-              onChange={(e) => setLeftProvider(e.target.value as MusicPlatform)}
-              className="shrink-0 rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-2.5 py-2 text-xs text-[var(--tv-text)] focus:outline-none"
-            >
-              <option value="netease">网易云</option>
-              <option value="qq">QQ 音乐</option>
-            </select>
+              options={COMPARE_PLATFORM_OPTIONS}
+              onChange={setLeftProvider}
+              className="shrink-0"
+            />
             <input
               type="text"
               value={leftPlaylistId}
@@ -55,14 +61,14 @@ export function CompareForm({ onJobCreated }: { onJobCreated: (jobId: string) =>
         <div className="space-y-1.5">
           <div className="text-xs font-medium text-[var(--tv-text-muted)]">歌单 B</div>
           <div className="flex gap-2">
-            <select
+            <AppleSelect
+              ariaLabel="歌单 B 平台"
+              variant="field"
               value={rightProvider}
-              onChange={(e) => setRightProvider(e.target.value as MusicPlatform)}
-              className="shrink-0 rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-2.5 py-2 text-xs text-[var(--tv-text)] focus:outline-none"
-            >
-              <option value="netease">网易云</option>
-              <option value="qq">QQ 音乐</option>
-            </select>
+              options={COMPARE_PLATFORM_OPTIONS}
+              onChange={setRightProvider}
+              className="shrink-0"
+            />
             <input
               type="text"
               value={rightPlaylistId}

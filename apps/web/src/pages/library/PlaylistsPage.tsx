@@ -23,10 +23,18 @@ import { api } from "../../shared/api/endpoints.js";
 import { useCapabilities } from "../../shared/hooks/use-capabilities.js";
 import { usePlatformParam } from "../../shared/hooks/use-platform-param.js";
 import { toast } from "../../shared/store/toast-store.js";
-import { EmptyState, SegmentedTabs } from "../../shared/ui/primitives.js";
+import { AppleSelect, EmptyState, SegmentedTabs } from "../../shared/ui/primitives.js";
 import { SongTable } from "../../widgets/song-table/index.js";
 
 const PAGE_SIZE = 50;
+const PLAYLIST_SORT_OPTIONS: ReadonlyArray<{ value: PlaylistSort; label: string }> = [
+  { value: "default", label: "默认排序" },
+  { value: "title-asc", label: "按歌名 A–Z" },
+  { value: "title-desc", label: "按歌名 Z–A" },
+  { value: "artist-asc", label: "按歌手" },
+  { value: "duration-desc", label: "时长由长到短" },
+  { value: "duration-asc", label: "时长由短到长" },
+];
 type PlaylistFilter = "all" | "owned" | "collected";
 const FAVORITE_PLAYLIST_PATTERN = /(喜欢的音乐|我喜欢)$/;
 
@@ -663,40 +671,15 @@ export function PlaylistDetailPage() {
                 )}
               </div>
 
-              <select
+              <AppleSelect
+                ariaLabel="歌单排序"
                 value={sort}
-                onChange={(e) => {
-                  setSort(e.target.value as PlaylistSort);
+                options={PLAYLIST_SORT_OPTIONS}
+                onChange={(nextSort) => {
+                  setSort(nextSort);
                   setPage(1);
                 }}
-                aria-label="歌单排序"
-                className="h-8 rounded-[8px] bg-[var(--tv-lcd-bg)] px-2.5 text-xs text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-nav-active)] hover:text-[var(--tv-text)] focus:outline-none"
-              >
-                <option value="default" className="bg-[var(--tv-surface-elevated)] text-[var(--tv-text)]">
-                  默认排序
-                </option>
-                <option value="title-asc" className="bg-[var(--tv-surface-elevated)] text-[var(--tv-text)]">
-                  按歌名 A–Z
-                </option>
-                <option value="title-desc" className="bg-[var(--tv-surface-elevated)] text-[var(--tv-text)]">
-                  按歌名 Z–A
-                </option>
-                <option value="artist-asc" className="bg-[var(--tv-surface-elevated)] text-[var(--tv-text)]">
-                  按歌手
-                </option>
-                <option
-                  value="duration-desc"
-                  className="bg-[var(--tv-surface-elevated)] text-[var(--tv-text)]"
-                >
-                  时长由长到短
-                </option>
-                <option
-                  value="duration-asc"
-                  className="bg-[var(--tv-surface-elevated)] text-[var(--tv-text)]"
-                >
-                  时长由短到长
-                </option>
-              </select>
+              />
             </div>
           </div>
 
