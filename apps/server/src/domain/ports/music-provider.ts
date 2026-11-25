@@ -8,6 +8,7 @@ import type {
   CloudTracksPage,
   EntitySearchType,
   MusicPlatform,
+  PersonalFmMode,
   PlaylistSort,
   PlaylistSummary,
   PlaylistTracksPage,
@@ -106,7 +107,8 @@ export interface MusicCatalogPort {
   searchTracks(query: string, auth: ProviderAuthContext, limit?: number): Promise<Song[]>;
   getDiscoverTracks(auth: ProviderAuthContext): Promise<Song[]>;
   getDailyRecommendTracks?(auth: ProviderAuthContext): Promise<Song[]>;
-  getPersonalFm?(auth: ProviderAuthContext): Promise<Song[]>;
+  getPersonalFm?(auth: ProviderAuthContext, mode?: PersonalFmMode): Promise<Song[]>;
+  trashPersonalFmSong?(songId: string, auth: ProviderAuthContext): Promise<{ ok: boolean }>;
   getRecommendedPlaylists?(auth: ProviderAuthContext, limit?: number): Promise<PlaylistSummary[]>;
   getCharts?(auth: ProviderAuthContext): Promise<ChartSummary[]>;
   getChartDetail?(chartId: string, auth: ProviderAuthContext): Promise<ChartDetail>;

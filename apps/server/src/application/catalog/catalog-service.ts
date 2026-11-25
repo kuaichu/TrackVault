@@ -9,6 +9,7 @@ import type {
   EntitySearchResult,
   EntitySearchType,
   MusicPlatform,
+  PersonalFmMode,
   PlaylistSummary,
   PlaylistTracksPage,
   ProviderMode,
@@ -215,12 +216,20 @@ export class CatalogService {
     return adapter.getAlbumDetail(albumId, this.#buildPublicReadAuth(actor, platform));
   }
 
-  async getPersonalFm(actor: ActorContext): Promise<Song[]> {
+  async getPersonalFm(actor: ActorContext, mode: PersonalFmMode = "DEFAULT"): Promise<Song[]> {
     const adapter = this.#providers.get("netease");
     if (!adapter.getPersonalFm) {
       throw new AppError("FEATURE_UNSUPPORTED", "暂不支持私人 FM。");
     }
-    return adapter.getPersonalFm(this.#buildPersonalAuth(actor, "netease"));
+    return adapter.getPersonalFm(this.#buildPersonalAuth(actor, "netease"), mode);
+  }
+
+  async trashPersonalFmSong(actor: ActorContext, songId: string): Promise<{ ok: boolean }> {
+    const adapter = this.#providers.get("netease");
+    if (!adapter.trashPersonalFmSong) {
+      throw new AppError("FEATURE_UNSUPPORTED", "暂不支持私人 FM 垃圾桶。");
+    }
+    return adapter.trashPersonalFmSong(songId, this.#buildPersonalAuth(actor, "netease"));
   }
 
   async createPlaylist(actor: ActorContext, platform: MusicPlatform, name: string, trackIds: string[] = []) {

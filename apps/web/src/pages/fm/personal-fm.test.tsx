@@ -284,4 +284,47 @@ describe("Personal FM playback, lyric synchronization, and quality retention", (
     expect(fmAudio.src).toContain("level=lossless");
     expect(usePlayerStore.getState().loadedStreamQuality).toBe("lossless");
   });
+
+  it("switches FM submode via segmented control and trashes disliked active FM song into next candidate", async () => {
+    const fmA = makeTestSong("fm-a", { title: "FM Song A" });
+    const fmB = makeTestSong("fm-b", { title: "FM Song B" });
+    const exploreSong = makeTestSong("fm-explore", { title: "Explore Indie Song" });
+
+    const fmSpy = vi
+      .spyOn(api, "getPersonalFm")
+      .mockResolvedValueOnce({ songs: [fmA, fmB] })
+      .mockResolvedValueOnce({ songs: [exploreSong] });
+    const trashSpy = vi.spyOn(api, "trashPersonalFm").mockResolvedValue({ ok: true });
+
+    renderWithProviders(<PersonalFmPage />);
+
+    await waitFor(() => expect(screen.getByText("FM Song A")).toBeInTheDocument());
+
+    // Start roaming on FM Song A
+    fireEvent.click(screen.getByRole("button", { name: "开始漫游" }));
+    await waitFor(() => {
+      expect(usePlayerStore.getState().currentTrack?.id).toBe("fm-a");
+      expect(usePlayerStore.getState().fmMode).toBe(true);
+    });
+
+    // Dislike active song -> calls trashPersonalFm("fm-a") and skips immediately to FM Song B
+    fireEvent.click(screen.getByRole("button", { name: "不喜欢" }));
+    await waitFor(() => {
+      expect(trashSpy).toHaveBeenCalledWith("fm-a");
+      expect(usePlayerStore.getState().currentTrack?.id).toBe("fm-b");
+    });
+
+    // Switch submode to 探索 (EXPLORE) -> calls getPersonalFm(signal, "EXPLORE") and plays Explore Indie Song
+    fireEvent.click(screen.getByRole("button", { name: "探索" }));
+    await waitFor(() => {
+      expect(fmSpy).toHaveBeenCalledTimes(2);
+      expect(fmSpy.mock.calls[1]?.[1]).toBe("EXPLORE");
+      expect(usePlayerStore.getState().fmSubMode).toBe("EXPLORE");
+      expect(usePlayerStore.getState().currentTrack?.id).toBe("fm-explore");
+      expect(screen.getByText("Explore Indie Song")).toBeInTheDocument();
+    });
+
+    // Previously roamed FM Song B is preserved in 刚刚听过 shelf for one-click replay
+    expect(screen.getByText("FM Song B")).toBeInTheDocument();
+  });
 });

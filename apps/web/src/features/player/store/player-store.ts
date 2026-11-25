@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { PlaybackMode, PreferenceQualityLevel, QualityLevel, Song } from "#shared";
+import type { PersonalFmMode, PlaybackMode, PreferenceQualityLevel, QualityLevel, Song } from "#shared";
 
 export type RightDrawerTab = "queue" | "lyrics" | "comments";
 
@@ -29,7 +29,9 @@ interface PlayerStateStore {
   hydrated: boolean;
   /** Personal FM session state driven centrally by AudioEngine / FmController. */
   fmMode: boolean;
+  fmSubMode: PersonalFmMode;
   fmQueue: Song[];
+  fmRecentTracks: Song[];
   fmLoading: boolean;
   fmError: string | null;
 
@@ -61,7 +63,9 @@ const INITIAL_PLAYER_STATE = {
   drawerTab: "queue" as RightDrawerTab,
   hydrated: false,
   fmMode: false,
+  fmSubMode: "DEFAULT" as PersonalFmMode,
   fmQueue: [] as Song[],
+  fmRecentTracks: [] as Song[],
   fmLoading: false,
   fmError: null as string | null,
 };
@@ -100,7 +104,7 @@ export const usePlayerStore = create<PlayerStateStore>((set) => ({
   },
 
   reset() {
-    set({ ...INITIAL_PLAYER_STATE, queue: [], priorityQueue: [], fmQueue: [] });
+    set({ ...INITIAL_PLAYER_STATE, queue: [], priorityQueue: [], fmQueue: [], fmRecentTracks: [] });
   },
 }));
 

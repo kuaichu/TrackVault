@@ -1,6 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { EntitySearchTypeSchema, MusicPlatformSchema, PlaylistSortSchema, ProviderModeSchema } from "#shared";
+import {
+  EntitySearchTypeSchema,
+  MusicPlatformSchema,
+  PersonalFmModeSchema,
+  PlaylistSortSchema,
+  ProviderModeSchema,
+} from "#shared";
 import type { CatalogService } from "../../../application/catalog/catalog-service.js";
 import type { ProviderRegistry } from "../../../domain/ports/music-provider.js";
 import { requireActor } from "../auth-plugin.js";
@@ -85,8 +91,15 @@ export function registerCatalogRoutes(
 
   app.get("/api/fm", async (request) => {
     const actor = requireActor(request);
-    const songs = await catalogService.getPersonalFm(actor);
+    const query = z.object({ mode: PersonalFmModeSchema.default("DEFAULT") }).parse(request.query);
+    const songs = await catalogService.getPersonalFm(actor, query.mode);
     return { songs };
+  });
+
+  app.post("/api/fm/trash/:id", async (request) => {
+    const actor = requireActor(request);
+    const params = z.object({ id: z.string().min(1).max(128) }).parse(request.params);
+    return catalogService.trashPersonalFmSong(actor, params.id);
   });
 
   app.get("/api/recommend/daily", async (request) => {

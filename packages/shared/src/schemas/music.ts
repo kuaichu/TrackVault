@@ -62,6 +62,9 @@ export function getSongKey(song: Pick<Song, "platform" | "id">): string {
   return `${song.platform}:${song.id}`;
 }
 
+export const PersonalFmModeSchema = z.enum(["DEFAULT", "FAMILIAR", "EXPLORE", "FOCUS"]);
+export type PersonalFmMode = z.infer<typeof PersonalFmModeSchema>;
+
 export const PlaylistSummarySchema = z.object({
   id: z.string(),
   platform: MusicPlatformSchema,

@@ -13,7 +13,7 @@ export function QuickCollectPopover({
   variant = "player-bar",
 }: {
   song: Song | null;
-  variant?: "player-bar" | "mobile-bar" | "fullscreen";
+  variant?: "player-bar" | "mobile-bar" | "fullscreen" | "stage";
 }) {
   const queryClient = useQueryClient();
   const capabilities = useCapabilities();
@@ -112,6 +112,7 @@ export function QuickCollectPopover({
   const ownedPlaylists = (playlistsQuery.data?.playlists ?? []).filter((pl) => pl.owned);
   const isFullscreen = variant === "fullscreen";
   const isMobileBar = variant === "mobile-bar";
+  const isStage = variant === "stage";
   const isBusy = addMutation.isPending || createAndCollectMutation.isPending;
 
   const handleCreateSubmit = (event: FormEvent) => {
@@ -137,18 +138,36 @@ export function QuickCollectPopover({
                   ? "bg-white/14 text-white"
                   : "text-white/60 hover:bg-white/10 hover:text-white/95 active:scale-95"
               }`
-            : isMobileBar
-              ? `inline-flex items-center justify-center rounded-full p-1.5 transition-colors ${
-                  open ? "text-[var(--tv-accent)]" : "text-[var(--tv-text-muted)] hover:text-[var(--tv-text)]"
-                }`
-              : `inline-flex items-center justify-center rounded-full p-1 transition-all duration-150 ${
+            : isStage
+              ? `inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors active:scale-95 ${
                   open
-                    ? "bg-[var(--tv-accent-soft)] text-[var(--tv-accent)]"
-                    : "text-[var(--tv-text-subtle)] opacity-70 group-hover/lcd:opacity-100 hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-text)] active:scale-95"
+                    ? "bg-[var(--tv-nav-active)] text-[var(--tv-accent)]"
+                    : "bg-[var(--tv-lcd-bg)] text-[var(--tv-text-muted)] hover:bg-[var(--tv-nav-active)] hover:text-[var(--tv-text)]"
                 }`
+              : isMobileBar
+                ? `inline-flex items-center justify-center rounded-full p-1.5 transition-colors ${
+                    open
+                      ? "text-[var(--tv-accent)]"
+                      : "text-[var(--tv-text-muted)] hover:text-[var(--tv-text)]"
+                  }`
+                : `inline-flex items-center justify-center rounded-full p-1 transition-all duration-150 ${
+                    open
+                      ? "bg-[var(--tv-accent-soft)] text-[var(--tv-accent)]"
+                      : "text-[var(--tv-text-subtle)] opacity-70 group-hover/lcd:opacity-100 hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-text)] active:scale-95"
+                  }`
         }
       >
-        <SfPlusCircle className={isFullscreen ? "h-5 w-5" : isMobileBar ? "h-4 w-4" : "h-[15px] w-[15px]"} />
+        <SfPlusCircle
+          className={
+            isFullscreen
+              ? "h-5 w-5"
+              : isStage
+                ? "h-[17px] w-[17px]"
+                : isMobileBar
+                  ? "h-4 w-4"
+                  : "h-[15px] w-[15px]"
+          }
+        />
       </button>
 
       {open && (
@@ -158,7 +177,9 @@ export function QuickCollectPopover({
               ? "absolute bottom-full right-0 mb-2"
               : isMobileBar
                 ? "absolute bottom-full right-0 mb-2"
-                : "absolute bottom-full left-1/2 mb-3 -translate-x-1/2"
+                : isStage
+                  ? "absolute bottom-full left-0 mb-2.5 sm:left-1/2 sm:-translate-x-1/2"
+                  : "absolute bottom-full left-1/2 mb-3 -translate-x-1/2"
           }
           style={{ zIndex: "var(--tv-z-dropdown)" }}
         >

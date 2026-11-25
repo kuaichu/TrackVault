@@ -8,6 +8,7 @@ import {
   type ChartSummary,
   type CloudTracksPage,
   type EntitySearchType,
+  type PersonalFmMode,
   type PlaylistSummary,
   type QualityLevel,
   type Song,
@@ -161,18 +162,44 @@ export class NeteaseCatalogService {
     }
   }
 
-  async getPersonalFm(auth: ProviderAuthContext): Promise<Song[]> {
+  async getPersonalFm(auth: ProviderAuthContext, mode: PersonalFmMode = "DEFAULT"): Promise<Song[]> {
     this.#rpc.assertAuthed(auth);
     try {
-      const response = await this.#rpc.call(
-        () => this.#rpc.api.personal_fm(this.#rpc.baseParams(auth, { timestamp: Date.now() })),
-        auth.signal,
-      );
+      const modeApi = this.#rpc.api.personal_fm_mode;
+      const response = await this.#rpc.call(() => {
+        if (mode !== "DEFAULT" && modeApi) {
+          const modeParams =
+            mode === "FOCUS"
+              ? { mode: "SCENE_RCMD", submode: "FOCUS", limit: 6, timestamp: Date.now() }
+              : { mode, limit: 6, timestamp: Date.now() };
+          return modeApi(this.#rpc.baseParams(auth, modeParams));
+        }
+        return this.#rpc.api.personal_fm(this.#rpc.baseParams(auth, { timestamp: Date.now() }));
+      }, auth.signal);
       this.#rpc.assertBusinessSuccess(response.body, "获取私人 FM 失败");
       const raw = (response.body.data as RawNeteaseSong[] | undefined) ?? [];
       return this.#rpc.hydrateAndMapNeteaseSongs(raw, auth);
     } catch (error) {
       throw this.#rpc.wrapUpstreamError(error, "获取私人 FM 失败");
+    }
+  }
+
+  async trashPersonalFmSong(songId: string, auth: ProviderAuthContext): Promise<{ ok: boolean }> {
+    this.#rpc.assertAuthed(auth);
+    const trashApi = this.#rpc.api.fm_trash;
+    if (!trashApi) {
+      throw new AppError("FEATURE_UNSUPPORTED", "暂不支持私人 FM 垃圾桶。");
+    }
+    try {
+      const numericId = Number(songId);
+      const response = await this.#rpc.call(
+        () => trashApi(this.#rpc.baseParams(auth, { id: Number.isFinite(numericId) ? numericId : songId })),
+        auth.signal,
+      );
+      this.#rpc.assertBusinessSuccess(response.body, "移入私人 FM 垃圾桶失败");
+      return { ok: true };
+    } catch (error) {
+      throw this.#rpc.wrapUpstreamError(error, "移入私人 FM 垃圾桶失败");
     }
   }
 

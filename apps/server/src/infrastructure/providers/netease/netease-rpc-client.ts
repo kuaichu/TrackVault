@@ -26,6 +26,8 @@ export interface NeteaseApiModule {
   personalized_newsong: NeteaseCall;
   personalized: NeteaseCall;
   personal_fm: NeteaseCall;
+  personal_fm_mode?: NeteaseCall;
+  fm_trash?: NeteaseCall;
   toplist: NeteaseCall;
   artists: NeteaseCall;
   artist_album: NeteaseCall;

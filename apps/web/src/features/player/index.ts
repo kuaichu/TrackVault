@@ -1,9 +1,17 @@
 export const loadFullscreenPlayer = () =>
   import("./components/FullscreenPlayer.js").then((m) => ({ default: m.FullscreenPlayer }));
+export {
+  SfForwardFill,
+  SfHeart,
+  SfPauseFill,
+  SfPlayFill,
+  SfSlashCircle,
+} from "./components/AppleMusicIcons.js";
 export { LyricScroller } from "./components/LyricScroller.js";
 export { MiniProgressStripe, PlaybackProgressBar } from "./components/PlaybackProgressBar.js";
 export { PlayerBar } from "./components/PlayerBar.js";
 export { PlayQueuePanel, TrackCommentsPanel } from "./components/PlayerDrawerPanels.js";
+export { QuickCollectPopover } from "./components/QuickCollectPopover.js";
 export { RightDrawer } from "./components/RightDrawer.js";
 export {
   AudioEngine,

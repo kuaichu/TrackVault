@@ -5,6 +5,7 @@ import {
   type ChartSummary,
   type CloudTracksPage,
   type EntitySearchType,
+  type PersonalFmMode,
   type PlaylistSummary,
   type PlaylistTracksPage,
   type ProviderCapabilities,
@@ -183,8 +184,12 @@ export class NeteaseAdapter implements MusicProviderAdapter, PlaylistMutationPor
     return this.#catalog.getDailyRecommendTracks(auth);
   }
 
-  getPersonalFm(auth: ProviderAuthContext): Promise<Song[]> {
-    return this.#catalog.getPersonalFm(auth);
+  getPersonalFm(auth: ProviderAuthContext, mode?: PersonalFmMode): Promise<Song[]> {
+    return this.#catalog.getPersonalFm(auth, mode);
+  }
+
+  trashPersonalFmSong(songId: string, auth: ProviderAuthContext): Promise<{ ok: boolean }> {
+    return this.#catalog.trashPersonalFmSong(songId, auth);
   }
 
   getRecommendedPlaylists(auth: ProviderAuthContext, limit = 10): Promise<PlaylistSummary[]> {

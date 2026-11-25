@@ -1,28 +1,132 @@
-import { Heart, Maximize2, Pause, Play, RefreshCw, SkipForward } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { Maximize2, Plus, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { getSongKey, sanitizeCssUrl } from "#shared";
+import { type PersonalFmMode, type Song, getSongKey, sanitizeCssUrl } from "#shared";
 import { AlbumLink, ArtistLinks } from "../../entities/music/index.js";
 import { useLikedIdsQuery, useToggleLikeMutation } from "../../entities/song/index.js";
 import {
   LyricScroller,
+  QuickCollectPopover,
+  SfForwardFill,
+  SfHeart,
+  SfPauseFill,
+  SfPlayFill,
+  SfSlashCircle,
   audioEngine,
   usePlayerStore,
   useTrackLyricsQuery,
 } from "../../features/player/index.js";
 import { useCapabilities } from "../../shared/hooks/use-capabilities.js";
 import { toast } from "../../shared/store/toast-store.js";
-import { CoverArt, EmptyState } from "../../shared/ui/primitives.js";
+import { CoverArt, EmptyState, EqualizerBars, SegmentedTabs } from "../../shared/ui/primitives.js";
+
+const FM_MODE_TABS: ReadonlyArray<{ id: PersonalFmMode; label: string }> = [
+  { id: "DEFAULT", label: "默认" },
+  { id: "FAMILIAR", label: "熟悉" },
+  { id: "EXPLORE", label: "探索" },
+  { id: "FOCUS", label: "专注" },
+];
+
+function toStageCoverUrl(url?: string, size = 800): string | undefined {
+  if (!url) return undefined;
+  return url
+    .replace(/param=\d+y\d+/, `param=${size}y${size}`)
+    .replace(/T002R\d+x\d+/, `T002R${size}x${size}`);
+}
+
+function FmTrackShelfList({
+  songs,
+  onSelectSong,
+}: {
+  songs: readonly Song[];
+  onSelectSong: (song: Song) => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 md:gap-x-8">
+      {songs.map((song, idx) => {
+        const isLastOverall = idx === songs.length - 1;
+        const isBottomRowInTwoCol =
+          songs.length % 2 === 0 ? idx >= songs.length - 2 : idx === songs.length - 1;
+        return (
+          <div
+            key={getSongKey(song)}
+            className="group relative flex items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-[var(--tv-surface-hover)]"
+          >
+            <button
+              type="button"
+              onClick={() => onSelectSong(song)}
+              className="relative shrink-0 overflow-hidden rounded-[8px]"
+              aria-label={`漫游播放 ${song.title}`}
+            >
+              <CoverArt src={song.coverUrl} alt="" className="h-12 w-12" rounded="rounded-[8px]" />
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 rounded-[8px]"
+                style={{ boxShadow: "var(--tv-cover-ring)" }}
+              />
+              <span className="absolute inset-0 flex items-center justify-center rounded-[8px] bg-black/45 opacity-0 backdrop-blur-[1px] transition-opacity duration-150 group-hover:opacity-100">
+                <SfPlayFill className="h-4 w-4 text-white" />
+              </span>
+            </button>
+
+            <div className="relative flex h-12 min-w-0 flex-1 items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <button
+                  type="button"
+                  onClick={() => onSelectSong(song)}
+                  className="block w-full truncate text-left text-[13.5px] leading-snug font-medium text-[var(--tv-text)]"
+                >
+                  {song.title}
+                </button>
+                <div className="mt-0.5 truncate text-xs leading-snug text-[var(--tv-text-muted)]">
+                  <ArtistLinks
+                    platform={song.platform}
+                    artists={song.artists}
+                    fallbackText={song.artist}
+                    primaryArtistId={song.primaryArtistId}
+                    linkClassName="transition-colors hover:text-[var(--tv-text)]"
+                  />
+                  {song.album && (
+                    <>
+                      <span className="mx-1.5 opacity-45">·</span>
+                      <AlbumLink song={song} className="transition-colors hover:text-[var(--tv-text)]" />
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {song.duration && (
+                <span className="shrink-0 text-xs tabular-nums text-[var(--tv-text-subtle)]">
+                  {song.duration}
+                </span>
+              )}
+
+              <span
+                aria-hidden="true"
+                className={`pointer-events-none absolute right-0 -bottom-2.5 left-0 border-b border-[var(--tv-border)] transition-opacity group-hover:opacity-0 ${
+                  isLastOverall ? "hidden" : isBottomRowInTwoCol ? "md:hidden" : ""
+                }`}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export function PersonalFmPage() {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const fmMode = usePlayerStore((s) => s.fmMode);
+  const fmSubMode = usePlayerStore((s) => s.fmSubMode);
   const fmQueue = usePlayerStore((s) => s.fmQueue);
+  const fmRecentTracks = usePlayerStore((s) => s.fmRecentTracks);
   const fmLoading = usePlayerStore((s) => s.fmLoading);
   const fmError = usePlayerStore((s) => s.fmError);
   const setFullscreenOpen = usePlayerStore((s) => s.setFullscreenOpen);
 
+  const [trashingId, setTrashingId] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -41,9 +145,54 @@ export function PersonalFmPage() {
 
   // Single source of truth: follow AudioEngine's active track while in FM mode, else preview first candidate
   const activeSong = fmMode && currentTrack ? currentTrack : (fmQueue[0] ?? null);
+  const activeSongKey = activeSong ? getSongKey(activeSong) : null;
   const isCurrentActive = Boolean(
     activeSong && currentTrack && getSongKey(activeSong) === getSongKey(currentTrack),
   );
+
+  const activeQueueIdx = useMemo(
+    () => (activeSongKey ? fmQueue.findIndex((item) => getSongKey(item) === activeSongKey) : -1),
+    [activeSongKey, fmQueue],
+  );
+
+  // Upcoming FM queue songs after activeSong (strictly deduplicated against activeSong)
+  const upcomingSongs = useMemo(() => {
+    const rawUpcoming = activeQueueIdx >= 0 ? fmQueue.slice(activeQueueIdx + 1) : fmQueue.slice(1);
+    const seen = new Set<string>(activeSongKey ? [activeSongKey] : []);
+    const out: Song[] = [];
+    for (const song of rawUpcoming) {
+      const k = getSongKey(song);
+      if (!seen.has(k)) {
+        seen.add(k);
+        out.push(song);
+      }
+    }
+    return out;
+  }, [activeQueueIdx, activeSongKey, fmQueue]);
+
+  // Recently roamed songs (earlier in current batch + cross-batch fmRecentTracks, excluding active & upcoming)
+  const recentSongs = useMemo(() => {
+    const earlierInBatch = activeQueueIdx > 0 ? fmQueue.slice(0, activeQueueIdx).reverse() : [];
+    const excluded = new Set<string>([
+      ...(activeSongKey ? [activeSongKey] : []),
+      ...upcomingSongs.map((item) => getSongKey(item)),
+    ]);
+    const out: Song[] = [];
+    for (const song of [...earlierInBatch, ...fmRecentTracks]) {
+      const k = getSongKey(song);
+      if (!excluded.has(k)) {
+        excluded.add(k);
+        out.push(song);
+      }
+      if (out.length >= 6) break;
+    }
+    return out;
+  }, [activeQueueIdx, activeSongKey, fmQueue, fmRecentTracks, upcomingSongs]);
+
+  // 3-Cover Layered Carousel: [leftWing (prev or rear-stack), centerHero (activeSong), rightWing (next)]
+  const prevCarouselSong = recentSongs[0] ?? null;
+  const nextCarouselSong = upcomingSongs[0] ?? null;
+  const ambientLeftDepthSong = !prevCarouselSong ? (upcomingSongs[1] ?? null) : null;
 
   const lyricQuery = useTrackLyricsQuery(activeSong, Boolean(activeSong));
 
@@ -68,6 +217,29 @@ export function PersonalFmPage() {
     }
   };
 
+  const handleSubModeChange = async (nextMode: PersonalFmMode) => {
+    if (nextMode === fmSubMode && fmQueue.length > 0) return;
+    try {
+      const nextBatch = await audioEngine.setFmSubMode(nextMode);
+      if (!mountedRef.current) return;
+      if (nextBatch.length === 0) {
+        toast.info("当前模式下暂时没有更多推荐歌曲");
+      }
+    } catch (err) {
+      if (!mountedRef.current) return;
+      toast.error(err instanceof Error ? err.message : "切换漫游模式失败");
+    }
+  };
+
+  const handleAppendBatch = async () => {
+    try {
+      await audioEngine.appendFmBatch();
+    } catch (err) {
+      if (!mountedRef.current) return;
+      toast.error(err instanceof Error ? err.message : "预载更多漫游曲目失败");
+    }
+  };
+
   const handlePlayToggle = () => {
     if (!activeSong) return;
     if (isCurrentActive) {
@@ -77,11 +249,33 @@ export function PersonalFmPage() {
     }
   };
 
+  const handlePlaySpecificFmSong = (song: Song) => {
+    const key = getSongKey(song);
+    const inCurrentQueue = fmQueue.some((item) => getSongKey(item) === key);
+    const nextQueue = inCurrentQueue ? fmQueue : [song, ...fmQueue];
+    if (!inCurrentQueue) {
+      usePlayerStore.getState().setStatePatch({ fmQueue: nextQueue });
+    }
+    void audioEngine.playFmTrack(song, { queue: nextQueue });
+  };
+
   const handleNext = () => {
     void audioEngine.skipOrStartFmNext().catch((err) => {
       if (!mountedRef.current) return;
       toast.error(err instanceof Error ? err.message : "加载下一批 FM 失败");
     });
+  };
+
+  const handleDislike = async () => {
+    if (!activeSong || trashingId === activeSong.id) return;
+    setTrashingId(activeSong.id);
+    try {
+      await audioEngine.trashFmSong(activeSong);
+    } finally {
+      if (mountedRef.current) {
+        setTrashingId((prev) => (prev === activeSong.id ? null : prev));
+      }
+    }
   };
 
   const handleLyricLineClick = (time: number) => {
@@ -94,25 +288,65 @@ export function PersonalFmPage() {
     }
   };
 
-  const backdrop = sanitizeCssUrl(activeSong?.coverUrl);
+  const heroCoverUrl = toStageCoverUrl(activeSong?.coverUrl, 800);
+  const backdrop = sanitizeCssUrl(heroCoverUrl ?? activeSong?.coverUrl);
+  const vipPlayback = activeSong?.availability?.playback.status === "vip";
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-[28px] font-bold tracking-tight text-[var(--tv-text)]">私人漫游</h1>
-        <button
-          type="button"
-          disabled={fmLoading}
-          onClick={() => void handleRefreshBatch(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--tv-surface)] px-3 py-1.5 text-xs font-medium text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-active)] hover:text-[var(--tv-text)] disabled:opacity-50"
+    <div className="relative space-y-8 sm:space-y-10">
+      {/* Soft top-canvas ambient aura from cover art — zero hard rectangular border */}
+      {backdrop && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -inset-x-4 -top-10 h-[520px] overflow-hidden sm:-inset-x-6 md:-inset-x-8"
+          style={{
+            maskImage:
+              "radial-gradient(ellipse 84% 76% at 32% 34%, rgba(0,0,0,1) 0%, rgba(0,0,0,0.46) 54%, transparent 100%)",
+            WebkitMaskImage:
+              "radial-gradient(ellipse 84% 76% at 32% 34%, rgba(0,0,0,1) 0%, rgba(0,0,0,0.46) 54%, transparent 100%)",
+          }}
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${fmLoading ? "animate-spin" : ""}`} />
-          换一批
-        </button>
+          <div
+            className="h-full w-full scale-125 bg-cover bg-center opacity-20 blur-[96px] saturate-[1.65] transition-[background-image] duration-700 dark:opacity-36"
+            style={{ backgroundImage: `url("${backdrop}")` }}
+          />
+        </div>
+      )}
+
+      {/* Apple Music Editorial Header + Submode Segmented Control + Borderless Refresh */}
+      <div className="relative flex flex-wrap items-end justify-between gap-4 border-b border-[var(--tv-border)] pb-3.5">
+        <h1 className="text-[30px] leading-none font-extrabold tracking-tight text-[var(--tv-text)] sm:text-[34px]">
+          私人漫游
+        </h1>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <SegmentedTabs<PersonalFmMode>
+            value={fmSubMode}
+            onChange={(mode) => void handleSubModeChange(mode)}
+            items={[...FM_MODE_TABS]}
+          />
+
+          <button
+            type="button"
+            disabled={fmLoading}
+            onClick={() => void handleRefreshBatch(true)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-[8px] px-2.5 text-xs font-medium text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)] disabled:opacity-45"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${fmLoading ? "animate-spin" : ""}`} />
+            <span>换一批</span>
+          </button>
+        </div>
       </div>
 
       {fmLoading && !activeSong ? (
-        <div className="h-[420px] animate-pulse rounded-2xl bg-[var(--tv-surface)]" />
+        <div className="relative grid items-center gap-8 py-4 lg:grid-cols-[380px_minmax(0,1fr)] lg:gap-12">
+          <div className="flex flex-col items-center lg:items-start">
+            <div className="h-60 w-60 animate-pulse rounded-[14px] bg-[var(--tv-surface)]" />
+            <div className="mt-5 h-6 w-48 animate-pulse rounded bg-[var(--tv-surface)]" />
+            <div className="mt-2 h-4 w-32 animate-pulse rounded bg-[var(--tv-surface)]/70" />
+          </div>
+          <div className="h-[320px] animate-pulse rounded-2xl bg-[var(--tv-surface)]/45" />
+        </div>
       ) : fmError && !activeSong ? (
         <EmptyState
           title="开启私人漫游需要绑定网易云账号"
@@ -150,120 +384,329 @@ export function PersonalFmPage() {
           }
         />
       ) : (
-        <section className="relative grid gap-6 overflow-hidden rounded-2xl bg-[#161619] p-5 text-white sm:gap-8 sm:p-8 md:grid-cols-[320px_minmax(0,1fr)]">
-          {backdrop && (
-            <div
-              className="pointer-events-none absolute inset-0 scale-125 bg-cover bg-center opacity-40 blur-[80px] saturate-150"
-              style={{ backgroundImage: `url("${backdrop}")` }}
-            />
-          )}
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-black/55 via-black/60 to-black/75" />
+        <>
+          {/* Frameless Main Radio Stage: 3-Cover Layered Carousel + Smart Lyrics Stage */}
+          <section className="relative grid items-center gap-8 pt-1 lg:grid-cols-[384px_minmax(0,1fr)] lg:gap-12">
+            <div className="flex flex-col items-center lg:items-start">
+              {/* Three-Cover Layered Depth Carousel (三联层叠封面栈) */}
+              <div className="relative flex h-[236px] w-full max-w-[364px] items-center justify-center sm:h-[256px]">
+                {/* Left Wing: Previous Roamed Song (interactive) or Rear-Stack Depth Layer */}
+                {prevCarouselSong ? (
+                  <button
+                    type="button"
+                    onClick={() => handlePlaySpecificFmSong(prevCarouselSong)}
+                    title={`回到上一首：${prevCarouselSong.title}`}
+                    aria-label={`回到上一首漫游：${prevCarouselSong.title}`}
+                    className="group/prev absolute left-1 z-10 overflow-hidden rounded-[12px] opacity-48 transition-all duration-300 -rotate-[4deg] hover:-translate-x-1 hover:opacity-85 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tv-accent)] sm:left-2"
+                    style={{ boxShadow: "0 16px 38px rgba(0, 0, 0, 0.42)" }}
+                  >
+                    <CoverArt
+                      src={toStageCoverUrl(prevCarouselSong.coverUrl, 400)}
+                      alt=""
+                      className="h-[168px] w-[168px] sm:h-[184px] sm:w-[184px]"
+                      rounded="rounded-[12px]"
+                    />
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-0 rounded-[12px]"
+                      style={{ boxShadow: "var(--tv-cover-ring)" }}
+                    />
+                  </button>
+                ) : ambientLeftDepthSong ? (
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-2 z-10 overflow-hidden rounded-[12px] opacity-30 blur-[0.4px] -rotate-[4deg] sm:left-3"
+                    style={{ boxShadow: "0 14px 32px rgba(0, 0, 0, 0.36)" }}
+                  >
+                    <CoverArt
+                      src={toStageCoverUrl(ambientLeftDepthSong.coverUrl, 400)}
+                      alt=""
+                      className="h-[164px] w-[164px] sm:h-[180px] sm:w-[180px]"
+                      rounded="rounded-[12px]"
+                    />
+                  </div>
+                ) : null}
 
-          <div className="relative flex flex-col items-center md:items-start">
-            <CoverArt
-              src={activeSong.coverUrl}
-              alt={activeSong.title}
-              darkBackdrop
-              className="aspect-square w-52 shadow-[0_24px_70px_rgba(0,0,0,0.65)] sm:w-64 md:w-72"
-              rounded="rounded-2xl"
-            />
-            <div className="mt-5 w-full space-y-1 text-center md:text-left">
-              <h2 className="truncate text-xl font-bold text-white">{activeSong.title}</h2>
-              <div className="truncate text-xs text-white/70">
-                <ArtistLinks
-                  platform={activeSong.platform}
-                  artists={activeSong.artists}
-                  fallbackText={activeSong.artist}
-                  primaryArtistId={activeSong.primaryArtistId}
-                  linkClassName="hover:text-white hover:underline"
-                />
-                {activeSong.album && (
-                  <>
-                    <span className="mx-1.5 opacity-50">·</span>
-                    <AlbumLink song={activeSong} className="hover:text-white hover:underline" />
-                  </>
+                {/* Right Wing: Next Up in FM (interactive) */}
+                {nextCarouselSong && (
+                  <button
+                    type="button"
+                    onClick={() => handlePlaySpecificFmSong(nextCarouselSong)}
+                    title={`下一首：${nextCarouselSong.title}`}
+                    aria-label={`跳至下一首漫游：${nextCarouselSong.title}`}
+                    className="group/next absolute right-1 z-10 overflow-hidden rounded-[12px] opacity-56 transition-all duration-300 rotate-[4deg] hover:translate-x-1 hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tv-accent)] sm:right-2"
+                    style={{ boxShadow: "0 16px 38px rgba(0, 0, 0, 0.44)" }}
+                  >
+                    <CoverArt
+                      src={toStageCoverUrl(nextCarouselSong.coverUrl, 400)}
+                      alt=""
+                      className="h-[168px] w-[168px] sm:h-[184px] sm:w-[184px]"
+                      rounded="rounded-[12px]"
+                    />
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-0 rounded-[12px]"
+                      style={{ boxShadow: "var(--tv-cover-ring)" }}
+                    />
+                  </button>
+                )}
+
+                {/* Center Hero Cover */}
+                <div
+                  className="relative z-20 overflow-hidden rounded-[14px] transition-transform duration-300"
+                  style={{
+                    boxShadow: "0 26px 64px -12px rgba(0, 0, 0, 0.62), 0 10px 24px -8px rgba(0, 0, 0, 0.36)",
+                  }}
+                >
+                  <CoverArt
+                    src={heroCoverUrl}
+                    alt={activeSong.title}
+                    className="h-[216px] w-[216px] sm:h-[236px] sm:w-[236px]"
+                    rounded="rounded-[14px]"
+                  />
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 rounded-[14px]"
+                    style={{ boxShadow: "var(--tv-cover-ring)" }}
+                  />
+                  {isCurrentActive && isPlaying && (
+                    <span className="pointer-events-none absolute right-2.5 bottom-2.5 inline-flex items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1 text-[10.5px] font-medium text-white backdrop-blur-md">
+                      <EqualizerBars />
+                      <span>电台直播</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Track Title & Artist/Album Metadata */}
+              <div className="mt-5 w-full max-w-[364px] space-y-1 text-center lg:text-left">
+                <div className="flex items-center justify-center gap-2 lg:justify-start">
+                  <h2 className="truncate text-[21px] leading-snug font-bold tracking-tight text-[var(--tv-text)] sm:text-[22px]">
+                    {activeSong.title}
+                  </h2>
+                  {vipPlayback && (
+                    <span className="inline-flex h-[15px] shrink-0 items-center rounded-[4px] border border-[var(--tv-border-strong)] px-1 text-[9.5px] leading-none font-semibold tracking-wider text-[var(--tv-text-subtle)]">
+                      VIP
+                    </span>
+                  )}
+                </div>
+
+                <div className="truncate text-[13px] text-[var(--tv-text-muted)]">
+                  <ArtistLinks
+                    platform={activeSong.platform}
+                    artists={activeSong.artists}
+                    fallbackText={activeSong.artist}
+                    primaryArtistId={activeSong.primaryArtistId}
+                    linkClassName="transition-colors hover:text-[var(--tv-text)]"
+                  />
+                  {activeSong.album && (
+                    <>
+                      <span className="mx-1.5 opacity-45">·</span>
+                      <AlbumLink
+                        song={activeSong}
+                        className="transition-colors hover:text-[var(--tv-text)]"
+                      />
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Apple Music Rounded-Rect Primary Button + Harmonious Secondary Station Actions */}
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5 lg:justify-start">
+                <button
+                  type="button"
+                  onClick={handlePlayToggle}
+                  aria-label={isCurrentActive && isPlaying ? "暂停漫游" : "开始漫游"}
+                  className={`inline-flex h-9 items-center justify-center gap-2 rounded-[8px] px-5 text-[13px] font-semibold transition-all active:scale-[0.98] ${
+                    isCurrentActive && isPlaying
+                      ? "bg-[var(--tv-lcd-bg)] text-[var(--tv-text)] ring-1 ring-inset ring-[var(--tv-border-strong)] hover:bg-[var(--tv-nav-active)]"
+                      : "bg-[var(--tv-accent)] text-[var(--tv-accent-fg)] shadow-xs hover:bg-[var(--tv-accent-hover)]"
+                  }`}
+                >
+                  {isCurrentActive && isPlaying ? (
+                    <>
+                      <SfPauseFill className="h-3.5 w-3.5 text-[var(--tv-accent)]" />
+                      <span>暂停漫游</span>
+                    </>
+                  ) : (
+                    <>
+                      <SfPlayFill className="h-3.5 w-3.5" />
+                      <span>{isCurrentActive ? "继续漫游" : "开始漫游"}</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  disabled={fmLoading}
+                  onClick={handleNext}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--tv-lcd-bg)] text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-nav-active)] active:scale-95 disabled:opacity-45"
+                  title="下一首"
+                  aria-label="下一首"
+                >
+                  <SfForwardFill className="h-4 w-4" />
+                </button>
+
+                <button
+                  type="button"
+                  disabled={trashingId === activeSong.id}
+                  onClick={() => void handleDislike()}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--tv-lcd-bg)] text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-danger)]/14 hover:text-[var(--tv-danger)] active:scale-95 disabled:opacity-45"
+                  title="不喜欢（移入垃圾桶，减少此类推荐）"
+                  aria-label="不喜欢"
+                >
+                  <SfSlashCircle className="h-[17px] w-[17px]" />
+                </button>
+
+                {canLike && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      likeMutation.mutate({
+                        platform: activeSong.platform,
+                        songId: activeSong.id,
+                        nextLiked: !isLiked,
+                        songTitle: activeSong.title,
+                      })
+                    }
+                    className={`inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--tv-lcd-bg)] transition-colors hover:bg-[var(--tv-nav-active)] active:scale-95 ${
+                      isLiked ? "text-[#fa2d48]" : "text-[var(--tv-text-muted)] hover:text-[var(--tv-text)]"
+                    }`}
+                    title={isLiked ? "取消喜欢" : "红心喜欢"}
+                    aria-label={isLiked ? "取消喜欢" : "红心喜欢"}
+                  >
+                    <SfHeart filled={isLiked} className="h-[17px] w-[17px]" />
+                  </button>
+                )}
+
+                <QuickCollectPopover song={activeSong} variant="stage" />
+
+                {isCurrentActive && (
+                  <button
+                    type="button"
+                    onClick={() => setFullscreenOpen(true)}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--tv-lcd-bg)] text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-nav-active)] hover:text-[var(--tv-text)] active:scale-95"
+                    title="全屏歌词"
+                    aria-label="展开全屏歌词"
+                  >
+                    <Maximize2 className="h-4 w-4" />
+                  </button>
                 )}
               </div>
             </div>
 
-            <div className="mt-6 flex items-center gap-3">
-              <button
-                type="button"
-                onClick={handlePlayToggle}
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#111113] shadow-lg transition-transform hover:scale-105 active:scale-95"
-                aria-label={isCurrentActive && isPlaying ? "暂停" : "播放"}
-              >
-                {isCurrentActive && isPlaying ? (
-                  <Pause className="h-5 w-5 fill-current" />
+            {/* Right Column: Standby-Frosted Preview vs Live Synchronized Lyrics */}
+            <div className="min-w-0 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3">
+                {isCurrentActive ? (
+                  <span className="inline-flex items-center gap-2 text-xs font-medium text-[var(--tv-accent)]">
+                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--tv-accent)] animate-pulse" />
+                    <span>正在漫游 · 词曲实时同步</span>
+                  </span>
                 ) : (
-                  <Play className="ml-0.5 h-5 w-5 fill-current" />
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--tv-lcd-bg)] px-2.5 py-1 text-[11.5px] font-medium text-[var(--tv-text-muted)]">
+                    <span>待机预览 · 点击左侧「开始漫游」或任意歌词切入电台</span>
+                  </span>
                 )}
-              </button>
 
-              <button
-                type="button"
-                disabled={fmLoading}
-                onClick={handleNext}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/12 text-white transition-colors hover:bg-white/20 disabled:opacity-50"
-                title="下一首"
-                aria-label="下一首"
+                <div className="flex items-center gap-2 text-[11.5px] tabular-nums text-[var(--tv-text-subtle)]">
+                  {activeSong.quality && <span>{activeSong.quality}</span>}
+                  {activeSong.quality && activeSong.duration && <span className="opacity-45">·</span>}
+                  {activeSong.duration && <span>{activeSong.duration}</span>}
+                </div>
+              </div>
+
+              <div
+                className={`relative h-[280px] overflow-hidden transition-all duration-500 sm:h-[330px] lg:h-[368px] ${
+                  isCurrentActive
+                    ? "opacity-100 blur-none"
+                    : "opacity-55 blur-[0.75px] hover:opacity-95 hover:blur-none focus-within:opacity-95 focus-within:blur-none"
+                }`}
               >
-                <SkipForward className="h-4 w-4 fill-current" />
-              </button>
-
-              {canLike && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    likeMutation.mutate({
-                      platform: activeSong.platform,
-                      songId: activeSong.id,
-                      nextLiked: !isLiked,
-                      songTitle: activeSong.title,
-                    })
+                <LyricScroller
+                  lines={lyricQuery.data?.lyrics.lines ?? []}
+                  loading={lyricQuery.isLoading}
+                  error={
+                    lyricQuery.isError
+                      ? lyricQuery.error instanceof Error
+                        ? lyricQuery.error.message
+                        : "歌词加载失败"
+                      : null
                   }
-                  className={`inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/12 transition-colors hover:bg-white/20 ${
-                    isLiked ? "text-[#fa2d48]" : "text-white/80"
-                  }`}
-                  title={isLiked ? "取消喜欢" : "红心喜欢"}
-                  aria-label={isLiked ? "取消喜欢" : "红心喜欢"}
-                >
-                  <Heart className={`h-4 w-4 ${isLiked ? "fill-current" : ""}`} />
-                </button>
-              )}
+                  onRetry={() => void lyricQuery.refetch()}
+                  large
+                  tone="theme"
+                  syncWithClock={isCurrentActive}
+                  onLineClick={handleLyricLineClick}
+                />
+              </div>
+            </div>
+          </section>
 
-              {isCurrentActive && (
+          {/* Lower Canvas Extension Zone: Upcoming & Recently Roamed */}
+          <div className="relative space-y-9 border-t border-[var(--tv-border)] pt-8">
+            <section className="space-y-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-baseline gap-2.5">
+                  <h3 className="text-[19px] font-bold tracking-tight text-[var(--tv-text)] sm:text-[20px]">
+                    接下来漫游
+                  </h3>
+                  {upcomingSongs.length > 0 && (
+                    <span className="text-[13px] font-medium tabular-nums text-[var(--tv-text-subtle)]">
+                      {upcomingSongs.length}
+                    </span>
+                  )}
+                </div>
+
                 <button
                   type="button"
-                  onClick={() => setFullscreenOpen(true)}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/12 text-white/80 transition-colors hover:bg-white/20"
-                  title="全屏歌词"
-                  aria-label="展开全屏歌词"
+                  disabled={fmLoading}
+                  onClick={() => void handleAppendBatch()}
+                  className="inline-flex h-7 items-center gap-1 rounded-[7px] px-2 text-xs font-medium text-[var(--tv-accent)] transition-colors hover:bg-[var(--tv-accent-soft)] disabled:opacity-45"
                 >
-                  <Maximize2 className="h-4 w-4" />
+                  <Plus className="h-3.5 w-3.5 stroke-[2.2]" />
+                  <span>预载更多</span>
                 </button>
-              )}
-            </div>
-          </div>
+              </div>
 
-          <div className="relative h-[260px] overflow-hidden sm:h-[320px] md:h-[380px]">
-            <LyricScroller
-              lines={lyricQuery.data?.lyrics.lines ?? []}
-              loading={lyricQuery.isLoading}
-              error={
-                lyricQuery.isError
-                  ? lyricQuery.error instanceof Error
-                    ? lyricQuery.error.message
-                    : "歌词加载失败"
-                  : null
-              }
-              onRetry={() => void lyricQuery.refetch()}
-              large
-              syncWithClock={isCurrentActive}
-              onLineClick={handleLyricLineClick}
-            />
+              {upcomingSongs.length > 0 ? (
+                <FmTrackShelfList songs={upcomingSongs} onSelectSong={handlePlaySpecificFmSong} />
+              ) : (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[var(--tv-lcd-bg)] px-4 py-3 text-xs text-[var(--tv-text-muted)]">
+                  <span>当前批次即将播完，曲终将自动续接下一批推荐曲目。</span>
+                  <button
+                    type="button"
+                    disabled={fmLoading}
+                    onClick={() => void handleAppendBatch()}
+                    className="font-semibold text-[var(--tv-accent)] transition-opacity hover:opacity-80 disabled:opacity-45"
+                  >
+                    立即续接下一批
+                  </button>
+                </div>
+              )}
+            </section>
+
+            {recentSongs.length > 0 && (
+              <section className="space-y-3.5 border-t border-[var(--tv-border)] pt-7">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <div className="flex items-baseline gap-2.5">
+                    <h3 className="text-[19px] font-bold tracking-tight text-[var(--tv-text)] sm:text-[20px]">
+                      刚刚听过
+                    </h3>
+                    <span className="text-[13px] font-medium tabular-nums text-[var(--tv-text-subtle)]">
+                      {recentSongs.length}
+                    </span>
+                  </div>
+                  <span className="text-xs text-[var(--tv-text-subtle)]">
+                    点击即可随时回到刚才擦肩而过的曲目
+                  </span>
+                </div>
+
+                <FmTrackShelfList songs={recentSongs} onSelectSong={handlePlaySpecificFmSong} />
+              </section>
+            )}
           </div>
-        </section>
+        </>
       )}
     </div>
   );

@@ -1,7 +1,9 @@
-import { type MusicPlatform, type QualityLevel, type Song, getSongKey } from "#shared";
+import { type MusicPlatform, type PersonalFmMode, type QualityLevel, type Song, getSongKey } from "#shared";
 import { isSongPlayable } from "../../entities/song/index.js";
 import { api } from "../../shared/api/endpoints.js";
 import { toast } from "../../shared/store/toast-store.js";
+
+const MAX_FM_RECENT_TRACKS = 12;
 
 export interface FmPlayTrackOptions {
   queue?: Song[];
@@ -15,7 +17,9 @@ export interface FmPlayTrackOptions {
 export interface FmStateSnapshot {
   currentTrack: Song | null;
   fmMode: boolean;
+  fmSubMode: PersonalFmMode;
   fmQueue: Song[];
+  fmRecentTracks: Song[];
   fmLoading: boolean;
   priorityQueue: Song[];
   preferredTrackQuality: QualityLevel | null;
@@ -25,7 +29,9 @@ export interface FmHost {
   getState(): FmStateSnapshot;
   patchState(patch: {
     fmMode?: boolean;
+    fmSubMode?: PersonalFmMode;
     fmQueue?: Song[];
+    fmRecentTracks?: Song[];
     fmLoading?: boolean;
     fmError?: string | null;
     isPlaying?: boolean;
@@ -34,6 +40,7 @@ export interface FmHost {
   getPlayToken(): number;
   isAudioActivelyPlaying(): boolean;
   onNoPlayableContinuation(): void;
+  syncActiveFmQueue?(queue: Song[]): void;
   playFmTrack(song: Song, options?: FmPlayTrackOptions): Promise<void>;
   playNext(): Promise<void>;
 }
@@ -111,14 +118,17 @@ export class FmController {
   resetPlatformState(platform: MusicPlatform): void {
     const state = this.#host.getState();
     const hasPlatformQueue = state.fmQueue.some((song) => song.platform === platform);
+    const hasPlatformRecent = state.fmRecentTracks.some((song) => song.platform === platform);
     const currentIsPlatformFm = state.fmMode && state.currentTrack?.platform === platform;
 
-    if (platform === "netease" || hasPlatformQueue || currentIsPlatformFm) {
+    if (platform === "netease" || hasPlatformQueue || hasPlatformRecent || currentIsPlatformFm) {
       this.abortFetch();
       this.#cursorIndex = -1;
       const nextFmQueue = state.fmQueue.filter((song) => song.platform !== platform);
+      const nextRecent = state.fmRecentTracks.filter((song) => song.platform !== platform);
       this.#host.patchState({
         fmQueue: nextFmQueue,
+        fmRecentTracks: nextRecent,
         fmLoading: false,
         fmError: null,
         ...(currentIsPlatformFm ? { fmMode: false } : {}),
@@ -126,13 +136,31 @@ export class FmController {
     }
   }
 
+  recordPassedTrack(prevSong: Song, nextSong?: Song | null): void {
+    const prevKey = getSongKey(prevSong);
+    const nextKey = nextSong ? getSongKey(nextSong) : null;
+    if (nextKey && prevKey === nextKey) return;
+    const { fmRecentTracks } = this.#host.getState();
+    const filtered = fmRecentTracks.filter((item) => {
+      const k = getSongKey(item);
+      return k !== prevKey && k !== nextKey;
+    });
+    this.#host.patchState({
+      fmRecentTracks: [prevSong, ...filtered].slice(0, MAX_FM_RECENT_TRACKS),
+    });
+  }
+
   async loadBatch(options?: {
     autoPlay?: boolean;
     source?: "page" | "engine";
     naturalAdvance?: boolean;
+    mode?: PersonalFmMode;
+    append?: boolean;
   }): Promise<Song[]> {
     const source = options?.source ?? "engine";
-    if (this.#fetching) {
+    const isModeSwitch = options?.mode !== undefined && options.mode !== this.#host.getState().fmSubMode;
+
+    if (this.#fetching && !isModeSwitch && !options?.append) {
       if (options?.autoPlay) {
         this.#autoPlayPending = true;
       }
@@ -154,10 +182,18 @@ export class FmController {
     this.#autoPlayPending = Boolean(options?.autoPlay);
     const requestToken = this.#host.getPlayToken();
 
-    this.#host.patchState({ fmLoading: true, fmError: null });
+    const effectiveMode = options?.mode ?? this.#host.getState().fmSubMode;
+    this.#host.patchState({
+      fmLoading: true,
+      fmError: null,
+      ...(options?.mode ? { fmSubMode: options.mode } : {}),
+    });
 
     try {
-      const res = await api.getPersonalFm(controller.signal);
+      const res =
+        effectiveMode === "DEFAULT"
+          ? await api.getPersonalFm(controller.signal)
+          : await api.getPersonalFm(controller.signal, effectiveMode);
       if (controller.signal.aborted) {
         return [];
       }
@@ -166,25 +202,42 @@ export class FmController {
         return [];
       }
 
-      const songs = res.songs ?? [];
-      this.#cursorIndex = -1;
+      const incoming = res.songs ?? [];
+      const preApplyState = this.#host.getState();
+
+      let nextQueue = incoming;
+      if (options?.append && preApplyState.fmQueue.length > 0) {
+        const seen = new Set(preApplyState.fmQueue.map((item) => getSongKey(item)));
+        const fresh = incoming.filter((item) => !seen.has(getSongKey(item)));
+        nextQueue = [...preApplyState.fmQueue, ...fresh];
+      } else {
+        if (preApplyState.fmMode && preApplyState.currentTrack) {
+          this.recordPassedTrack(preApplyState.currentTrack, incoming[0] ?? null);
+        }
+        this.#cursorIndex = -1;
+      }
+
       if (this.#abortController === controller) {
         this.#fetching = false;
         this.#fetchSource = null;
         this.#autoPlayPending = false;
       }
       this.#host.patchState({
-        fmQueue: songs,
+        fmQueue: nextQueue,
         fmLoading: false,
         fmError: null,
       });
 
-      if (shouldAutoPlay) {
-        const first = songs.find((item) => isSongPlayable(item));
+      if (options?.append && preApplyState.fmMode) {
+        this.#host.syncActiveFmQueue?.(nextQueue);
+      }
+
+      if (shouldAutoPlay && !options?.append) {
+        const first = incoming.find((item) => isSongPlayable(item));
         if (first) {
           const preferredLevel = this.#host.getState().preferredTrackQuality ?? undefined;
           await this.#host.playFmTrack(first, {
-            queue: songs,
+            queue: nextQueue,
             level: preferredLevel,
             preservePriorityQueue: source === "engine",
             preservePreferredQuality: true,
@@ -195,12 +248,12 @@ export class FmController {
           if (!this.#host.isAudioActivelyPlaying()) {
             this.#host.patchState({ isPlaying: false, isLoading: false });
           }
-          if (songs.length > 0) {
+          if (incoming.length > 0) {
             toast.info("当前队列中的歌曲均不可播放");
           }
         }
       }
-      return songs;
+      return nextQueue;
     } catch (err) {
       if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
         return [];
@@ -221,6 +274,62 @@ export class FmController {
         this.#host.patchState({ fmLoading: false });
       }
     }
+  }
+
+  async trashSong(song: Song): Promise<void> {
+    const targetKey = getSongKey(song);
+    const state = this.#host.getState();
+    const prevIdx = state.fmQueue.findIndex((item) => getSongKey(item) === targetKey);
+    const remainingQueue = state.fmQueue.filter((item) => getSongKey(item) !== targetKey);
+    const remainingRecent = state.fmRecentTracks.filter((item) => getSongKey(item) !== targetKey);
+
+    const wasCurrentFm = Boolean(
+      state.fmMode && state.currentTrack && getSongKey(state.currentTrack) === targetKey,
+    );
+
+    if (prevIdx >= 0 && this.#cursorIndex >= prevIdx) {
+      this.#cursorIndex = Math.max(-1, this.#cursorIndex - 1);
+    }
+
+    this.#host.patchState({
+      fmQueue: remainingQueue,
+      fmRecentTracks: remainingRecent,
+    });
+    if (state.fmMode) {
+      this.#host.syncActiveFmQueue?.(remainingQueue);
+    }
+
+    const trashPromise = api
+      .trashPersonalFm(song.id)
+      .then(() => {
+        toast.info(`已减少推荐「${song.title}」`);
+      })
+      .catch((err) => {
+        toast.error(err instanceof Error ? err.message : "标记不喜欢失败");
+      });
+
+    if (wasCurrentFm) {
+      const startScan = prevIdx >= 0 ? prevIdx : 0;
+      const nextCandidate =
+        remainingQueue.slice(startScan).find((item) => isSongPlayable(item)) ??
+        remainingQueue.find((item) => isSongPlayable(item));
+
+      if (nextCandidate) {
+        this.#cursorIndex = remainingQueue.indexOf(nextCandidate);
+        await this.#host.playFmTrack(nextCandidate, {
+          queue: remainingQueue,
+          level: state.preferredTrackQuality ?? undefined,
+          preservePriorityQueue: true,
+          preservePreferredQuality: true,
+        });
+      } else {
+        await this.loadBatch({ autoPlay: true, source: "page" }).catch(() => undefined);
+      }
+    } else if (remainingQueue.length === 0) {
+      await this.loadBatch({ autoPlay: false, source: "page" }).catch(() => undefined);
+    }
+
+    await trashPromise;
   }
 
   async nextTrack(options?: { naturalAdvance?: boolean }): Promise<void> {

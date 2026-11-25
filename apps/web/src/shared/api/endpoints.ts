@@ -18,6 +18,7 @@ import type {
   JobsListResponse,
   LoginInput,
   MusicPlatform,
+  PersonalFmMode,
   PlatformBindingView,
   PlayerState,
   PlaylistSort,
@@ -115,7 +116,13 @@ export const api = {
     apiRequest<{ artist: ArtistDetail }>(`/api/artists/${platform}/${encodeURIComponent(id)}`),
   getAlbumDetail: (platform: MusicPlatform, id: string) =>
     apiRequest<{ album: AlbumDetail }>(`/api/albums/${platform}/${encodeURIComponent(id)}`),
-  getPersonalFm: (signal?: AbortSignal) => apiRequest<{ songs: Song[] }>("/api/fm", { signal }),
+  getPersonalFm: (signal?: AbortSignal, mode?: PersonalFmMode) =>
+    apiRequest<{ songs: Song[] }>(
+      mode && mode !== "DEFAULT" ? `/api/fm?mode=${encodeURIComponent(mode)}` : "/api/fm",
+      { signal },
+    ),
+  trashPersonalFm: (id: string) =>
+    apiRequest<{ ok: boolean }>(`/api/fm/trash/${encodeURIComponent(id)}`, { method: "POST" }),
   getDailyRecommend: () => apiRequest<{ songs: Song[] }>("/api/recommend/daily"),
   getCloudSongs: (params?: { offset?: number; limit?: number }) => {
     const qs = new URLSearchParams();

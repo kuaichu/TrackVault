@@ -1,4 +1,12 @@
-import type { MusicPlatform, PlaybackMode, PreferenceQualityLevel, QualityLevel, Song } from "#shared";
+import {
+  type MusicPlatform,
+  type PersonalFmMode,
+  type PlaybackMode,
+  type PreferenceQualityLevel,
+  type QualityLevel,
+  type Song,
+  getSongKey,
+} from "#shared";
 import { isSongPlayable } from "../../../entities/song/index.js";
 import { api } from "../../../shared/api/endpoints.js";
 import { toast } from "../../../shared/store/toast-store.js";
@@ -75,7 +83,9 @@ export class AudioEngine {
         return {
           currentTrack: s.currentTrack,
           fmMode: s.fmMode,
+          fmSubMode: s.fmSubMode,
           fmQueue: s.fmQueue,
+          fmRecentTracks: s.fmRecentTracks,
           fmLoading: s.fmLoading,
           priorityQueue: s.priorityQueue,
           preferredTrackQuality: s.preferredTrackQuality,
@@ -90,6 +100,7 @@ export class AudioEngine {
           this.#playIntent = false;
         }
       },
+      syncActiveFmQueue: (queue) => this.replaceQueueSilently(queue),
       playFmTrack: (song, opts) => this.playFmTrack(song, opts),
       playNext: () => this.playNext(),
     });
@@ -420,9 +431,15 @@ export class AudioEngine {
     const state = usePlayerStore.getState();
 
     if (!isFm) {
+      if (state.fmMode && state.currentTrack) {
+        this.#fm.recordPassedTrack(state.currentTrack, song);
+      }
       this.#fm.abortFetch();
       this.#fm.resetCursor();
     } else {
+      if (state.fmMode && state.currentTrack && getSongKey(state.currentTrack) !== getSongKey(song)) {
+        this.#fm.recordPassedTrack(state.currentTrack, song);
+      }
       this.#fm.updateCursorForTrack(song, options?.queue);
     }
 
@@ -497,8 +514,23 @@ export class AudioEngine {
     autoPlay?: boolean;
     source?: "page" | "engine";
     naturalAdvance?: boolean;
+    mode?: PersonalFmMode;
+    append?: boolean;
   }): Promise<Song[]> {
     return this.#fm.loadBatch(options);
+  }
+
+  setFmSubMode(mode: PersonalFmMode, options?: { autoPlay?: boolean }): Promise<Song[]> {
+    const autoPlay = options?.autoPlay ?? usePlayerStore.getState().fmMode;
+    return this.#fm.loadBatch({ mode, autoPlay, source: "page" });
+  }
+
+  appendFmBatch(): Promise<Song[]> {
+    return this.#fm.loadBatch({ autoPlay: false, source: "page", append: true });
+  }
+
+  trashFmSong(song: Song): Promise<void> {
+    return this.#fm.trashSong(song);
   }
 
   nextFmTrack(options?: { naturalAdvance?: boolean }): Promise<void> {

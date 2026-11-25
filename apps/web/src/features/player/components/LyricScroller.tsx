@@ -15,6 +15,7 @@ export function LyricScroller({
   error = null,
   onRetry,
   large = false,
+  tone = "dark",
   syncWithClock = true,
   onLineClick,
   emptyText = "纯音乐或暂无歌词",
@@ -24,6 +25,8 @@ export function LyricScroller({
   error?: string | null;
   onRetry?: () => void;
   large?: boolean;
+  /** "dark" for fixed dark surfaces (FullscreenPlayer), "theme" for canvas-integrated surfaces (PersonalFmPage). */
+  tone?: "dark" | "theme";
   /** Set false when previewing lyrics of a non-playing track (e.g. unplayed FM candidate). */
   syncWithClock?: boolean;
   onLineClick?: (time: number) => void;
@@ -81,9 +84,13 @@ export function LyricScroller({
     }
   }, [activeIndex, syncWithClock]);
 
+  const isDarkTone = large && tone === "dark";
+
   if (loading) {
     return (
-      <div className={`py-16 text-center text-sm ${large ? "text-white/50" : "text-[var(--tv-text-muted)]"}`}>
+      <div
+        className={`py-16 text-center text-sm ${isDarkTone ? "text-white/50" : "text-[var(--tv-text-muted)]"}`}
+      >
         载入歌词...
       </div>
     );
@@ -92,7 +99,7 @@ export function LyricScroller({
   if (error) {
     return (
       <div
-        className={`py-16 text-center text-sm space-y-3 ${large ? "text-white/70" : "text-[var(--tv-text-muted)]"}`}
+        className={`py-16 text-center text-sm space-y-3 ${isDarkTone ? "text-white/70" : "text-[var(--tv-text-muted)]"}`}
       >
         <div>{error}</div>
         {onRetry && (
@@ -100,7 +107,7 @@ export function LyricScroller({
             type="button"
             onClick={onRetry}
             className={`inline-flex items-center rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-              large
+              isDarkTone
                 ? "bg-white/15 text-white hover:bg-white/25"
                 : "bg-[var(--tv-surface)] text-[var(--tv-text)] hover:bg-[var(--tv-surface-active)]"
             }`}
@@ -114,7 +121,9 @@ export function LyricScroller({
 
   if (!hasVocalLines) {
     return (
-      <div className={`py-16 text-center text-sm ${large ? "text-white/50" : "text-[var(--tv-text-muted)]"}`}>
+      <div
+        className={`py-16 text-center text-sm ${isDarkTone ? "text-white/50" : "text-[var(--tv-text-muted)]"}`}
+      >
         {emptyText}
       </div>
     );
@@ -145,6 +154,37 @@ export function LyricScroller({
         const distance = activeIndex >= 0 ? Math.abs(index - activeIndex) : 0;
 
         if (large) {
+          if (tone === "theme") {
+            return (
+              <button
+                key={`${line.time}-${index}`}
+                ref={isActive ? activeRef : undefined}
+                type="button"
+                onClick={() => handleLineClick(line.time)}
+                className={`block w-full origin-left rounded-xl px-3 py-1.5 text-left transition-all duration-300 hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)] hover:opacity-100 ${
+                  isActive
+                    ? "scale-[1.02] text-[25px] font-bold leading-snug text-[var(--tv-text)]"
+                    : !syncWithClock
+                      ? "text-[19.5px] font-medium leading-snug text-[var(--tv-text-muted)]"
+                      : distance <= 2
+                        ? "text-[20px] font-semibold leading-snug text-[var(--tv-text)] opacity-45"
+                        : "text-[19px] font-medium leading-snug text-[var(--tv-text)] opacity-26"
+                }`}
+              >
+                <div>{line.text}</div>
+                {line.translation && (
+                  <div
+                    className={`mt-1 text-[15px] font-normal ${
+                      isActive ? "text-[var(--tv-text-muted)]" : "text-[var(--tv-text-subtle)]"
+                    }`}
+                  >
+                    {line.translation}
+                  </div>
+                )}
+              </button>
+            );
+          }
+
           return (
             <button
               key={`${line.time}-${index}`}

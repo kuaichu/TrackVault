@@ -271,6 +271,16 @@ export function SfCommentBubble(props: IconProps) {
   );
 }
 
+/** Apple Music "Suggest Less" / FM Dislike slash-circle icon */
+export function SfSlashCircle(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <circle cx="12" cy="12" r="8.75" stroke="currentColor" strokeWidth="2.05" />
+      <path d="M6.05 6.05L17.95 17.95" stroke="currentColor" strokeWidth="2.05" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /** Apple Music playing-next / queue list icon */
 export function SfQueueList(props: IconProps) {
   return (
