@@ -4,6 +4,18 @@
 
 > **历史版本说明**：当前主线（`main`）为全新重构的 **TrackVault v2**。早期 Express 单体旧版已完整归档保留在 [`v1-legacy`](https://github.com/kuaichu/TrackVault/tree/v1-legacy) 分支与同名标签中。
 
+![发现主页与悬浮毛玻璃播放栏](./docs/screenshots/discover.png)
+
+## 界面预览
+
+| 私人漫游电台（三联层叠封面 + 全画布取色柔光） | 全屏双语滚动歌词 |
+| :---: | :---: |
+| ![私人漫游电台](./docs/screenshots/personal-fm.png) | ![全屏双语滚动歌词](./docs/screenshots/fullscreen-player.png) |
+
+| 歌单详情（无框大封面 + 斑马纹曲目表 + AppleSelect） | 私有实例成员登录页（黑胶纹路画布） |
+| :---: | :---: |
+| ![歌单详情](./docs/screenshots/playlist-detail.png) | ![私有实例登录页](./docs/screenshots/auth-gate.png) |
+
 ---
 
 ## 核心特性
