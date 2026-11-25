@@ -28,7 +28,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, useLocation, useNavigate, useNavigationType } from "react-router-dom";
 import type { AuthStatus, UserSummary } from "#shared";
 import { useJobsQuery } from "../entities/job/index.js";
 import {
@@ -46,6 +46,7 @@ import {
   useModalFocusTrap,
 } from "../shared/hooks/use-modal-focus-trap.js";
 import { useSettingsQuery } from "../shared/hooks/use-settings-query.js";
+import { useCanvasHeaderStore } from "../shared/store/canvas-header-store.js";
 import { useThemeStore } from "../shared/store/theme-store.js";
 import { toast } from "../shared/store/toast-store.js";
 import { MAIN_AMBIENT_SLOT_ID } from "../shared/ui/primitives.js";
@@ -94,6 +95,30 @@ const MOBILE_TABS = [
   { to: "/playlists", label: "歌单", icon: ListMusic },
 ] as const;
 
+function resolvePrimaryRouteTitle(pathname: string): string | null {
+  if (pathname === "/discover") return "发现";
+  if (pathname === "/charts") return "排行榜";
+  if (pathname === "/fm") return "私人漫游";
+  if (pathname === "/playlists") return "歌单";
+  if (pathname === "/cloud") return "云盘";
+  if (pathname === "/history") return "最近播放";
+  if (pathname === "/downloads") return "下载管理";
+  if (pathname === "/transfer") return "歌单迁移";
+  if (pathname === "/settings") return "设置";
+  if (pathname === "/search") return "搜索";
+  return null;
+}
+
+function resolveDetailParentFallback(pathname: string): string | null {
+  const playlistMatch = /^\/playlists\/(netease|qq)\//.exec(pathname);
+  if (playlistMatch) return `/playlists?platform=${playlistMatch[1]}`;
+  const chartMatch = /^\/charts\/(netease|qq)\//.exec(pathname);
+  if (chartMatch) return `/charts?platform=${chartMatch[1]}`;
+  const mediaMatch = /^\/(?:artist|album)\/(netease|qq)\//.exec(pathname);
+  if (mediaMatch) return `/discover?platform=${mediaMatch[1]}`;
+  return null;
+}
+
 function AppShellInner({
   user,
   children,
@@ -105,13 +130,36 @@ function AppShellInner({
 }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const navType = useNavigationType();
   const queryClient = useQueryClient();
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const workspaceShellRef = useRef<HTMLDivElement | null>(null);
   const bottomBarsRef = useRef<HTMLDivElement | null>(null);
   const mobileDrawerRef = useRef<HTMLDialogElement | null>(null);
+  const mainRef = useRef<HTMLElement | null>(null);
   const [quickQuery, setQuickQuery] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // Track in-app history stack for crisp macOS < > enabled/disabled states
+  const historyStackRef = useRef<{ keys: string[]; index: number; lastKey: string }>({
+    keys: [location.key],
+    index: 0,
+    lastKey: location.key,
+  });
+  if (historyStackRef.current.lastKey !== location.key) {
+    const { keys, index } = historyStackRef.current;
+    const existingIdx = keys.indexOf(location.key);
+    if (navType === "POP" && existingIdx >= 0) {
+      historyStackRef.current = { keys, index: existingIdx, lastKey: location.key };
+    } else if (navType === "REPLACE") {
+      const nextKeys = [...keys];
+      nextKeys[index] = location.key;
+      historyStackRef.current = { keys: nextKeys, index, lastKey: location.key };
+    } else {
+      const nextKeys = [...keys.slice(0, index + 1), location.key];
+      historyStackRef.current = { keys: nextKeys, index: nextKeys.length - 1, lastKey: location.key };
+    }
+  }
 
   const resolvedTheme = useThemeStore((s) => s.resolved);
   const toggleLightDark = useThemeStore((s) => s.toggleLightDark);
@@ -159,13 +207,35 @@ function AppShellInner({
   });
 
   const pathname = location.pathname;
-  const [mainScrolled, setMainScrolled] = useState(false);
+  const [mainScrollStage, setMainScrollStage] = useState<0 | 1 | 2>(0);
+  const heroTitle = useCanvasHeaderStore((s) => s.heroTitle);
+  const heroScrolledPast = useCanvasHeaderStore((s) => s.heroScrolledPast);
+
   useEffect(() => {
     if (pathname) {
       setMobileMenuOpen(false);
-      setMainScrolled(false);
+      setMainScrollStage(0);
+      if (mainRef.current && typeof mainRef.current.scrollTo === "function") {
+        mainRef.current.scrollTo({ top: 0 });
+      }
     }
   }, [pathname]);
+
+  const browserHistoryIdx =
+    typeof window !== "undefined" && typeof window.history?.state?.idx === "number"
+      ? window.history.state.idx
+      : 0;
+  const hasHistoryBack = historyStackRef.current.index > 0 || browserHistoryIdx > 0;
+  const detailFallbackPath = resolveDetailParentFallback(pathname);
+  const canGoBack = hasHistoryBack || detailFallbackPath !== null;
+  const canGoForward = historyStackRef.current.index < historyStackRef.current.keys.length - 1;
+
+  const primaryTitle = resolvePrimaryRouteTitle(pathname);
+  const compactHeaderTitle = heroTitle ?? primaryTitle;
+  const showCompactHeader = Boolean(
+    compactHeaderTitle && (heroTitle ? heroScrolledPast || mainScrollStage === 2 : mainScrollStage >= 1),
+  );
+  const mainScrolled = mainScrollStage >= 1 || showCompactHeader;
 
   const settingsQuery = useSettingsQuery();
   const activeDownloadsQuery = useJobsQuery("download");
@@ -434,23 +504,27 @@ function AppShellInner({
             {renderSidebarContent(false)}
           </aside>
 
-          {/* Borderless Apple Music Main Canvas (no T-bar header divider; content glides to top edge) */}
+          {/* Borderless Apple Music Main Canvas (no T-bar header divider at rest; frosted compact bar on scroll) */}
           <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-            {/* Soft top edge scroll fade (only appears once canvas scrolls under top corner buttons) */}
+            {/* Soft top edge scroll fade before full frosted compact header engages */}
             <div
               aria-hidden="true"
-              className={`tv-top-scrim pointer-events-none absolute inset-x-0 top-0 h-11 transition-opacity duration-200 ${
-                mainScrolled ? "opacity-100" : "opacity-0"
+              className={`tv-top-scrim pointer-events-none absolute inset-x-0 top-0 h-12 transition-opacity duration-200 ${
+                mainScrolled && !showCompactHeader ? "opacity-100" : "opacity-0"
               }`}
               style={{ zIndex: "calc(var(--tv-z-sticky) - 1)" }}
             />
 
-            {/* Lightweight floating corner controls (Back/Forward & Theme Toggle) */}
+            {/* macOS Window Chrome: < > History Controls + Scroll-Linked Sticky Title + Theme Toggle */}
             <div
-              className="tv-pt-safe pointer-events-none absolute inset-x-0 top-0 flex min-h-11 items-center justify-between px-3.5 [--tv-safe-pt-base:0.375rem] md:px-8"
+              className={`tv-pt-safe pointer-events-none absolute inset-x-0 top-0 flex min-h-12 items-center justify-between gap-3 border-b px-3.5 transition-[background-color,border-color,backdrop-filter] duration-200 [--tv-safe-pt-base:0.25rem] md:px-8 ${
+                showCompactHeader
+                  ? "border-[var(--tv-border)] bg-[var(--tv-header-bg)] backdrop-blur-2xl backdrop-saturate-[180%]"
+                  : "border-transparent bg-transparent"
+              }`}
               style={{ zIndex: "var(--tv-z-sticky)" }}
             >
-              <div className="pointer-events-auto flex items-center gap-1">
+              <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-1">
                 <button
                   type="button"
                   onClick={() => setMobileMenuOpen(true)}
@@ -460,33 +534,57 @@ function AppShellInner({
                   <Menu className="h-5 w-5" />
                 </button>
 
-                <div className="hidden items-center gap-0.5 sm:flex">
+                <div className="flex shrink-0 items-center gap-0.5">
                   <button
                     type="button"
-                    onClick={() => navigate(-1)}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--tv-text-subtle)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
+                    disabled={!canGoBack}
+                    onClick={() => {
+                      if (hasHistoryBack) {
+                        navigate(-1);
+                      } else if (detailFallbackPath) {
+                        navigate(detailFallbackPath);
+                      }
+                    }}
+                    className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-full text-[var(--tv-text)] opacity-88 transition-all hover:bg-[var(--tv-nav-active)] hover:opacity-100 active:scale-95 disabled:cursor-default disabled:opacity-22 disabled:hover:bg-transparent"
                     title="后退"
                     aria-label="后退"
                   >
-                    <ChevronLeft className="h-4 w-4" />
+                    <ChevronLeft className="h-[18px] w-[18px] stroke-[2.2]" />
                   </button>
                   <button
                     type="button"
+                    disabled={!canGoForward}
                     onClick={() => navigate(1)}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--tv-text-subtle)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
+                    className="hidden h-[30px] w-[30px] items-center justify-center rounded-full text-[var(--tv-text)] opacity-88 transition-all hover:bg-[var(--tv-nav-active)] hover:opacity-100 active:scale-95 disabled:cursor-default disabled:opacity-22 disabled:hover:bg-transparent sm:inline-flex"
                     title="前进"
                     aria-label="前进"
                   >
-                    <ChevronRight className="h-4 w-4" />
+                    <ChevronRight className="h-[18px] w-[18px] stroke-[2.2]" />
                   </button>
                 </div>
+
+                {compactHeaderTitle && (
+                  <button
+                    type="button"
+                    tabIndex={showCompactHeader ? 0 : -1}
+                    aria-hidden={!showCompactHeader}
+                    onClick={() => mainRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
+                    className={`ml-1.5 min-w-0 max-w-[320px] truncate text-left text-[14px] font-bold tracking-tight text-[var(--tv-text)] transition-all duration-200 sm:max-w-[440px] ${
+                      showCompactHeader
+                        ? "translate-y-0 opacity-100"
+                        : "pointer-events-none translate-y-1 opacity-0"
+                    }`}
+                  >
+                    {compactHeaderTitle}
+                  </button>
+                )}
               </div>
 
               <div className="pointer-events-auto flex shrink-0 items-center gap-1">
                 <button
                   type="button"
                   onClick={toggleLightDark}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--tv-text-subtle)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
+                  className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-full text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-nav-active)] hover:text-[var(--tv-text)]"
                   title={resolvedTheme === "dark" ? "切换浅色模式" : "切换深色模式"}
                   aria-label="切换明暗主题"
                 >
@@ -496,11 +594,13 @@ function AppShellInner({
             </div>
 
             <main
+              ref={mainRef}
               onScroll={(e) => {
-                const nextScrolled = e.currentTarget.scrollTop > 6;
-                setMainScrolled((prev) => (prev === nextScrolled ? prev : nextScrolled));
+                const top = e.currentTarget.scrollTop;
+                const nextStage: 0 | 1 | 2 = top > 196 ? 2 : top > 52 ? 1 : 0;
+                setMainScrollStage((prev) => (prev === nextStage ? prev : nextStage));
               }}
-              className="relative flex-1 overflow-y-auto px-4 pt-11 pb-5 sm:px-6 sm:pt-11 sm:pb-6 md:px-8 md:pt-10 md:pb-40"
+              className="relative flex-1 overflow-y-auto px-4 pt-12 pb-5 sm:px-6 sm:pt-12 sm:pb-6 md:px-8 md:pt-11 md:pb-40"
             >
               {/* Full-bleed canvas ambient backdrop slot (edge-to-edge from sidebar to right window border) */}
               <div

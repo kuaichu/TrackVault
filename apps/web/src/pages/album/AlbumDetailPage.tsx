@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Play } from "lucide-react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Play } from "lucide-react";
+import { useParams } from "react-router-dom";
 import type { MusicPlatform } from "#shared";
 import { ArtistLinks, MediaDetailHeader } from "../../entities/music/index.js";
 import { findFirstPlayableSong } from "../../entities/song/index.js";
@@ -11,7 +11,6 @@ import { EmptyState } from "../../shared/ui/primitives.js";
 import { SongTable } from "../../widgets/song-table/index.js";
 
 export function AlbumDetailPage() {
-  const navigate = useNavigate();
   const { platform: rawPlatform, id = "" } = useParams();
   const platform: MusicPlatform = rawPlatform === "qq" ? "qq" : "netease";
 
@@ -25,15 +24,6 @@ export function AlbumDetailPage() {
 
   return (
     <div className="space-y-7">
-      <button
-        type="button"
-        onClick={() => navigate(-1)}
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--tv-text-muted)] transition-colors hover:text-[var(--tv-text)]"
-      >
-        <ArrowLeft className="h-3.5 w-3.5" />
-        返回
-      </button>
-
       {albumQuery.isLoading ? (
         <div className="space-y-6">
           <div className="flex items-end gap-6">

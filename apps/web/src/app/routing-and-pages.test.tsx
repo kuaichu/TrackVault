@@ -26,6 +26,7 @@ import { useToastStore } from "../shared/store/toast-store.js";
 import { ToastContainer } from "../shared/ui/primitives.js";
 import { SongTable } from "../widgets/song-table/index.js";
 import { AppContent } from "./App.js";
+import { AppShell } from "./AppShell.js";
 
 const ADMIN_USER: UserSummary = {
   id: "u-admin",
@@ -171,8 +172,10 @@ describe("Phase 5 · Routing, providerMode defaults, URL state, QR polling, erro
     });
   });
 
-  it("ChartsPage persists ?platform= in URL and ChartDetailPage back preserves platform (U08)", async () => {
+  it("ChartsPage persists ?platform= in URL and macOS < > history controls navigate back/forward preserving platform (U08)", async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.spyOn(api, "getCapabilities").mockResolvedValue({ capabilities: DEFAULT_PROVIDER_CAPABILITIES });
+    vi.spyOn(api, "listJobs").mockResolvedValue({ jobs: [] });
     vi.spyOn(api, "getSettings").mockResolvedValue({
       settings: makeSettings({ providerMode: "netease" }),
     });
@@ -194,35 +197,56 @@ describe("Phase 5 · Routing, providerMode defaults, URL state, QR polling, erro
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={["/charts"]}>
           <LocationProbe />
-          <Routes>
-            <Route path="/charts" element={<ChartsPage />} />
-            <Route path="/charts/:platform/:id" element={<ChartDetailPage />} />
-          </Routes>
+          <AppShell user={ADMIN_USER}>
+            <Routes>
+              <Route path="/charts" element={<ChartsPage />} />
+              <Route path="/charts/:platform/:id" element={<ChartDetailPage />} />
+            </Routes>
+          </AppShell>
         </MemoryRouter>
       </QueryClientProvider>,
     );
+
+    const backBtn = screen.getByRole("button", { name: "后退" });
+    const forwardBtn = screen.getByRole("button", { name: "前进" });
+    expect(backBtn).toBeDisabled();
+    expect(forwardBtn).toBeDisabled();
 
     await waitFor(() => {
       expect(screen.getByText("云音乐飙升榜")).toBeInTheDocument();
     });
 
-    // Switch to QQ -> URL updates to ?platform=qq
+    // Switch to QQ -> URL pushes ?platform=qq onto history stack (< lights up)
     fireEvent.click(screen.getByRole("button", { name: "QQ 音乐" }));
     await waitFor(() => {
       expect(screen.getByTestId("loc").textContent).toBe("/charts?platform=qq");
       expect(screen.getByText("QQ 热歌榜")).toBeInTheDocument();
     });
+    expect(backBtn).not.toBeDisabled();
 
-    // Navigate into QQ chart detail and click back -> preserves ?platform=qq
+    // Navigate into QQ chart detail -> clicking < returns to /charts?platform=qq and lights up >
     fireEvent.click(screen.getByText("QQ 热歌榜"));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /返回排行榜/ })).toBeInTheDocument();
+      expect(screen.getByTestId("loc").textContent).toBe("/charts/qq/qq-top-1");
+      expect(screen.getByRole("heading", { name: "QQ 热歌榜" })).toBeInTheDocument();
     });
+    expect(backBtn).not.toBeDisabled();
+    expect(forwardBtn).toBeDisabled();
 
-    fireEvent.click(screen.getByRole("button", { name: /返回排行榜/ }));
+    fireEvent.click(backBtn);
     await waitFor(() => {
       expect(screen.getByTestId("loc").textContent).toBe("/charts?platform=qq");
     });
+    expect(backBtn).not.toBeDisabled();
+    expect(forwardBtn).not.toBeDisabled();
+
+    // Second < click reaches initial entry /charts -> < dims back to disabled
+    fireEvent.click(backBtn);
+    await waitFor(() => {
+      expect(screen.getByTestId("loc").textContent).toBe("/charts");
+    });
+    expect(backBtn).toBeDisabled();
+    expect(forwardBtn).not.toBeDisabled();
   });
 
   it("PlaylistDetailPage resets on playlist switch, clamps page after deleting last track on final page, and offers title-desc sort (F12/F13/C065)", async () => {

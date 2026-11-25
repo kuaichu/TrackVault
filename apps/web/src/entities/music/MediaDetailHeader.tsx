@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { type MusicPlatform, sanitizeCssUrl } from "#shared";
+import { useCanvasHeaderStore } from "../../shared/store/canvas-header-store.js";
 import { CoverArt, ExpandableText } from "../../shared/ui/primitives.js";
 
 function toHiResCoverUrl(url?: string): string | undefined {
@@ -46,6 +47,37 @@ export function MediaDetailHeader({
   const hiResCoverUrl = toHiResCoverUrl(coverUrl);
   const headerGlow = sanitizeCssUrl(hiResCoverUrl ?? coverUrl);
   const isCircleCover = coverRounded.includes("rounded-full");
+  const titleRef = useRef<HTMLHeadingElement | null>(null);
+
+  useEffect(() => {
+    useCanvasHeaderStore.getState().setHeroTitle(title);
+    return () => {
+      useCanvasHeaderStore.getState().resetHeroHeader();
+    };
+  }, [title]);
+
+  useEffect(() => {
+    const el = titleRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+
+    const scrollRoot = el.closest("main");
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry) return;
+        const rootTop = entry.rootBounds?.top ?? 0;
+        const passedTop = !entry.isIntersecting && entry.boundingClientRect.bottom <= rootTop + 52;
+        useCanvasHeaderStore.getState().setHeroScrolledPast(passedTop);
+      },
+      {
+        root: scrollRoot instanceof Element ? scrollRoot : null,
+        rootMargin: "-48px 0px 0px 0px",
+        threshold: 0,
+      },
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <section className={`relative flex flex-col gap-6 pt-1 pb-2 sm:flex-row sm:gap-8 ${containerAlignClass}`}>
@@ -79,7 +111,10 @@ export function MediaDetailHeader({
           </div>
         )}
         <div className="flex flex-wrap items-baseline gap-2.5">
-          <h1 className="text-2xl leading-tight font-extrabold tracking-tight text-[var(--tv-text)] sm:text-[32px] md:text-[34px]">
+          <h1
+            ref={titleRef}
+            className="text-2xl leading-tight font-extrabold tracking-tight text-[var(--tv-text)] sm:text-[32px] md:text-[34px]"
+          >
             {title}
           </h1>
           {titleSuffix}

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Play } from "lucide-react";
+import { Play } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import type { MusicPlatform } from "#shared";
@@ -28,15 +28,6 @@ export function ArtistDetailPage() {
 
   return (
     <div className="space-y-7">
-      <button
-        type="button"
-        onClick={() => navigate(-1)}
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--tv-text-muted)] transition-colors hover:text-[var(--tv-text)]"
-      >
-        <ArrowLeft className="h-3.5 w-3.5" />
-        返回
-      </button>
-
       {artistQuery.isLoading ? (
         <div className="space-y-6">
           <div className="flex items-center gap-6">
@@ -110,7 +101,7 @@ export function ArtistDetailPage() {
                     }
                     void audioEngine.playTrack(first, { queue: artist.hotSongs });
                   }}
-                  className="inline-flex items-center gap-1.5 rounded-full bg-[var(--tv-accent)] px-5 py-2 text-xs font-semibold text-[var(--tv-accent-fg)] transition-colors hover:bg-[var(--tv-accent-hover)] disabled:opacity-40"
+                  className="inline-flex h-9 min-w-[124px] items-center justify-center gap-1.5 rounded-[8px] bg-[var(--tv-accent)] px-5 text-[13px] font-semibold text-[var(--tv-accent-fg)] transition-all hover:bg-[var(--tv-accent-hover)] active:scale-[0.98] disabled:opacity-40"
                 >
                   <Play className="h-3.5 w-3.5 fill-current" />
                   播放热门歌曲

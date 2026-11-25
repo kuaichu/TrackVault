@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, Play } from "lucide-react";
+import { Loader2, Play } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import type { ChartSummary, MusicPlatform } from "#shared";
@@ -155,7 +155,6 @@ export function ChartsPage() {
 }
 
 export function ChartDetailPage() {
-  const navigate = useNavigate();
   const { platform: rawPlatform, id = "" } = useParams();
   const platform: MusicPlatform = rawPlatform === "qq" ? "qq" : "netease";
 
@@ -170,15 +169,6 @@ export function ChartDetailPage() {
 
   return (
     <div className="space-y-6">
-      <button
-        type="button"
-        onClick={() => navigate(`/charts?platform=${platform}`)}
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--tv-text-muted)] transition-colors hover:text-[var(--tv-text)]"
-      >
-        <ArrowLeft className="h-3.5 w-3.5" />
-        返回排行榜
-      </button>
-
       {detailQuery.isLoading ? (
         <div className="space-y-2">
           {["cd1", "cd2", "cd3", "cd4", "cd5", "cd6"].map((rowId) => (
