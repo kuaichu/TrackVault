@@ -100,7 +100,8 @@ export function QualitySelectorPopover({
   const buttonTitle = isFullscreen ? "切换音质" : "切换试听音质";
 
   return (
-    <div className="relative" onPointerDown={(e) => e.stopPropagation()}>
+    // biome-ignore lint/a11y/useKeyWithClickEvents: stopPropagation boundary around interactive popover controls
+    <div className="relative" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}

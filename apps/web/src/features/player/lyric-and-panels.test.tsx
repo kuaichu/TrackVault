@@ -525,7 +525,18 @@ describe("LyricScroller, RightDrawer, and Fullscreen inline panels", () => {
     const collectBtns = screen.getAllByRole("button", { name: "收藏到歌单" });
     expect(collectBtns.length).toBeGreaterThanOrEqual(2); // mobile + desktop bars
 
-    fireEvent.click(collectBtns[collectBtns.length - 1] as HTMLElement);
+    // Clicking the inner <svg>/<path> of heart or collect in PlayerBar must NOT bubble to open FullscreenPlayer
+    const desktopLikeBtn = screen.getAllByRole("button", { name: "喜欢" })[1] as HTMLElement;
+    const likeSvgPath = desktopLikeBtn.querySelector("path") ?? desktopLikeBtn.querySelector("svg");
+    expect(likeSvgPath).not.toBeNull();
+    vi.spyOn(api, "toggleSongLike").mockResolvedValue({ liked: true });
+    fireEvent.click(likeSvgPath as Element);
+    expect(usePlayerStore.getState().fullscreenOpen).toBe(false);
+
+    const desktopCollectBtn = collectBtns[collectBtns.length - 1] as HTMLElement;
+    const collectSvg = desktopCollectBtn.querySelector("svg") ?? desktopCollectBtn;
+    fireEvent.click(collectSvg);
+    expect(usePlayerStore.getState().fullscreenOpen).toBe(false);
     await waitFor(() => expect(screen.getByText("深夜循环精选")).toBeInTheDocument());
     expect(screen.queryByText("他人歌单")).toBeNull();
 

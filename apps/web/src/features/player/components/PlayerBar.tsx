@@ -63,7 +63,7 @@ export function PlayerBar() {
 
   const handleNowPlayingRegionClick = (event: MouseEvent<HTMLDivElement>) => {
     if (!currentTrack) return;
-    const target = event.target instanceof HTMLElement ? event.target : null;
+    const target = event.target instanceof Element ? event.target : null;
     if (target?.closest(INTERACTIVE_CHILD_SELECTOR)) return;
     setFullscreenOpen(true);
   };
@@ -304,20 +304,22 @@ export function PlayerBar() {
               </div>
 
               {/* Vertically centered Collect + Heart actions */}
-              <div className="flex shrink-0 items-center gap-0.5 pl-1">
+              {/* biome-ignore lint/a11y/useKeyWithClickEvents: stopPropagation guard wrapper for child buttons */}
+              <div className="flex shrink-0 items-center gap-0.5 pl-1" onClick={(e) => e.stopPropagation()}>
                 <QuickCollectPopover song={currentTrack} variant="player-bar" />
 
                 {canLike && (
                   <button
                     type="button"
-                    onClick={() =>
+                    onClick={(e) => {
+                      e.stopPropagation();
                       likeMutation.mutate({
                         platform: currentTrack.platform,
                         songId: currentTrack.id,
                         nextLiked: !isLiked,
                         songTitle: currentTrack.title,
-                      })
-                    }
+                      });
+                    }}
                     className={`inline-flex items-center justify-center rounded-full p-1.5 transition-all duration-150 active:scale-95 ${
                       isLiked
                         ? "text-[var(--tv-accent)]"
