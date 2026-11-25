@@ -67,7 +67,6 @@ const NAV_GROUPS = [
       { to: "/discover", label: "发现", icon: Compass },
       { to: "/charts", label: "排行榜", icon: TrendingUp },
       { to: "/fm", label: "私人漫游", icon: Radio },
-      { to: "/search", label: "搜索", icon: Search },
     ],
   },
   {
@@ -255,10 +254,10 @@ function AppShellInner({
     const closeDrawerOnClick = showCloseButton ? () => setMobileMenuOpen(false) : undefined;
     return (
       <>
-        <div className="flex h-14 items-center justify-between px-5">
+        <div className="flex h-13 items-center justify-between px-4 pt-1">
           <div className="flex items-center gap-2.5">
-            <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[var(--tv-accent)]">
-              <span className="h-1.5 w-1.5 rounded-full bg-[var(--tv-sidebar)]" />
+            <span className="inline-flex h-6 w-6 items-center justify-center rounded-[7px] bg-[var(--tv-accent)] shadow-xs">
+              <span className="h-1.5 w-1.5 rounded-full bg-white" />
             </span>
             <span className="text-[15px] font-bold tracking-tight text-[var(--tv-text)]">TrackVault</span>
           </div>
@@ -274,10 +273,42 @@ function AppShellInner({
           )}
         </div>
 
-        <nav className="flex-1 overflow-y-auto px-3 py-2 space-y-5">
+        {/* macOS Apple Music Sidebar Search Input (mounted once in desktop sidebar) */}
+        {!showCloseButton && (
+          <div className="px-3.5 pt-1 pb-2.5">
+            <form onSubmit={handleQuickSearch} className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--tv-text-subtle)]" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                aria-label="搜索歌曲、歌手或专辑"
+                value={quickQuery}
+                onChange={(e) => setQuickQuery(e.target.value)}
+                placeholder="搜索"
+                className="h-[33px] w-full rounded-[8px] border border-[var(--tv-sidebar-border)] bg-[var(--tv-bg)]/55 pl-8 pr-6 text-[12.5px] text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] transition-all focus:border-[var(--tv-border-strong)] focus:bg-[var(--tv-bg)]/90 focus:outline-none"
+              />
+              {quickQuery ? (
+                <button
+                  type="button"
+                  onClick={() => setQuickQuery("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-[var(--tv-text-subtle)] hover:text-[var(--tv-text)]"
+                  aria-label="清空搜索词"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              ) : (
+                <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-[var(--tv-sidebar-border)] px-1 text-[9.5px] font-mono text-[var(--tv-text-subtle)]/75">
+                  /
+                </kbd>
+              )}
+            </form>
+          </div>
+        )}
+
+        <nav className="flex-1 overflow-y-auto px-3 py-1.5 space-y-5">
           {NAV_GROUPS.map((group) => (
             <div key={group.title} className="space-y-0.5">
-              <div className="px-2.5 pb-1 text-[11px] font-medium text-[var(--tv-text-subtle)]">
+              <div className="px-2.5 pb-1 text-[11px] font-semibold tracking-wide text-[var(--tv-text-subtle)]">
                 {group.title}
               </div>
               {group.items.map(({ to, label, icon: Icon }) => (
@@ -286,42 +317,88 @@ function AppShellInner({
                   to={to}
                   onClick={closeDrawerOnClick}
                   className={({ isActive }) =>
-                    `flex items-center justify-between rounded-lg px-2.5 py-[8px] text-[13.5px] transition-colors ${
+                    `group flex items-center justify-between rounded-[8px] px-2.5 py-[7.5px] text-[13.5px] transition-colors ${
                       isActive
-                        ? "bg-[var(--tv-accent-soft)] font-semibold text-[var(--tv-accent)]"
+                        ? "bg-[var(--tv-nav-active)] font-semibold text-[var(--tv-text)]"
                         : "font-medium text-[var(--tv-text-muted)] hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
                     }`
                   }
                 >
-                  <span className="flex items-center gap-2.5">
-                    <Icon className="h-[16px] w-[16px] shrink-0 stroke-[1.9]" />
-                    {label}
-                  </span>
-                  {to === "/downloads" && runningDownloadCount > 0 && (
-                    <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--tv-accent)] px-1 text-[10px] font-semibold text-[var(--tv-accent-fg)] tabular-nums">
-                      {runningDownloadCount}
-                    </span>
+                  {({ isActive }) => (
+                    <>
+                      <span className="flex items-center gap-2.5">
+                        <Icon
+                          className={`h-[16px] w-[16px] shrink-0 stroke-[2] transition-colors ${
+                            isActive
+                              ? "text-[var(--tv-accent)]"
+                              : "text-[var(--tv-text-subtle)] group-hover:text-[var(--tv-text)]"
+                          }`}
+                        />
+                        {label}
+                      </span>
+                      {to === "/downloads" && runningDownloadCount > 0 && (
+                        <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--tv-accent)] px-1 text-[10px] font-semibold text-[var(--tv-accent-fg)] tabular-nums">
+                          {runningDownloadCount}
+                        </span>
+                      )}
+                    </>
                   )}
                 </NavLink>
               ))}
+              {showCloseButton && group.title === "浏览" && (
+                <NavLink
+                  to="/search"
+                  onClick={closeDrawerOnClick}
+                  className={({ isActive }) =>
+                    `group flex items-center justify-between rounded-[8px] px-2.5 py-[7.5px] text-[13.5px] transition-colors ${
+                      isActive
+                        ? "bg-[var(--tv-nav-active)] font-semibold text-[var(--tv-text)]"
+                        : "font-medium text-[var(--tv-text-muted)] hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
+                    }`
+                  }
+                >
+                  {({ isActive }) => (
+                    <span className="flex items-center gap-2.5">
+                      <Search
+                        className={`h-[16px] w-[16px] shrink-0 stroke-[2] transition-colors ${
+                          isActive
+                            ? "text-[var(--tv-accent)]"
+                            : "text-[var(--tv-text-subtle)] group-hover:text-[var(--tv-text)]"
+                        }`}
+                      />
+                      搜索
+                    </span>
+                  )}
+                </NavLink>
+              )}
             </div>
           ))}
         </nav>
 
-        <div className="tv-pb-safe border-t border-[var(--tv-border)] px-3 pt-2.5 [--tv-safe-pb-base:0.625rem] space-y-1">
+        <div className="tv-pb-safe border-t border-[var(--tv-sidebar-border)] px-3 pt-2.5 [--tv-safe-pb-base:0.625rem] space-y-1">
           <NavLink
             to="/settings"
             onClick={closeDrawerOnClick}
             className={({ isActive }) =>
-              `flex items-center gap-2.5 rounded-lg px-2.5 py-[8px] text-[13.5px] transition-colors ${
+              `group flex items-center gap-2.5 rounded-[8px] px-2.5 py-[7.5px] text-[13.5px] transition-colors ${
                 isActive
-                  ? "bg-[var(--tv-accent-soft)] font-semibold text-[var(--tv-accent)]"
+                  ? "bg-[var(--tv-nav-active)] font-semibold text-[var(--tv-text)]"
                   : "font-medium text-[var(--tv-text-muted)] hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
               }`
             }
           >
-            <Settings className="h-[16px] w-[16px] shrink-0 stroke-[1.9]" />
-            设置与绑定
+            {({ isActive }) => (
+              <>
+                <Settings
+                  className={`h-[16px] w-[16px] shrink-0 stroke-[2] transition-colors ${
+                    isActive
+                      ? "text-[var(--tv-accent)]"
+                      : "text-[var(--tv-text-subtle)] group-hover:text-[var(--tv-text)]"
+                  }`}
+                />
+                设置与绑定
+              </>
+            )}
           </NavLink>
 
           <div className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5">
@@ -350,20 +427,29 @@ function AppShellInner({
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-[var(--tv-bg)] text-[var(--tv-text)]">
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div ref={workspaceShellRef} className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-          <aside className="hidden w-[220px] shrink-0 flex-col border-r border-[var(--tv-border)] bg-[var(--tv-sidebar)] select-none md:flex">
+          <aside className="hidden w-[220px] shrink-0 flex-col border-r border-[var(--tv-sidebar-border)] bg-[var(--tv-sidebar)] select-none md:flex">
             {renderSidebarContent(false)}
           </aside>
 
-          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-            <header
-              className="tv-pt-safe flex min-h-13 shrink-0 items-center justify-between gap-2.5 border-b border-[var(--tv-border)] bg-[var(--tv-header-bg)] px-3.5 pb-2 [--tv-safe-pt-base:0.5rem] backdrop-blur-xl md:min-h-14 md:gap-4 md:px-6"
+          {/* Borderless Apple Music Main Canvas (no T-bar header divider; content glides to top edge) */}
+          <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+            {/* Soft top edge scroll fade */}
+            <div
+              aria-hidden="true"
+              className="tv-top-scrim pointer-events-none absolute inset-x-0 top-0 h-11"
+              style={{ zIndex: "calc(var(--tv-z-sticky) - 1)" }}
+            />
+
+            {/* Lightweight floating corner controls (Back/Forward & Theme Toggle) */}
+            <div
+              className="tv-pt-safe pointer-events-none absolute inset-x-0 top-0 flex min-h-11 items-center justify-between px-3.5 [--tv-safe-pt-base:0.375rem] md:px-8"
               style={{ zIndex: "var(--tv-z-sticky)" }}
             >
-              <div className="flex min-w-0 flex-1 items-center gap-2 md:max-w-lg md:gap-3">
+              <div className="pointer-events-auto flex items-center gap-1">
                 <button
                   type="button"
                   onClick={() => setMobileMenuOpen(true)}
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)] md:hidden"
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)] md:hidden"
                   aria-label="打开导航菜单"
                 >
                   <Menu className="h-5 w-5" />
@@ -373,7 +459,7 @@ function AppShellInner({
                   <button
                     type="button"
                     onClick={() => navigate(-1)}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--tv-text-subtle)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
                     title="后退"
                     aria-label="后退"
                   >
@@ -382,45 +468,29 @@ function AppShellInner({
                   <button
                     type="button"
                     onClick={() => navigate(1)}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--tv-text-subtle)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
                     title="前进"
                     aria-label="前进"
                   >
                     <ChevronRight className="h-4 w-4" />
                   </button>
                 </div>
-
-                <form onSubmit={handleQuickSearch} className="relative min-w-0 flex-1 md:max-w-sm">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--tv-text-subtle)]" />
-                  <input
-                    ref={searchInputRef}
-                    type="text"
-                    aria-label="搜索歌曲、歌手或专辑"
-                    value={quickQuery}
-                    onChange={(e) => setQuickQuery(e.target.value)}
-                    placeholder="搜索歌曲、歌手或专辑"
-                    className="h-8 w-full rounded-lg bg-[var(--tv-surface)] pl-8 pr-3 text-[13px] text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] transition-colors focus:bg-[var(--tv-surface-elevated)] focus:ring-1 focus:ring-[var(--tv-border-strong)] focus:outline-none sm:pr-8"
-                  />
-                  <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded border border-[var(--tv-border)] px-1 text-[10px] font-mono text-[var(--tv-text-subtle)] sm:inline">
-                    /
-                  </kbd>
-                </form>
               </div>
 
-              <div className="flex shrink-0 items-center gap-1">
+              <div className="pointer-events-auto flex shrink-0 items-center gap-1">
                 <button
                   type="button"
                   onClick={toggleLightDark}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--tv-text-subtle)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
                   title={resolvedTheme === "dark" ? "切换浅色模式" : "切换深色模式"}
                   aria-label="切换明暗主题"
                 >
                   {resolvedTheme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                 </button>
               </div>
-            </header>
+            </div>
 
-            <main className="flex-1 overflow-y-auto px-4 pt-4 pb-5 sm:px-6 sm:pt-5 sm:pb-6 md:px-7 md:pt-6 md:pb-28">
+            <main className="flex-1 overflow-y-auto px-4 pt-11 pb-5 sm:px-6 sm:pt-11 sm:pb-6 md:px-8 md:pt-10 md:pb-32">
               <div key={location.pathname} className="tv-page-enter mx-auto max-w-[1280px]">
                 {children}
               </div>
@@ -431,10 +501,10 @@ function AppShellInner({
         <RightDrawer backgroundInert={fullscreenOpen || effectiveMobileMenuOpen} />
       </div>
 
-      {/* Non-interactive bottom fade mask so scrolled song rows dissolve smoothly before the floating glass bar */}
+      {/* Non-interactive multi-stop bottom scrim so bright covers dissolve cleanly behind the floating glass bar */}
       <div
         aria-hidden="true"
-        className={`pointer-events-none hidden md:fixed md:bottom-0 md:left-[220px] md:right-0 md:block md:h-24 md:bg-gradient-to-t md:from-[var(--tv-bg)] md:via-[var(--tv-bg)]/78 md:to-transparent ${
+        className={`tv-bottom-scrim pointer-events-none hidden md:fixed md:bottom-0 md:left-[220px] md:right-0 md:block md:h-28 ${
           drawerOpen ? "xl:right-[336px]" : ""
         }`}
         style={{ zIndex: "calc(var(--tv-z-sticky) - 1)" }}
@@ -442,7 +512,7 @@ function AppShellInner({
 
       <div
         ref={bottomBarsRef}
-        className={`shrink-0 md:pointer-events-none md:fixed md:bottom-3.5 md:left-[220px] md:right-0 md:px-6 lg:px-7 ${
+        className={`shrink-0 md:pointer-events-none md:fixed md:bottom-3.5 md:left-[220px] md:right-0 md:px-7 lg:px-8 ${
           drawerOpen ? "xl:right-[336px]" : ""
         }`}
         style={{ zIndex: "var(--tv-z-sticky)" }}

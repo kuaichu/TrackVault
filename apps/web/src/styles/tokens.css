@@ -4,11 +4,14 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  /* True Neutral Charcoal Palette (inspired by Feishin defaultDark & Apple Music Dark) */
+  /* True Neutral Charcoal Palette (inspired by macOS Apple Music Dark) */
   --tv-bg: #111113;
-  --tv-sidebar: #161618;
-  --tv-surface: #1c1c1f;
-  --tv-surface-elevated: #242428;
+  --tv-sidebar: #1a1a1e;
+  --tv-sidebar-border: rgba(255, 255, 255, 0.06);
+  --tv-nav-active: rgba(255, 255, 255, 0.1);
+  --tv-cover-ring: inset 0 0 0 0.5px rgba(255, 255, 255, 0.12);
+  --tv-surface: #1c1c20;
+  --tv-surface-elevated: #242429;
   --tv-surface-hover: rgba(255, 255, 255, 0.055);
   --tv-surface-active: rgba(255, 255, 255, 0.095);
   --tv-header-bg: rgba(17, 17, 19, 0.82);
@@ -61,9 +64,12 @@
 [data-theme="light"] {
   color-scheme: light;
 
-  /* Crisp Editorial Light Palette (YesPlayMusic / macOS Music inspired) */
+  /* Crisp Editorial Light Palette (macOS Apple Music Light inspired) */
   --tv-bg: #ffffff;
-  --tv-sidebar: #f6f6f7;
+  --tv-sidebar: #f5f5f7;
+  --tv-sidebar-border: rgba(0, 0, 0, 0.065);
+  --tv-nav-active: rgba(0, 0, 0, 0.068);
+  --tv-cover-ring: inset 0 0 0 0.5px rgba(0, 0, 0, 0.085);
   --tv-surface: #f2f2f5;
   --tv-surface-elevated: #ffffff;
   --tv-surface-hover: rgba(0, 0, 0, 0.042);
@@ -394,6 +400,45 @@ select:not(:disabled) {
 .tv-lyric-mask {
   mask-image: linear-gradient(to bottom, transparent 0%, black 12%, black 85%, transparent 100%);
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12%, black 85%, transparent 100%);
+}
+
+/* Edge scrims for borderless Apple Music top canvas & floating Liquid Glass bottom bar */
+.tv-top-scrim {
+  background: linear-gradient(
+    to bottom,
+    rgba(17, 17, 19, 0.86) 0%,
+    rgba(17, 17, 19, 0.42) 55%,
+    transparent 100%
+  );
+}
+
+[data-theme="light"] .tv-top-scrim {
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.88) 0%,
+    rgba(255, 255, 255, 0.45) 55%,
+    transparent 100%
+  );
+}
+
+.tv-bottom-scrim {
+  background: linear-gradient(
+    to top,
+    rgba(17, 17, 19, 0.96) 0%,
+    rgba(17, 17, 19, 0.85) 22%,
+    rgba(17, 17, 19, 0.42) 58%,
+    transparent 100%
+  );
+}
+
+[data-theme="light"] .tv-bottom-scrim {
+  background: linear-gradient(
+    to top,
+    rgba(255, 255, 255, 0.96) 0%,
+    rgba(255, 255, 255, 0.85) 22%,
+    rgba(255, 255, 255, 0.42) 58%,
+    transparent 100%
+  );
 }
 
 /* Restrained concentric vinyl grooves for AuthGate editorial canvas */
