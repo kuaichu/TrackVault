@@ -4,17 +4,17 @@ import { useRef, useState } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Song, UserSettings, UserSummary } from "#shared";
-import { SongTable } from "../entities/song/SongTable.js";
 import { FullscreenPlayer } from "../features/player/components/FullscreenPlayer.js";
 import { RightDrawer } from "../features/player/components/RightDrawer.js";
 import { audioEngine } from "../features/player/engine/audio-engine.js";
 import { usePlaybackClockStore, usePlayerStore } from "../features/player/store/player-store.js";
-import { SettingsPage } from "../features/settings/SettingsPage.js";
+import { SettingsPage } from "../pages/settings/index.js";
 import { api } from "../shared/api/endpoints.js";
 import { DEFAULT_PROVIDER_CAPABILITIES } from "../shared/hooks/use-capabilities.js";
 import { useModalFocusTrap } from "../shared/hooks/use-modal-focus-trap.js";
 import { useToastStore } from "../shared/store/toast-store.js";
 import { CoverArt, ExpandableText } from "../shared/ui/primitives.js";
+import { SongTable } from "../widgets/song-table/index.js";
 import { AppShell } from "./AppShell.js";
 
 const ADMIN_USER: UserSummary = {
@@ -109,7 +109,6 @@ describe("Phase 6 · Responsive layout, safe-area, focus trap, keyboard a11y, an
     });
     vi.spyOn(api, "listJobs").mockResolvedValue({ jobs: [] });
     vi.spyOn(api, "getLikedSongIds").mockResolvedValue({ ids: [] });
-    vi.spyOn(api, "isSongLiked").mockResolvedValue({ liked: false });
     vi.spyOn(api, "getLyrics").mockResolvedValue({
       lyrics: { platform: "netease", songId: "s1", lines: [], source: "none" },
     });
@@ -191,7 +190,7 @@ describe("Phase 6 · Responsive layout, safe-area, focus trap, keyboard a11y, an
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("sets inert on underlying shell when fullscreen player or mobile drawer opens, closes drawer on same-route click, and guards shortcuts (U03/U04/U05/C072/C077)", () => {
+  it("sets inert on underlying shell when fullscreen player or mobile drawer opens, closes drawer on same-route click, and guards shortcuts (U03/U04/U05/C072/C077)", async () => {
     const togglePlaySpy = vi.spyOn(audioEngine, "togglePlay").mockResolvedValue(undefined);
     const qc = createTestQueryClient();
 
@@ -264,6 +263,7 @@ describe("Phase 6 · Responsive layout, safe-area, focus trap, keyboard a11y, an
         fullscreenOpen: true,
       });
     });
+    await screen.findByRole("dialog", { name: "沉浸歌词播放" });
     expect(mainEl.closest("[inert]")).not.toBeNull();
 
     fireEvent.keyDown(document.body, { key: "/", bubbles: true });
@@ -349,11 +349,11 @@ describe("Phase 6 · Responsive layout, safe-area, focus trap, keyboard a11y, an
     expect((lockedDownloadBtn as HTMLButtonElement).disabled).toBe(true);
     expect(lockedDownloadBtn.getAttribute("title")).toContain("版权方禁止下载");
 
-    // Bottom row's context menu flips upward (bottom-full) and shows loading state for playlists
+    // Bottom row's Portal context menu flips upward (data-placement="top") and shows loading state for playlists
     const moreButtons = screen.getAllByRole("button", { name: "更多操作" });
     fireEvent.click(moreButtons[moreButtons.length - 1] as HTMLElement);
     const nextPlayItem = screen.getByRole("button", { name: "下一首播放" });
-    expect(nextPlayItem.parentElement?.className).toContain("bottom-full");
+    expect(nextPlayItem.parentElement?.getAttribute("data-placement")).toBe("top");
 
     fireEvent.click(screen.getByRole("button", { name: /收藏到歌单/ }));
     expect(screen.getByText("加载歌单中...")).toBeTruthy();

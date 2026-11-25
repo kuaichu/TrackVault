@@ -1,11 +1,5 @@
 import { create } from "zustand";
-import {
-  type PlaybackMode,
-  type PreferenceQualityLevel,
-  type QualityLevel,
-  type Song,
-  getSongKey,
-} from "#shared";
+import type { PlaybackMode, PreferenceQualityLevel, QualityLevel, Song } from "#shared";
 
 export type RightDrawerTab = "queue" | "lyrics" | "comments";
 
@@ -22,24 +16,24 @@ interface PlayerStateStore {
   playbackMode: PlaybackMode;
   /** Playback quality preference synced from server settings; strictly isolated from download quality. */
   defaultPlaybackQuality: PreferenceQualityLevel;
-  /** Per-track playback quality override chosen in the player bar (does NOT mutate download settings). */
-  activeQualityOverride: QualityLevel | null;
+  /** Desired per-track / FM playback quality selected by the user (null follows defaultPlaybackQuality). */
+  preferredTrackQuality: QualityLevel | null;
+  /** Actual quality tier of the currently loaded `<audio>` stream for `currentTrack`. */
+  loadedStreamQuality: QualityLevel | null;
+  /** Whether AudioEngine is currently paginating Cloud tracks for "Play All". */
+  cloudPlayAllLoading: boolean;
   playerError: string | null;
   fullscreenOpen: boolean;
   drawerOpen: boolean;
   drawerTab: RightDrawerTab;
   hydrated: boolean;
-  /** Personal FM session state driven centrally by AudioEngine. */
+  /** Personal FM session state driven centrally by AudioEngine / FmController. */
   fmMode: boolean;
   fmQueue: Song[];
   fmLoading: boolean;
   fmError: string | null;
 
   setStatePatch(patch: Partial<PlayerStateStore>): void;
-  addToQueue(song: Song): void;
-  insertNextInQueue(song: Song): void;
-  removeFromQueue(songKey: string): void;
-  clearQueue(): void;
   setFullscreenOpen(open: boolean): void;
   setDrawerOpen(open: boolean): void;
   setDrawerTab(tab: RightDrawerTab): void;
@@ -58,7 +52,9 @@ const INITIAL_PLAYER_STATE = {
   lastNonZeroVolume: 0.85,
   playbackMode: "sequential" as PlaybackMode,
   defaultPlaybackQuality: "exhigh" as PreferenceQualityLevel,
-  activeQualityOverride: null as QualityLevel | null,
+  preferredTrackQuality: null as QualityLevel | null,
+  loadedStreamQuality: null as QualityLevel | null,
+  cloudPlayAllLoading: false,
   playerError: null as string | null,
   fullscreenOpen: false,
   drawerOpen: false,
@@ -73,54 +69,13 @@ const INITIAL_PLAYER_STATE = {
 /**
  * Low-frequency player metadata store.
  * NEVER holds `currentTime` or `bufferedTime` so 4Hz timeupdate events NEVER re-render the app shell or song lists.
+ * Queue mutations must go through `audioEngine` so session tracking & remote persistence are never bypassed.
  */
 export const usePlayerStore = create<PlayerStateStore>((set) => ({
   ...INITIAL_PLAYER_STATE,
 
   setStatePatch(patch) {
     set(patch);
-  },
-
-  addToQueue(song) {
-    set((state) => {
-      const targetKey = getSongKey(song);
-      if (state.queue.some((item) => getSongKey(item) === targetKey)) {
-        return state;
-      }
-      return { queue: [...state.queue, song] };
-    });
-  },
-
-  insertNextInQueue(song) {
-    set((state) => {
-      const targetKey = getSongKey(song);
-      const filteredQueue = state.queue.filter((item) => getSongKey(item) !== targetKey);
-      const filteredPriority = state.priorityQueue.filter((item) => getSongKey(item) !== targetKey);
-      const nextPriority = [song, ...filteredPriority];
-
-      if (!state.currentTrack) {
-        return { queue: [song, ...filteredQueue], priorityQueue: nextPriority };
-      }
-      const curKey = getSongKey(state.currentTrack);
-      const curIdx = filteredQueue.findIndex((item) => getSongKey(item) === curKey);
-      if (curIdx < 0) {
-        return { queue: [song, ...filteredQueue], priorityQueue: nextPriority };
-      }
-      const nextQueue = [...filteredQueue];
-      nextQueue.splice(curIdx + 1, 0, song);
-      return { queue: nextQueue, priorityQueue: nextPriority };
-    });
-  },
-
-  removeFromQueue(songKey) {
-    set((state) => ({
-      queue: state.queue.filter((item) => getSongKey(item) !== songKey),
-      priorityQueue: state.priorityQueue.filter((item) => getSongKey(item) !== songKey),
-    }));
-  },
-
-  clearQueue() {
-    set({ queue: [], priorityQueue: [], fmMode: false });
   },
 
   setFullscreenOpen(open) {

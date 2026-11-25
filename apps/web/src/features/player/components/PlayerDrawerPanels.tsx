@@ -31,6 +31,7 @@ export function PlayQueuePanel({ onDarkBackdrop = false }: { onDarkBackdrop?: bo
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const queue = usePlayerStore((s) => s.queue);
+  const fmMode = usePlayerStore((s) => s.fmMode);
 
   const subtleTextClass = onDarkBackdrop ? "text-white/55" : "text-[var(--tv-text-subtle)]";
   const mutedTextClass = onDarkBackdrop ? "text-white/65" : "text-[var(--tv-text-muted)]";
@@ -86,7 +87,7 @@ export function PlayQueuePanel({ onDarkBackdrop = false }: { onDarkBackdrop?: bo
               />
               <button
                 type="button"
-                onClick={() => void audioEngine.playTrack(song)}
+                onClick={() => void audioEngine.playTrack(song, { fm: fmMode })}
                 className="min-w-0 flex-1 text-left"
               >
                 <div className={`truncate text-[13px] font-medium ${titleClass}`}>{song.title}</div>

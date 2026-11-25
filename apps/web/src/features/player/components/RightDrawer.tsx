@@ -1,13 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useLayoutEffect, useRef } from "react";
-import { api } from "../../../shared/api/endpoints.js";
 import {
   registerInertSynchronizer,
   setElementInert,
   useIsOverlayViewport,
   useModalFocusTrap,
 } from "../../../shared/hooks/use-modal-focus-trap.js";
+import { useTrackLyricsQuery } from "../hooks/use-track-lyrics-query.js";
 import { type RightDrawerTab, usePlayerStore } from "../store/player-store.js";
 import { LyricScroller } from "./LyricScroller.js";
 import { PlayQueuePanel, TrackCommentsPanel } from "./PlayerDrawerPanels.js";
@@ -41,12 +40,7 @@ export function RightDrawer({ backgroundInert = false }: { backgroundInert?: boo
     onClose: () => setOpen(false),
   });
 
-  const lyricsQuery = useQuery({
-    queryKey: ["lyrics", currentTrack?.platform, currentTrack?.id],
-    queryFn: () =>
-      currentTrack ? api.getLyrics(currentTrack.platform, currentTrack.id, currentTrack.mediaId) : null,
-    enabled: Boolean(open && tab === "lyrics" && currentTrack),
-  });
+  const lyricsQuery = useTrackLyricsQuery(currentTrack, Boolean(open && tab === "lyrics" && currentTrack));
 
   if (!open) return null;
 

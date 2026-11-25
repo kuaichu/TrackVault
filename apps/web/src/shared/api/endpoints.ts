@@ -12,8 +12,10 @@ import type {
   EntitySearchType,
   ExportFormat,
   ExportPayload,
+  JobDetailView,
   JobKind,
   JobView,
+  JobsListResponse,
   LoginInput,
   MusicPlatform,
   PlatformBindingView,
@@ -43,25 +45,6 @@ import type {
   UserSummary,
 } from "#shared";
 import { apiRequest } from "./http-client.js";
-
-export type JobHttpAttemptEvent =
-  | { readonly type: "list"; readonly kind?: JobKind }
-  | { readonly type: "single"; readonly id: string };
-
-const jobHttpAttemptListeners = new Set<(event: JobHttpAttemptEvent) => void>();
-
-export function subscribeJobHttpAttempts(listener: (event: JobHttpAttemptEvent) => void): () => void {
-  jobHttpAttemptListeners.add(listener);
-  return () => {
-    jobHttpAttemptListeners.delete(listener);
-  };
-}
-
-function notifyJobHttpAttempt(event: JobHttpAttemptEvent): void {
-  for (const listener of jobHttpAttemptListeners) {
-    listener(event);
-  }
-}
 
 export const api = {
   // Auth & Members
@@ -188,8 +171,6 @@ export const api = {
       { method: "POST", body: { liked } },
     ),
   getLikedSongIds: (platform: MusicPlatform) => apiRequest<{ ids: string[] }>(`/api/likes/${platform}`),
-  isSongLiked: (platform: MusicPlatform, id: string) =>
-    apiRequest<{ liked: boolean }>(`/api/likes/${platform}/${encodeURIComponent(id)}`),
   toggleSongLike: (platform: MusicPlatform, id: string, liked: boolean) =>
     apiRequest<{ liked: boolean }>(`/api/likes/${platform}/${encodeURIComponent(id)}`, {
       method: "POST",
@@ -223,14 +204,8 @@ export const api = {
     apiRequest<{ job: JobView }>("/api/downloads", { method: "POST", body: input }),
 
   // Unified Jobs & Transfer
-  listJobs: (kind?: JobKind) => {
-    notifyJobHttpAttempt({ type: "list", kind });
-    return apiRequest<{ jobs: JobView[] }>(kind ? `/api/jobs?kind=${kind}` : "/api/jobs");
-  },
-  getJob: (id: string) => {
-    notifyJobHttpAttempt({ type: "single", id });
-    return apiRequest<{ job: JobView }>(`/api/jobs/${encodeURIComponent(id)}`);
-  },
+  listJobs: (kind?: JobKind) => apiRequest<JobsListResponse>(kind ? `/api/jobs?kind=${kind}` : "/api/jobs"),
+  getJob: (id: string) => apiRequest<{ job: JobDetailView }>(`/api/jobs/${encodeURIComponent(id)}`),
   cancelJob: (id: string) =>
     apiRequest<{ job: JobView }>(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   clearFinishedJobs: (kind?: JobKind) =>
@@ -278,10 +253,14 @@ export const api = {
       body: state,
       keepalive: options?.keepalive,
     }),
-  getPlayHistory: () => apiRequest<{ items: Song[] }>("/api/history/play"),
+  getPlayHistory: () => apiRequest<{ items: Song[]; revision?: number }>("/api/history/play"),
   recordPlayHistory: (song: Song) =>
-    apiRequest<{ items: Song[] }>("/api/history/play", { method: "POST", body: { song } }),
-  clearPlayHistory: () => apiRequest<{ items: Song[] }>("/api/history/play", { method: "DELETE" }),
+    apiRequest<{ items: Song[]; revision?: number }>("/api/history/play", {
+      method: "POST",
+      body: { song },
+    }),
+  clearPlayHistory: () =>
+    apiRequest<{ items: Song[]; revision?: number }>("/api/history/play", { method: "DELETE" }),
   getSearchHistory: () => apiRequest<{ items: string[] }>("/api/history/search"),
   addSearchHistory: (keyword: string) =>
     apiRequest<{ items: string[] }>("/api/history/search", { method: "POST", body: { keyword } }),

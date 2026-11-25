@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeftRight,
   ChevronLeft,
@@ -18,29 +18,43 @@ import {
   TrendingUp,
   X,
 } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  Suspense,
+  lazy,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import type { AuthStatus, UserSummary } from "#shared";
-import { FullscreenPlayer } from "../features/player/components/FullscreenPlayer.js";
-import { PlayerBar } from "../features/player/components/PlayerBar.js";
-import { RightDrawer } from "../features/player/components/RightDrawer.js";
-import { audioEngine } from "../features/player/engine/audio-engine.js";
-import { usePlayerStore } from "../features/player/store/player-store.js";
-import { api } from "../shared/api/endpoints.js";
+import { useJobsQuery } from "../entities/job/index.js";
 import {
-  clearPendingDirectLinkJobs,
-  markJobQueryAttemptStart,
-  useJobEvents,
-} from "../shared/hooks/use-job-events.js";
+  PlayerBar,
+  RightDrawer,
+  audioEngine,
+  loadFullscreenPlayer,
+  usePlayerStore,
+} from "../features/player/index.js";
+import { api } from "../shared/api/endpoints.js";
 import {
   registerInertSynchronizer,
   setElementInert,
   useIsOverlayViewport,
   useModalFocusTrap,
 } from "../shared/hooks/use-modal-focus-trap.js";
-import { applyRecordedPlayHistory, beginPlayHistoryRecord } from "../shared/hooks/use-play-history-sync.js";
+import { useSettingsQuery } from "../shared/hooks/use-settings-query.js";
 import { useThemeStore } from "../shared/store/theme-store.js";
-import { toast, useToastStore } from "../shared/store/toast-store.js";
+import { toast } from "../shared/store/toast-store.js";
+import {
+  SessionServicesProvider,
+  resetSessionServices,
+  useHasSessionServices,
+} from "./SessionServicesProvider.js";
+
+const LazyFullscreenPlayer = lazy(loadFullscreenPlayer);
 
 const EDITABLE_TARGET_SELECTOR = "input, textarea, select, [contenteditable='true']";
 const INTERACTIVE_SHORTCUT_SELECTOR =
@@ -80,7 +94,7 @@ const MOBILE_TABS = [
   { to: "/playlists", label: "歌单", icon: ListMusic },
 ] as const;
 
-export function AppShell({
+function AppShellInner({
   user,
   children,
   onSessionCleared,
@@ -127,7 +141,6 @@ export function AppShell({
   const hasModalOverlayRef = useRef(hasModalOverlay);
   hasModalOverlayRef.current = hasModalOverlay;
 
-  // Mark underlying app shell inert while any modal overlay is open, and register sync hook so focus restore sees un-inert DOM immediately
   useLayoutEffect(() => {
     setElementInert(workspaceShellRef.current, hasModalOverlay);
     setElementInert(bottomBarsRef.current, hasModalOverlay);
@@ -141,12 +154,10 @@ export function AppShell({
     });
   }, []);
 
-  // Trap focus inside mobile navigation drawer while open and restore on close
   useModalFocusTrap(mobileDrawerRef, effectiveMobileMenuOpen && !fullscreenOpen, {
     onClose: () => setMobileMenuOpen(false),
   });
 
-  // Close mobile drawer automatically when route changes (fallback in addition to same-route link click)
   const pathname = location.pathname;
   useEffect(() => {
     if (pathname) {
@@ -154,56 +165,12 @@ export function AppShell({
     }
   }, [pathname]);
 
-  // Connect single SSE stream for real-time job progress updates
-  useJobEvents(true);
-
-  // Bind play-history listener strictly to the active per-user QueryClient lifecycle
-  useLayoutEffect(() => {
-    audioEngine.setPlayHistoryListener(
-      (res, meta) => {
-        applyRecordedPlayHistory(queryClient, res, meta?.startSeq, meta?.song);
-      },
-      () => beginPlayHistoryRecord(queryClient),
-    );
-    return () => {
-      audioEngine.setPlayHistoryListener(null);
-    };
-  }, [queryClient]);
-
-  const settingsQuery = useQuery({
-    queryKey: ["settings"],
-    queryFn: () => api.getSettings(),
-  });
-
-  const playerStateQuery = useQuery({
-    queryKey: ["player-state"],
-    queryFn: () => api.getPlayerState(),
-    staleTime: Number.POSITIVE_INFINITY,
-  });
-
-  const activeDownloadsQuery = useQuery({
-    queryKey: ["jobs", "download"],
-    queryFn: () => {
-      markJobQueryAttemptStart(queryClient, ["jobs", "download"]);
-      return api.listJobs("download");
-    },
-  });
+  const settingsQuery = useSettingsQuery();
+  const activeDownloadsQuery = useJobsQuery("download");
 
   const runningDownloadCount =
     activeDownloadsQuery.data?.jobs.filter((j) => j.status === "running" || j.status === "queued").length ??
     0;
-
-  useEffect(() => {
-    if (settingsQuery.data?.settings.defaultPlaybackQuality) {
-      audioEngine.syncDefaultPlaybackQuality(settingsQuery.data.settings.defaultPlaybackQuality);
-    }
-  }, [settingsQuery.data?.settings.defaultPlaybackQuality]);
-
-  useEffect(() => {
-    if (playerStateQuery.data?.state) {
-      audioEngine.hydrate(playerStateQuery.data.state);
-    }
-  }, [playerStateQuery.data?.state]);
 
   // Global desktop player shortcuts (Space, Alt+Arrow, '/' to search)
   useEffect(() => {
@@ -244,15 +211,12 @@ export function AppShell({
   const logoutMutation = useMutation({
     mutationFn: () => api.logout(),
     onSuccess: () => {
-      // F02: Clear session-scoped toasts (e.g. 8s direct-link toast) BEFORE pushing generic logout message
       if (onSessionCleared) {
         onSessionCleared();
         toast.info("已退出登录");
         return;
       }
-      audioEngine.stop();
-      clearPendingDirectLinkJobs();
-      useToastStore.getState().clear();
+      resetSessionServices(queryClient);
       toast.info("已退出登录");
       queryClient.setQueryData<AuthStatus>(["auth-status"], (prev) => ({
         initialized: prev?.initialized ?? true,
@@ -281,7 +245,6 @@ export function AppShell({
     e.preventDefault();
     const clean = quickQuery.trim();
     if (!clean) return;
-    // F07: Only attach &mode= when settings have loaded; otherwise let SearchPage apply default mode once loaded
     const loadedMode = settingsQuery.data?.settings.providerMode;
     addSearchHistoryMutation.mutate(clean);
     const modeSuffix = loadedMode ? `&mode=${encodeURIComponent(loadedMode)}` : "";
@@ -345,7 +308,6 @@ export function AppShell({
           ))}
         </nav>
 
-        {/* Pinned bottom settings + user bar */}
         <div className="tv-pb-safe border-t border-[var(--tv-border)] px-3 pt-2.5 [--tv-safe-pb-base:0.625rem] space-y-1">
           <NavLink
             to="/settings"
@@ -388,14 +350,11 @@ export function AppShell({
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-[var(--tv-bg)] text-[var(--tv-text)]">
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div ref={workspaceShellRef} className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-          {/* Desktop Left Navigation Rail */}
           <aside className="hidden w-[220px] shrink-0 flex-col border-r border-[var(--tv-border)] bg-[var(--tv-sidebar)] select-none md:flex">
             {renderSidebarContent(false)}
           </aside>
 
-          {/* Main Workspace */}
           <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-            {/* Sticky Top Bar (compact on mobile, YesPlayMusic/Feishin style on desktop; safe-area additive) */}
             <header
               className="tv-pt-safe flex min-h-13 shrink-0 items-center justify-between gap-2.5 border-b border-[var(--tv-border)] bg-[var(--tv-header-bg)] px-3.5 pb-2 [--tv-safe-pt-base:0.5rem] backdrop-blur-xl md:min-h-14 md:gap-4 md:px-6"
               style={{ zIndex: "var(--tv-z-sticky)" }}
@@ -470,11 +429,9 @@ export function AppShell({
         <RightDrawer backgroundInert={fullscreenOpen || effectiveMobileMenuOpen} />
       </div>
 
-      {/* Persistent Player Bar + Mobile Bottom Tab Bar */}
       <div ref={bottomBarsRef} className="shrink-0">
         <PlayerBar />
 
-        {/* Mobile Bottom Tab Bar (Apple Music / Spotify style) */}
         <nav
           className="tv-pb-safe grid shrink-0 grid-cols-5 border-t border-[var(--tv-border)] bg-[var(--tv-player-bg)] backdrop-blur-2xl select-none md:hidden"
           style={{ zIndex: "var(--tv-z-sticky)" }}
@@ -513,7 +470,6 @@ export function AppShell({
         </nav>
       </div>
 
-      {/* Mobile Slide-Over Navigation Drawer (mounted outside inert shell containers) */}
       {effectiveMobileMenuOpen && (
         <div className="fixed inset-0 flex md:hidden" style={{ zIndex: "var(--tv-z-modal)" }}>
           <button
@@ -534,7 +490,27 @@ export function AppShell({
         </div>
       )}
 
-      <FullscreenPlayer />
+      {fullscreenOpen && (
+        <Suspense fallback={null}>
+          <LazyFullscreenPlayer />
+        </Suspense>
+      )}
     </div>
+  );
+}
+
+export function AppShell(props: {
+  user: UserSummary;
+  children: ReactNode;
+  onSessionCleared?: () => void;
+}) {
+  const hasSessionServices = useHasSessionServices();
+  if (hasSessionServices) {
+    return <AppShellInner {...props} />;
+  }
+  return (
+    <SessionServicesProvider>
+      <AppShellInner {...props} />
+    </SessionServicesProvider>
   );
 }

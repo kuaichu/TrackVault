@@ -11,20 +11,20 @@ import type {
   UserSettings,
   UserSummary,
 } from "#shared";
-import { SongTable } from "../entities/song/SongTable.js";
-import { AuthGatePage } from "../features/auth/AuthGatePage.js";
-import { BindingsPanel } from "../features/auth/BindingsPanel.js";
-import { ChartDetailPage, ChartsPage } from "../features/charts/ChartsPage.js";
-import { DiscoverPage } from "../features/discover/DiscoverPage.js";
-import { PlaylistDetailPage, PlaylistsPage } from "../features/library/PlaylistsPage.js";
+import { BindingsPanel } from "../features/auth/index.js";
+import { clearPendingDirectLinkJobs } from "../features/downloads/index.js";
 import { usePlaybackClockStore, usePlayerStore } from "../features/player/store/player-store.js";
-import { SearchPage } from "../features/search/SearchPage.js";
-import { SettingsPage } from "../features/settings/SettingsPage.js";
+import { AuthGatePage } from "../pages/auth/index.js";
+import { ChartDetailPage, ChartsPage } from "../pages/charts/index.js";
+import { DiscoverPage } from "../pages/discover/index.js";
+import { PlaylistDetailPage, PlaylistsPage } from "../pages/library/index.js";
+import { SearchPage } from "../pages/search/index.js";
+import { SettingsPage } from "../pages/settings/index.js";
 import { api } from "../shared/api/endpoints.js";
 import { DEFAULT_PROVIDER_CAPABILITIES } from "../shared/hooks/use-capabilities.js";
-import { clearPendingDirectLinkJobs } from "../shared/hooks/use-job-events.js";
 import { useToastStore } from "../shared/store/toast-store.js";
 import { ToastContainer } from "../shared/ui/primitives.js";
+import { SongTable } from "../widgets/song-table/index.js";
 import { AppContent } from "./App.js";
 
 const ADMIN_USER: UserSummary = {

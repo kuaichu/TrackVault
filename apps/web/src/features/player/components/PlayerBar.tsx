@@ -1,4 +1,3 @@
-import { useQuery } from "@tanstack/react-query";
 import {
   ChevronUp,
   Heart,
@@ -17,10 +16,9 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { type QualityLevel, getQualityLabel } from "#shared";
-import { ArtistLinks } from "../../../entities/music/EntityLinks.js";
-import { api } from "../../../shared/api/endpoints.js";
+import { ArtistLinks } from "../../../entities/music/index.js";
+import { useIsSongLiked, useToggleLikeMutation } from "../../../entities/song/index.js";
 import { useCapabilities } from "../../../shared/hooks/use-capabilities.js";
-import { useToggleLikeMutation } from "../../../shared/hooks/use-toggle-like.js";
 import { CoverArt, PlatformBadge } from "../../../shared/ui/primitives.js";
 import { audioEngine, resolveEffectivePlaybackQuality } from "../engine/audio-engine.js";
 import { usePlayerStore } from "../store/player-store.js";
@@ -35,7 +33,8 @@ export function PlayerBar() {
   const muted = usePlayerStore((s) => s.muted);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
   const defaultPlaybackQuality = usePlayerStore((s) => s.defaultPlaybackQuality);
-  const activeQualityOverride = usePlayerStore((s) => s.activeQualityOverride);
+  const preferredTrackQuality = usePlayerStore((s) => s.preferredTrackQuality);
+  const loadedStreamQuality = usePlayerStore((s) => s.loadedStreamQuality);
   const playerError = usePlayerStore((s) => s.playerError);
   const drawerOpen = usePlayerStore((s) => s.drawerOpen);
   const drawerTab = usePlayerStore((s) => s.drawerTab);
@@ -53,12 +52,7 @@ export function PlayerBar() {
 
   const capabilities = useCapabilities();
   const canLike = Boolean(currentTrack && capabilities[currentTrack.platform].canLikeSong);
-  const { data: likeData } = useQuery({
-    queryKey: ["song-like", currentTrack?.platform, currentTrack?.id],
-    queryFn: () =>
-      currentTrack ? api.isSongLiked(currentTrack.platform, currentTrack.id) : { liked: false },
-    enabled: Boolean(currentTrack && canLike),
-  });
+  const { liked: isLiked } = useIsSongLiked(currentTrack?.platform, currentTrack?.id, canLike);
 
   const likeMutation = useToggleLikeMutation();
 
@@ -66,7 +60,7 @@ export function PlayerBar() {
   const effectiveVolume = muted ? 0 : volume;
   const activeQuality = resolveEffectivePlaybackQuality(
     currentTrack,
-    activeQualityOverride,
+    loadedStreamQuality ?? preferredTrackQuality,
     defaultPlaybackQuality,
   );
   const availableQualities =
@@ -123,15 +117,16 @@ export function PlayerBar() {
                 likeMutation.mutate({
                   platform: currentTrack.platform,
                   songId: currentTrack.id,
-                  nextLiked: !likeData?.liked,
+                  nextLiked: !isLiked,
+                  songTitle: currentTrack.title,
                 })
               }
               className={`rounded-full p-2 transition-colors ${
-                likeData?.liked ? "text-[var(--tv-accent)]" : "text-[var(--tv-text-muted)]"
+                isLiked ? "text-[var(--tv-accent)]" : "text-[var(--tv-text-muted)]"
               }`}
-              aria-label={likeData?.liked ? "取消喜欢" : "喜欢"}
+              aria-label={isLiked ? "取消喜欢" : "喜欢"}
             >
-              <Heart className={`h-4 w-4 ${likeData?.liked ? "fill-current" : ""}`} />
+              <Heart className={`h-4 w-4 ${isLiked ? "fill-current" : ""}`} />
             </button>
           )}
 
@@ -230,18 +225,19 @@ export function PlayerBar() {
                     likeMutation.mutate({
                       platform: currentTrack.platform,
                       songId: currentTrack.id,
-                      nextLiked: !likeData?.liked,
+                      nextLiked: !isLiked,
+                      songTitle: currentTrack.title,
                     })
                   }
                   className={`rounded-full p-1.5 transition-colors ${
-                    likeData?.liked
+                    isLiked
                       ? "text-[var(--tv-accent)]"
                       : "text-[var(--tv-text-subtle)] hover:text-[var(--tv-text)]"
                   }`}
-                  title={likeData?.liked ? "取消喜欢" : "喜欢"}
-                  aria-label={likeData?.liked ? "取消喜欢" : "喜欢"}
+                  title={isLiked ? "取消喜欢" : "喜欢"}
+                  aria-label={isLiked ? "取消喜欢" : "喜欢"}
                 >
-                  <Heart className={`h-4 w-4 ${likeData?.liked ? "fill-current" : ""}`} />
+                  <Heart className={`h-4 w-4 ${isLiked ? "fill-current" : ""}`} />
                 </button>
               )}
             </>

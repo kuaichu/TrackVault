@@ -7,9 +7,11 @@ import { api } from "../../shared/api/endpoints.js";
 import { CoverArt } from "../../shared/ui/primitives.js";
 import { PlaybackProgressBar } from "./components/PlaybackProgressBar.js";
 import { PlayerBar } from "./components/PlayerBar.js";
+import { PlayQueuePanel } from "./components/PlayerDrawerPanels.js";
 import {
   AudioEngine,
   KEEPALIVE_MAX_BYTES,
+  audioEngine,
   buildBoundedKeepalivePlayerState,
   resolveEffectivePlaybackQuality,
   serializeQueueWindow,
@@ -525,5 +527,23 @@ describe("TrackVault v2 Player Isolation & Security", () => {
     // Clicking mode cycles smoothly
     fireEvent.click(screen.getByTitle("列表循环"));
     expect(usePlayerStore.getState().playbackMode).toBe("shuffle");
+  });
+
+  it("keeps fmMode: true when clicking a queue track in PlayQueuePanel during Personal FM (P1-4)", () => {
+    const fmSong1 = makeSong("fm-q1", { title: "漫游队列首曲" });
+    const fmSong2 = makeSong("fm-q2", { title: "漫游队列次曲" });
+    const playSpy = vi.spyOn(audioEngine, "playTrack").mockResolvedValue(undefined);
+
+    usePlayerStore.setState({
+      currentTrack: fmSong1,
+      queue: [fmSong1, fmSong2],
+      fmQueue: [fmSong1, fmSong2],
+      fmMode: true,
+    });
+
+    render(<PlayQueuePanel />);
+    fireEvent.click(screen.getByRole("button", { name: /漫游队列次曲/ }));
+
+    expect(playSpy).toHaveBeenCalledWith(fmSong2, { fm: true });
   });
 });

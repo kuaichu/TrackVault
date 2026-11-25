@@ -5,6 +5,52 @@ import type { MusicPlatform, PlatformBindingView } from "#shared";
 import { api } from "../../shared/api/endpoints.js";
 import { useCapabilities } from "../../shared/hooks/use-capabilities.js";
 import { toast } from "../../shared/store/toast-store.js";
+import { audioEngine } from "../player/index.js";
+
+const PLATFORM_SCOPED_QUERY_ROOTS = new Set<string>([
+  "playlists",
+  "playlist-tracks",
+  "liked-ids",
+  "charts",
+  "chart-detail",
+  "artist-detail",
+  "album-detail",
+  "lyrics",
+  "comments",
+]);
+
+export function shouldInvalidateQueryForPlatformChange(
+  queryKey: readonly unknown[],
+  platform: MusicPlatform,
+): boolean {
+  const root = queryKey[0];
+  if (typeof root !== "string") return false;
+
+  if (root === "bindings") {
+    return true;
+  }
+
+  if (PLATFORM_SCOPED_QUERY_ROOTS.has(root)) {
+    const keyPlatform = queryKey[1];
+    return keyPlatform === undefined || keyPlatform === platform;
+  }
+
+  if (root === "discover" || root === "discover-playlists") {
+    const keyPlatform = queryKey[1];
+    return keyPlatform === undefined || keyPlatform === "aggregate" || keyPlatform === platform;
+  }
+
+  if (root === "search" || root === "search-entities") {
+    const mode = queryKey[2];
+    return mode === undefined || mode === "aggregate" || mode === platform;
+  }
+
+  if (root === "daily-recommend" || root === "cloud-songs") {
+    return platform === "netease";
+  }
+
+  return false;
+}
 
 const QR_POLL_INTERVAL_MS = 2500;
 const QR_MAX_CONSECUTIVE_ERRORS = 3;
@@ -34,23 +80,11 @@ function PlatformCard({
   const dotClass = platform === "netease" ? "bg-[var(--tv-netease)]" : "bg-[var(--tv-qq)]";
 
   const invalidateAccountCaches = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["bindings"] });
-    void queryClient.invalidateQueries({ queryKey: ["playlists"] });
-    void queryClient.invalidateQueries({ queryKey: ["playlist-tracks"] });
-    void queryClient.invalidateQueries({ queryKey: ["liked-ids"] });
-    void queryClient.invalidateQueries({ queryKey: ["song-like"] });
-    void queryClient.invalidateQueries({ queryKey: ["discover"] });
-    void queryClient.invalidateQueries({ queryKey: ["discover-playlists"] });
-    void queryClient.invalidateQueries({ queryKey: ["daily-recommend"] });
-    void queryClient.invalidateQueries({ queryKey: ["personal-fm"] });
-    void queryClient.invalidateQueries({ queryKey: ["cloud-songs"] });
-    void queryClient.invalidateQueries({ queryKey: ["charts"] });
-    void queryClient.invalidateQueries({ queryKey: ["chart-detail"] });
-    void queryClient.invalidateQueries({ queryKey: ["artist-detail"] });
-    void queryClient.invalidateQueries({ queryKey: ["album-detail"] });
-    void queryClient.invalidateQueries({ queryKey: ["artist"] });
-    void queryClient.invalidateQueries({ queryKey: ["album"] });
-  }, [queryClient]);
+    audioEngine.resetPlatformFmState(platform);
+    void queryClient.invalidateQueries({
+      predicate: (query) => shouldInvalidateQueryForPlatformChange(query.queryKey, platform),
+    });
+  }, [platform, queryClient]);
 
   const bindMutation = useMutation({
     mutationFn: () => api.bindPlatformCookie(platform, cookieDraft),

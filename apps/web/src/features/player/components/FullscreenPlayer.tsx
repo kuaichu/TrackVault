@@ -1,4 +1,3 @@
-import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
   ChevronDown,
@@ -19,13 +18,13 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type QualityLevel, getQualityLabel, sanitizeCssUrl } from "#shared";
-import { AlbumLink, ArtistLinks } from "../../../entities/music/EntityLinks.js";
-import { api } from "../../../shared/api/endpoints.js";
+import { AlbumLink, ArtistLinks } from "../../../entities/music/index.js";
+import { useIsSongLiked, useToggleLikeMutation } from "../../../entities/song/index.js";
 import { useCapabilities } from "../../../shared/hooks/use-capabilities.js";
 import { useIsOverlayViewport, useModalFocusTrap } from "../../../shared/hooks/use-modal-focus-trap.js";
-import { useToggleLikeMutation } from "../../../shared/hooks/use-toggle-like.js";
 import { CoverArt, PlatformBadge } from "../../../shared/ui/primitives.js";
 import { audioEngine, resolveEffectivePlaybackQuality } from "../engine/audio-engine.js";
+import { useTrackLyricsQuery } from "../hooks/use-track-lyrics-query.js";
 import { usePlayerStore } from "../store/player-store.js";
 import { LyricScroller } from "./LyricScroller.js";
 import { PlaybackProgressBar } from "./PlaybackProgressBar.js";
@@ -45,7 +44,8 @@ export function FullscreenPlayer() {
   const muted = usePlayerStore((s) => s.muted);
   const playbackMode = usePlayerStore((s) => s.playbackMode);
   const defaultPlaybackQuality = usePlayerStore((s) => s.defaultPlaybackQuality);
-  const activeQualityOverride = usePlayerStore((s) => s.activeQualityOverride);
+  const preferredTrackQuality = usePlayerStore((s) => s.preferredTrackQuality);
+  const loadedStreamQuality = usePlayerStore((s) => s.loadedStreamQuality);
 
   const [mobileShowCover, setMobileShowCover] = useState(true);
   const [rightPanel, setRightPanel] = useState<FullscreenRightPanel>("lyrics");
@@ -69,21 +69,15 @@ export function FullscreenPlayer() {
     isError: lyricIsError,
     error: lyricError,
     refetch: refetchLyrics,
-  } = useQuery({
-    queryKey: ["lyrics", currentTrack?.platform, currentTrack?.id],
-    queryFn: () =>
-      currentTrack ? api.getLyrics(currentTrack.platform, currentTrack.id, currentTrack.mediaId) : null,
-    enabled: Boolean(isActive && rightPanel === "lyrics"),
-  });
+  } = useTrackLyricsQuery(currentTrack, Boolean(isActive && rightPanel === "lyrics"));
 
   const capabilities = useCapabilities();
   const canLike = Boolean(currentTrack && capabilities[currentTrack.platform].canLikeSong);
-  const { data: likeData } = useQuery({
-    queryKey: ["song-like", currentTrack?.platform, currentTrack?.id],
-    queryFn: () =>
-      currentTrack ? api.isSongLiked(currentTrack.platform, currentTrack.id) : { liked: false },
-    enabled: Boolean(isActive && canLike),
-  });
+  const { liked: isLiked } = useIsSongLiked(
+    currentTrack?.platform,
+    currentTrack?.id,
+    Boolean(isActive && canLike),
+  );
 
   const likeMutation = useToggleLikeMutation();
 
@@ -93,7 +87,7 @@ export function FullscreenPlayer() {
   const effectiveVolume = muted ? 0 : volume;
   const activeQuality = resolveEffectivePlaybackQuality(
     currentTrack,
-    activeQualityOverride,
+    loadedStreamQuality ?? preferredTrackQuality,
     defaultPlaybackQuality,
   );
   const availableQualities =
@@ -272,15 +266,16 @@ export function FullscreenPlayer() {
                   likeMutation.mutate({
                     platform: currentTrack.platform,
                     songId: currentTrack.id,
-                    nextLiked: !likeData?.liked,
+                    nextLiked: !isLiked,
+                    songTitle: currentTrack.title,
                   })
                 }
                 className={`mt-0.5 shrink-0 rounded-full p-2 transition-colors hover:bg-white/10 ${
-                  likeData?.liked ? "text-[#fa2d48]" : "text-white/70"
+                  isLiked ? "text-[#fa2d48]" : "text-white/70"
                 }`}
-                aria-label={likeData?.liked ? "取消喜欢" : "喜欢"}
+                aria-label={isLiked ? "取消喜欢" : "喜欢"}
               >
-                <Heart className={`h-5 w-5 ${likeData?.liked ? "fill-current" : ""}`} />
+                <Heart className={`h-5 w-5 ${isLiked ? "fill-current" : ""}`} />
               </button>
             )}
           </div>

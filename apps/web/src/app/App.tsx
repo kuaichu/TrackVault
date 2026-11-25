@@ -1,26 +1,51 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { BrowserRouter, Link, Navigate, Route, Routes } from "react-router-dom";
 import type { AuthStatus, StartupView, UserSummary } from "#shared";
-import { AlbumDetailPage } from "../features/album/AlbumDetailPage.js";
-import { ArtistDetailPage } from "../features/artist/ArtistDetailPage.js";
-import { AuthGatePage } from "../features/auth/AuthGatePage.js";
-import { ChartDetailPage, ChartsPage } from "../features/charts/ChartsPage.js";
-import { DiscoverPage } from "../features/discover/DiscoverPage.js";
-import { DownloadsPage } from "../features/downloads/DownloadsPage.js";
-import { PersonalFmPage } from "../features/fm/PersonalFmPage.js";
-import { CloudPage, HistoryPage } from "../features/library/CloudAndHistoryPage.js";
-import { PlaylistDetailPage, PlaylistsPage } from "../features/library/PlaylistsPage.js";
-import { audioEngine } from "../features/player/engine/audio-engine.js";
-import { SearchPage } from "../features/search/SearchPage.js";
-import { SettingsPage } from "../features/settings/SettingsPage.js";
-import { TransferPage } from "../features/transfer/TransferPage.js";
+import { AuthGatePage } from "../pages/auth/index.js";
+import { DiscoverPage } from "../pages/discover/index.js";
+import { SearchPage } from "../pages/search/index.js";
 import { api } from "../shared/api/endpoints.js";
 import { ApiClientError, setUnauthorizedHandler } from "../shared/api/http-client.js";
-import { clearPendingDirectLinkJobs } from "../shared/hooks/use-job-events.js";
-import { useToastStore } from "../shared/store/toast-store.js";
+import { useSettingsQuery } from "../shared/hooks/use-settings-query.js";
 import { EmptyState, ToastContainer } from "../shared/ui/primitives.js";
 import { AppShell } from "./AppShell.js";
+import { SessionServicesProvider, resetSessionServices } from "./SessionServicesProvider.js";
+
+const AlbumDetailPage = lazy(() =>
+  import("../pages/album/index.js").then((m) => ({ default: m.AlbumDetailPage })),
+);
+const ArtistDetailPage = lazy(() =>
+  import("../pages/artist/index.js").then((m) => ({ default: m.ArtistDetailPage })),
+);
+const ChartsPage = lazy(() => import("../pages/charts/index.js").then((m) => ({ default: m.ChartsPage })));
+const ChartDetailPage = lazy(() =>
+  import("../pages/charts/index.js").then((m) => ({ default: m.ChartDetailPage })),
+);
+const DownloadsPage = lazy(() =>
+  import("../pages/downloads/index.js").then((m) => ({ default: m.DownloadsPage })),
+);
+const PersonalFmPage = lazy(() =>
+  import("../pages/fm/index.js").then((m) => ({ default: m.PersonalFmPage })),
+);
+const CloudPage = lazy(() =>
+  import("../pages/library/CloudAndHistoryPage.js").then((m) => ({ default: m.CloudPage })),
+);
+const HistoryPage = lazy(() =>
+  import("../pages/library/CloudAndHistoryPage.js").then((m) => ({ default: m.HistoryPage })),
+);
+const PlaylistsPage = lazy(() =>
+  import("../pages/library/PlaylistsPage.js").then((m) => ({ default: m.PlaylistsPage })),
+);
+const PlaylistDetailPage = lazy(() =>
+  import("../pages/library/PlaylistsPage.js").then((m) => ({ default: m.PlaylistDetailPage })),
+);
+const SettingsPage = lazy(() =>
+  import("../pages/settings/index.js").then((m) => ({ default: m.SettingsPage })),
+);
+const TransferPage = lazy(() =>
+  import("../pages/transfer/index.js").then((m) => ({ default: m.TransferPage })),
+);
 
 const STARTUP_VIEW_ROUTES: Record<StartupView, string> = {
   discover: "/discover",
@@ -30,10 +55,7 @@ const STARTUP_VIEW_ROUTES: Record<StartupView, string> = {
 };
 
 function StartupRedirect() {
-  const settingsQuery = useQuery({
-    queryKey: ["settings"],
-    queryFn: () => api.getSettings(),
-  });
+  const settingsQuery = useSettingsQuery();
 
   if (settingsQuery.isLoading && !settingsQuery.data) {
     return (
@@ -90,36 +112,54 @@ function UserSessionBoundary({
   onSessionCleared: () => void;
 }) {
   const [userQueryClient] = useState(() => createAppQueryClient());
+  const mountedRef = useRef(false);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      void userQueryClient.cancelQueries();
-      userQueryClient.clear();
+      mountedRef.current = false;
+      queueMicrotask(() => {
+        if (!mountedRef.current) {
+          resetSessionServices(userQueryClient);
+          void userQueryClient.cancelQueries();
+          userQueryClient.clear();
+        }
+      });
     };
   }, [userQueryClient]);
 
   return (
     <QueryClientProvider client={userQueryClient}>
-      <AppShell user={user} onSessionCleared={onSessionCleared}>
-        <Routes>
-          <Route path="/" element={<StartupRedirect />} />
-          <Route path="/discover" element={<DiscoverPage />} />
-          <Route path="/charts" element={<ChartsPage />} />
-          <Route path="/charts/:platform/:id" element={<ChartDetailPage />} />
-          <Route path="/fm" element={<PersonalFmPage />} />
-          <Route path="/search" element={<SearchPage />} />
-          <Route path="/artist/:platform/:id" element={<ArtistDetailPage />} />
-          <Route path="/album/:platform/:id" element={<AlbumDetailPage />} />
-          <Route path="/playlists" element={<PlaylistsPage />} />
-          <Route path="/playlists/:platform/:id" element={<PlaylistDetailPage />} />
-          <Route path="/cloud" element={<CloudPage />} />
-          <Route path="/history" element={<HistoryPage />} />
-          <Route path="/downloads" element={<DownloadsPage />} />
-          <Route path="/transfer" element={<TransferPage />} />
-          <Route path="/settings" element={<SettingsPage user={user} />} />
-          <Route path="*" element={<NotFoundPage />} />
-        </Routes>
-      </AppShell>
+      <SessionServicesProvider>
+        <AppShell user={user} onSessionCleared={onSessionCleared}>
+          <Suspense
+            fallback={
+              <div className="flex min-h-[240px] items-center justify-center text-xs text-[var(--tv-text-muted)]">
+                正在载入页面...
+              </div>
+            }
+          >
+            <Routes>
+              <Route path="/" element={<StartupRedirect />} />
+              <Route path="/discover" element={<DiscoverPage />} />
+              <Route path="/charts" element={<ChartsPage />} />
+              <Route path="/charts/:platform/:id" element={<ChartDetailPage />} />
+              <Route path="/fm" element={<PersonalFmPage />} />
+              <Route path="/search" element={<SearchPage />} />
+              <Route path="/artist/:platform/:id" element={<ArtistDetailPage />} />
+              <Route path="/album/:platform/:id" element={<AlbumDetailPage />} />
+              <Route path="/playlists" element={<PlaylistsPage />} />
+              <Route path="/playlists/:platform/:id" element={<PlaylistDetailPage />} />
+              <Route path="/cloud" element={<CloudPage />} />
+              <Route path="/history" element={<HistoryPage />} />
+              <Route path="/downloads" element={<DownloadsPage />} />
+              <Route path="/transfer" element={<TransferPage />} />
+              <Route path="/settings" element={<SettingsPage user={user} />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+          </Suspense>
+        </AppShell>
+      </SessionServicesProvider>
     </QueryClientProvider>
   );
 }
@@ -130,10 +170,7 @@ function AuthenticatedApp() {
 
   const clearAuthSession = useCallback(() => {
     prevUserIdRef.current = null;
-    audioEngine.stop();
-    clearPendingDirectLinkJobs();
-    // F02: Clear global toasts (such as 8s direct-link notifications) across session boundaries
-    useToastStore.getState().clear();
+    resetSessionServices();
     authQueryClient.setQueryData<AuthStatus>(["auth-status"], (prev) => ({
       initialized: prev?.initialized ?? true,
       authenticated: false,
@@ -158,9 +195,7 @@ function AuthenticatedApp() {
   useEffect(() => {
     const prev = prevUserIdRef.current;
     if (prev !== null && prev !== activeUserId) {
-      audioEngine.stop();
-      clearPendingDirectLinkJobs();
-      useToastStore.getState().clear();
+      resetSessionServices();
     }
     prevUserIdRef.current = activeUserId;
   }, [activeUserId]);
