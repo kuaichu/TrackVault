@@ -324,7 +324,9 @@ describe("Personal FM playback, lyric synchronization, and quality retention", (
       expect(screen.getByText("Explore Indie Song")).toBeInTheDocument();
     });
 
-    // Previously roamed FM Song B is preserved in 刚刚听过 shelf for one-click replay
+    // Previously roamed FM Song B is preserved in 刚刚听过 shelf for one-click replay, and 清空 clears it
     expect(screen.getByText("FM Song B")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "清空" }));
+    expect(screen.queryByText("FM Song B")).not.toBeInTheDocument();
   });
 });

@@ -533,6 +533,10 @@ export class AudioEngine {
     return this.#fm.trashSong(song);
   }
 
+  clearFmRecentTracks(): void {
+    this.#fm.clearRecentTracks();
+  }
+
   nextFmTrack(options?: { naturalAdvance?: boolean }): Promise<void> {
     return this.#fm.nextTrack(options);
   }

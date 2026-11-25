@@ -141,8 +141,8 @@ export function QuickCollectPopover({
             : isStage
               ? `inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors active:scale-95 ${
                   open
-                    ? "bg-[var(--tv-nav-active)] text-[var(--tv-accent)]"
-                    : "bg-[var(--tv-lcd-bg)] text-[var(--tv-text-muted)] hover:bg-[var(--tv-nav-active)] hover:text-[var(--tv-text)]"
+                    ? "bg-[var(--tv-surface-active)] text-[var(--tv-accent)]"
+                    : "text-[var(--tv-text-muted)] hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
                 }`
               : isMobileBar
                 ? `inline-flex items-center justify-center rounded-full p-1.5 transition-colors ${

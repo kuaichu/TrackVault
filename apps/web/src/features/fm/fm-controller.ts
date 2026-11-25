@@ -150,6 +150,10 @@ export class FmController {
     });
   }
 
+  clearRecentTracks(): void {
+    this.#host.patchState({ fmRecentTracks: [] });
+  }
+
   async loadBatch(options?: {
     autoPlay?: boolean;
     source?: "page" | "engine";

@@ -490,7 +490,7 @@ function AppShellInner({
               </div>
             </div>
 
-            <main className="flex-1 overflow-y-auto px-4 pt-11 pb-5 sm:px-6 sm:pt-11 sm:pb-6 md:px-8 md:pt-10 md:pb-36">
+            <main className="flex-1 overflow-y-auto px-4 pt-11 pb-5 sm:px-6 sm:pt-11 sm:pb-6 md:px-8 md:pt-10 md:pb-40">
               <div key={location.pathname} className="tv-page-enter mx-auto max-w-[1280px]">
                 {children}
               </div>

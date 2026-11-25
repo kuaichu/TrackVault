@@ -1,7 +1,7 @@
 import { Maximize2, Plus, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { type PersonalFmMode, type Song, getSongKey, sanitizeCssUrl } from "#shared";
+import { type PersonalFmMode, QUALITY_META, type Song, getSongKey, sanitizeCssUrl } from "#shared";
 import { AlbumLink, ArtistLinks } from "../../entities/music/index.js";
 import { useLikedIdsQuery, useToggleLikeMutation } from "../../entities/song/index.js";
 import {
@@ -13,12 +13,13 @@ import {
   SfPlayFill,
   SfSlashCircle,
   audioEngine,
+  resolveEffectivePlaybackQuality,
   usePlayerStore,
   useTrackLyricsQuery,
 } from "../../features/player/index.js";
 import { useCapabilities } from "../../shared/hooks/use-capabilities.js";
 import { toast } from "../../shared/store/toast-store.js";
-import { CoverArt, EmptyState, EqualizerBars, SegmentedTabs } from "../../shared/ui/primitives.js";
+import { CoverArt, EmptyState, SegmentedTabs } from "../../shared/ui/primitives.js";
 
 const FM_MODE_TABS: ReadonlyArray<{ id: PersonalFmMode; label: string }> = [
   { id: "DEFAULT", label: "默认" },
@@ -36,17 +37,19 @@ function toStageCoverUrl(url?: string, size = 800): string | undefined {
 
 function FmTrackShelfList({
   songs,
+  columns = 1,
   onSelectSong,
 }: {
   songs: readonly Song[];
+  columns?: 1 | 2;
   onSelectSong: (song: Song) => void;
 }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 md:gap-x-8">
+    <div className={columns === 2 ? "grid grid-cols-1 md:grid-cols-2 md:gap-x-8" : "flex flex-col"}>
       {songs.map((song, idx) => {
         const isLastOverall = idx === songs.length - 1;
         const isBottomRowInTwoCol =
-          songs.length % 2 === 0 ? idx >= songs.length - 2 : idx === songs.length - 1;
+          columns === 2 && (songs.length % 2 === 0 ? idx >= songs.length - 2 : idx === songs.length - 1);
         return (
           <div
             key={getSongKey(song)}
@@ -124,6 +127,9 @@ export function PersonalFmPage() {
   const fmRecentTracks = usePlayerStore((s) => s.fmRecentTracks);
   const fmLoading = usePlayerStore((s) => s.fmLoading);
   const fmError = usePlayerStore((s) => s.fmError);
+  const defaultPlaybackQuality = usePlayerStore((s) => s.defaultPlaybackQuality);
+  const preferredTrackQuality = usePlayerStore((s) => s.preferredTrackQuality);
+  const loadedStreamQuality = usePlayerStore((s) => s.loadedStreamQuality);
   const setFullscreenOpen = usePlayerStore((s) => s.setFullscreenOpen);
 
   const [trashingId, setTrashingId] = useState<string | null>(null);
@@ -150,6 +156,14 @@ export function PersonalFmPage() {
     activeSong && currentTrack && getSongKey(activeSong) === getSongKey(currentTrack),
   );
 
+  // Synchronized with PlayerBar's active stream quality badge
+  const effectiveQuality = resolveEffectivePlaybackQuality(
+    activeSong,
+    isCurrentActive ? (loadedStreamQuality ?? preferredTrackQuality) : preferredTrackQuality,
+    defaultPlaybackQuality,
+  );
+  const effectiveQualityLabel = QUALITY_META[effectiveQuality].shortLabel;
+
   const activeQueueIdx = useMemo(
     () => (activeSongKey ? fmQueue.findIndex((item) => getSongKey(item) === activeSongKey) : -1),
     [activeSongKey, fmQueue],
@@ -170,24 +184,23 @@ export function PersonalFmPage() {
     return out;
   }, [activeQueueIdx, activeSongKey, fmQueue]);
 
-  // Recently roamed songs (earlier in current batch + cross-batch fmRecentTracks, excluding active & upcoming)
+  // Recently roamed songs driven by fmRecentTracks (excluding active & upcoming so clear button is deterministic)
   const recentSongs = useMemo(() => {
-    const earlierInBatch = activeQueueIdx > 0 ? fmQueue.slice(0, activeQueueIdx).reverse() : [];
     const excluded = new Set<string>([
       ...(activeSongKey ? [activeSongKey] : []),
       ...upcomingSongs.map((item) => getSongKey(item)),
     ]);
     const out: Song[] = [];
-    for (const song of [...earlierInBatch, ...fmRecentTracks]) {
+    for (const song of fmRecentTracks) {
       const k = getSongKey(song);
       if (!excluded.has(k)) {
         excluded.add(k);
         out.push(song);
       }
-      if (out.length >= 6) break;
+      if (out.length >= 5) break;
     }
     return out;
-  }, [activeQueueIdx, activeSongKey, fmQueue, fmRecentTracks, upcomingSongs]);
+  }, [activeSongKey, fmRecentTracks, upcomingSongs]);
 
   // 3-Cover Layered Carousel: [leftWing (prev or rear-stack), centerHero (activeSong), rightWing (next)]
   const prevCarouselSong = recentSongs[0] ?? null;
@@ -291,9 +304,10 @@ export function PersonalFmPage() {
   const heroCoverUrl = toStageCoverUrl(activeSong?.coverUrl, 800);
   const backdrop = sanitizeCssUrl(heroCoverUrl ?? activeSong?.coverUrl);
   const vipPlayback = activeSong?.availability?.playback.status === "vip";
+  const hasRecentSongs = recentSongs.length > 0;
 
   return (
-    <div className="relative space-y-8 sm:space-y-10">
+    <div className="relative space-y-8 pb-8 sm:space-y-10 md:pb-10">
       {/* Soft top-canvas ambient aura from cover art — zero hard rectangular border */}
       {backdrop && (
         <div
@@ -451,7 +465,7 @@ export function PersonalFmPage() {
                   </button>
                 )}
 
-                {/* Center Hero Cover */}
+                {/* Center Hero Cover — pure unobstructed artwork */}
                 <div
                   className="relative z-20 overflow-hidden rounded-[14px] transition-transform duration-300"
                   style={{
@@ -469,12 +483,6 @@ export function PersonalFmPage() {
                     className="pointer-events-none absolute inset-0 rounded-[14px]"
                     style={{ boxShadow: "var(--tv-cover-ring)" }}
                   />
-                  {isCurrentActive && isPlaying && (
-                    <span className="pointer-events-none absolute right-2.5 bottom-2.5 inline-flex items-center gap-1.5 rounded-full bg-black/55 px-2.5 py-1 text-[10.5px] font-medium text-white backdrop-blur-md">
-                      <EqualizerBars />
-                      <span>电台直播</span>
-                    </span>
-                  )}
                 </div>
               </div>
 
@@ -511,13 +519,13 @@ export function PersonalFmPage() {
                 </div>
               </div>
 
-              {/* Apple Music Rounded-Rect Primary Button + Harmonious Secondary Station Actions */}
-              <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5 lg:justify-start">
+              {/* Apple Music Rounded-Rect Primary Button + Borderless Hover-Reveal Station Icons */}
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-1.5 lg:justify-start">
                 <button
                   type="button"
                   onClick={handlePlayToggle}
                   aria-label={isCurrentActive && isPlaying ? "暂停漫游" : "开始漫游"}
-                  className={`inline-flex h-9 items-center justify-center gap-2 rounded-[8px] px-5 text-[13px] font-semibold transition-all active:scale-[0.98] ${
+                  className={`mr-1 inline-flex h-9 items-center justify-center gap-2 rounded-[8px] px-5 text-[13px] font-semibold transition-all active:scale-[0.98] ${
                     isCurrentActive && isPlaying
                       ? "bg-[var(--tv-lcd-bg)] text-[var(--tv-text)] ring-1 ring-inset ring-[var(--tv-border-strong)] hover:bg-[var(--tv-nav-active)]"
                       : "bg-[var(--tv-accent)] text-[var(--tv-accent-fg)] shadow-xs hover:bg-[var(--tv-accent-hover)]"
@@ -540,7 +548,7 @@ export function PersonalFmPage() {
                   type="button"
                   disabled={fmLoading}
                   onClick={handleNext}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--tv-lcd-bg)] text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-nav-active)] active:scale-95 disabled:opacity-45"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)] active:scale-95 disabled:opacity-45"
                   title="下一首"
                   aria-label="下一首"
                 >
@@ -551,7 +559,7 @@ export function PersonalFmPage() {
                   type="button"
                   disabled={trashingId === activeSong.id}
                   onClick={() => void handleDislike()}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--tv-lcd-bg)] text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-danger)]/14 hover:text-[var(--tv-danger)] active:scale-95 disabled:opacity-45"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-danger)]/14 hover:text-[var(--tv-danger)] active:scale-95 disabled:opacity-45"
                   title="不喜欢（移入垃圾桶，减少此类推荐）"
                   aria-label="不喜欢"
                 >
@@ -569,7 +577,7 @@ export function PersonalFmPage() {
                         songTitle: activeSong.title,
                       })
                     }
-                    className={`inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--tv-lcd-bg)] transition-colors hover:bg-[var(--tv-nav-active)] active:scale-95 ${
+                    className={`inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors hover:bg-[var(--tv-surface-hover)] active:scale-95 ${
                       isLiked ? "text-[#fa2d48]" : "text-[var(--tv-text-muted)] hover:text-[var(--tv-text)]"
                     }`}
                     title={isLiked ? "取消喜欢" : "红心喜欢"}
@@ -585,7 +593,7 @@ export function PersonalFmPage() {
                   <button
                     type="button"
                     onClick={() => setFullscreenOpen(true)}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--tv-lcd-bg)] text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-nav-active)] hover:text-[var(--tv-text)] active:scale-95"
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-full text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)] active:scale-95"
                     title="全屏歌词"
                     aria-label="展开全屏歌词"
                   >
@@ -610,9 +618,13 @@ export function PersonalFmPage() {
                 )}
 
                 <div className="flex items-center gap-2 text-[11.5px] tabular-nums text-[var(--tv-text-subtle)]">
-                  {activeSong.quality && <span>{activeSong.quality}</span>}
-                  {activeSong.quality && activeSong.duration && <span className="opacity-45">·</span>}
-                  {activeSong.duration && <span>{activeSong.duration}</span>}
+                  <span>{effectiveQualityLabel}</span>
+                  {activeSong.duration && (
+                    <>
+                      <span className="opacity-45">·</span>
+                      <span>{activeSong.duration}</span>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -643,16 +655,20 @@ export function PersonalFmPage() {
             </div>
           </section>
 
-          {/* Lower Canvas Extension Zone: Upcoming & Recently Roamed */}
-          <div className="relative space-y-9 border-t border-[var(--tv-border)] pt-8">
-            <section className="space-y-3.5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-baseline gap-2.5">
-                  <h3 className="text-[19px] font-bold tracking-tight text-[var(--tv-text)] sm:text-[20px]">
+          {/* Lower Canvas Extension Zone: Side-by-Side Split when History Exists (fills horizontal space & keeps height compact) */}
+          <div
+            className={`relative border-t border-[var(--tv-border)] pt-7 ${
+              hasRecentSongs ? "grid grid-cols-1 gap-8 lg:grid-cols-2 lg:gap-12" : ""
+            }`}
+          >
+            <section className="min-w-0 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-baseline gap-2">
+                  <h3 className="text-[18px] font-bold tracking-tight text-[var(--tv-text)] sm:text-[19px]">
                     接下来漫游
                   </h3>
                   {upcomingSongs.length > 0 && (
-                    <span className="text-[13px] font-medium tabular-nums text-[var(--tv-text-subtle)]">
+                    <span className="text-[12.5px] font-medium tabular-nums text-[var(--tv-text-subtle)]">
                       {upcomingSongs.length}
                     </span>
                   )}
@@ -670,39 +686,48 @@ export function PersonalFmPage() {
               </div>
 
               {upcomingSongs.length > 0 ? (
-                <FmTrackShelfList songs={upcomingSongs} onSelectSong={handlePlaySpecificFmSong} />
+                <FmTrackShelfList
+                  songs={upcomingSongs}
+                  columns={hasRecentSongs ? 1 : 2}
+                  onSelectSong={handlePlaySpecificFmSong}
+                />
               ) : (
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[var(--tv-lcd-bg)] px-4 py-3 text-xs text-[var(--tv-text-muted)]">
-                  <span>当前批次即将播完，曲终将自动续接下一批推荐曲目。</span>
+                  <span>当前批次即将播完，曲终将自动续接下一批推荐。</span>
                   <button
                     type="button"
                     disabled={fmLoading}
                     onClick={() => void handleAppendBatch()}
                     className="font-semibold text-[var(--tv-accent)] transition-opacity hover:opacity-80 disabled:opacity-45"
                   >
-                    立即续接下一批
+                    立即续接
                   </button>
                 </div>
               )}
             </section>
 
-            {recentSongs.length > 0 && (
-              <section className="space-y-3.5 border-t border-[var(--tv-border)] pt-7">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <div className="flex items-baseline gap-2.5">
-                    <h3 className="text-[19px] font-bold tracking-tight text-[var(--tv-text)] sm:text-[20px]">
+            {hasRecentSongs && (
+              <section className="min-w-0 space-y-3 border-t border-[var(--tv-border)] pt-7 lg:border-t-0 lg:pt-0">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-baseline gap-2">
+                    <h3 className="text-[18px] font-bold tracking-tight text-[var(--tv-text)] sm:text-[19px]">
                       刚刚听过
                     </h3>
-                    <span className="text-[13px] font-medium tabular-nums text-[var(--tv-text-subtle)]">
+                    <span className="text-[12.5px] font-medium tabular-nums text-[var(--tv-text-subtle)]">
                       {recentSongs.length}
                     </span>
                   </div>
-                  <span className="text-xs text-[var(--tv-text-subtle)]">
-                    点击即可随时回到刚才擦肩而过的曲目
-                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => audioEngine.clearFmRecentTracks()}
+                    className="inline-flex h-7 items-center rounded-[7px] px-2 text-xs font-medium text-[var(--tv-text-subtle)] transition-colors hover:bg-[var(--tv-surface-hover)] hover:text-[var(--tv-text)]"
+                  >
+                    清空
+                  </button>
                 </div>
 
-                <FmTrackShelfList songs={recentSongs} onSelectSong={handlePlaySpecificFmSong} />
+                <FmTrackShelfList songs={recentSongs} columns={1} onSelectSong={handlePlaySpecificFmSong} />
               </section>
             )}
           </div>

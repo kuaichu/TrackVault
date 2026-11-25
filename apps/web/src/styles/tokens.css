@@ -400,8 +400,8 @@ select:not(:disabled) {
 
 /* Soft vertical fade mask for synchronized lyrics (Apple Music / YesPlayMusic style) */
 .tv-lyric-mask {
-  mask-image: linear-gradient(to bottom, transparent 0%, black 12%, black 85%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12%, black 85%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 78%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 78%, transparent 100%);
 }
 
 /* Edge scrims for borderless Apple Music top canvas & floating Liquid Glass bottom bar */

@@ -146,7 +146,7 @@ export function LyricScroller({
       onTouchEnd={pauseAutoFollow}
       onPointerDown={pauseAutoFollow}
       onPointerUp={pauseAutoFollow}
-      className={`tv-lyric-mask tv-no-scrollbar relative h-full overflow-y-auto ${large ? "px-4 py-28 space-y-5" : "px-3 py-12 space-y-2.5"}`}
+      className={`tv-lyric-mask tv-no-scrollbar relative h-full overflow-y-auto ${large ? "px-4 pt-24 pb-36 space-y-5" : "px-3 py-12 space-y-2.5"}`}
     >
       {lines.map((line, index) => {
         if (!line.text.trim()) return null;
