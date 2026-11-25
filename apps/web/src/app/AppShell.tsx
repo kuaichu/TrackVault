@@ -48,6 +48,7 @@ import {
 import { useSettingsQuery } from "../shared/hooks/use-settings-query.js";
 import { useThemeStore } from "../shared/store/theme-store.js";
 import { toast } from "../shared/store/toast-store.js";
+import { MAIN_AMBIENT_SLOT_ID } from "../shared/ui/primitives.js";
 import {
   SessionServicesProvider,
   resetSessionServices,
@@ -158,9 +159,11 @@ function AppShellInner({
   });
 
   const pathname = location.pathname;
+  const [mainScrolled, setMainScrolled] = useState(false);
   useEffect(() => {
     if (pathname) {
       setMobileMenuOpen(false);
+      setMainScrolled(false);
     }
   }, [pathname]);
 
@@ -433,10 +436,12 @@ function AppShellInner({
 
           {/* Borderless Apple Music Main Canvas (no T-bar header divider; content glides to top edge) */}
           <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-            {/* Soft top edge scroll fade */}
+            {/* Soft top edge scroll fade (only appears once canvas scrolls under top corner buttons) */}
             <div
               aria-hidden="true"
-              className="tv-top-scrim pointer-events-none absolute inset-x-0 top-0 h-11"
+              className={`tv-top-scrim pointer-events-none absolute inset-x-0 top-0 h-11 transition-opacity duration-200 ${
+                mainScrolled ? "opacity-100" : "opacity-0"
+              }`}
               style={{ zIndex: "calc(var(--tv-z-sticky) - 1)" }}
             />
 
@@ -490,8 +495,20 @@ function AppShellInner({
               </div>
             </div>
 
-            <main className="flex-1 overflow-y-auto px-4 pt-11 pb-5 sm:px-6 sm:pt-11 sm:pb-6 md:px-8 md:pt-10 md:pb-40">
-              <div key={location.pathname} className="tv-page-enter mx-auto max-w-[1280px]">
+            <main
+              onScroll={(e) => {
+                const nextScrolled = e.currentTarget.scrollTop > 6;
+                setMainScrolled((prev) => (prev === nextScrolled ? prev : nextScrolled));
+              }}
+              className="relative flex-1 overflow-y-auto px-4 pt-11 pb-5 sm:px-6 sm:pt-11 sm:pb-6 md:px-8 md:pt-10 md:pb-40"
+            >
+              {/* Full-bleed canvas ambient backdrop slot (edge-to-edge from sidebar to right window border) */}
+              <div
+                id={MAIN_AMBIENT_SLOT_ID}
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-0 z-0 h-[600px]"
+              />
+              <div key={location.pathname} className="tv-page-enter relative z-[1] mx-auto max-w-[1280px]">
                 {children}
               </div>
             </main>

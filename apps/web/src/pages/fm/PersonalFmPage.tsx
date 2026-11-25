@@ -1,7 +1,7 @@
 import { Maximize2, Plus, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { type PersonalFmMode, QUALITY_META, type Song, getSongKey, sanitizeCssUrl } from "#shared";
+import { type PersonalFmMode, QUALITY_META, type Song, getSongKey } from "#shared";
 import { AlbumLink, ArtistLinks } from "../../entities/music/index.js";
 import { useLikedIdsQuery, useToggleLikeMutation } from "../../entities/song/index.js";
 import {
@@ -19,7 +19,7 @@ import {
 } from "../../features/player/index.js";
 import { useCapabilities } from "../../shared/hooks/use-capabilities.js";
 import { toast } from "../../shared/store/toast-store.js";
-import { CoverArt, EmptyState, SegmentedTabs } from "../../shared/ui/primitives.js";
+import { CanvasAmbientGlow, CoverArt, EmptyState, SegmentedTabs } from "../../shared/ui/primitives.js";
 
 const FM_MODE_TABS: ReadonlyArray<{ id: PersonalFmMode; label: string }> = [
   { id: "DEFAULT", label: "默认" },
@@ -302,30 +302,13 @@ export function PersonalFmPage() {
   };
 
   const heroCoverUrl = toStageCoverUrl(activeSong?.coverUrl, 800);
-  const backdrop = sanitizeCssUrl(heroCoverUrl ?? activeSong?.coverUrl);
   const vipPlayback = activeSong?.availability?.playback.status === "vip";
   const hasRecentSongs = recentSongs.length > 0;
 
   return (
     <div className="relative space-y-8 pb-8 sm:space-y-10 md:pb-10">
-      {/* Soft top-canvas ambient aura from cover art — zero hard rectangular border */}
-      {backdrop && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute -inset-x-4 -top-10 h-[520px] overflow-hidden sm:-inset-x-6 md:-inset-x-8"
-          style={{
-            maskImage:
-              "radial-gradient(ellipse 84% 76% at 32% 34%, rgba(0,0,0,1) 0%, rgba(0,0,0,0.46) 54%, transparent 100%)",
-            WebkitMaskImage:
-              "radial-gradient(ellipse 84% 76% at 32% 34%, rgba(0,0,0,1) 0%, rgba(0,0,0,0.46) 54%, transparent 100%)",
-          }}
-        >
-          <div
-            className="h-full w-full scale-125 bg-cover bg-center opacity-20 blur-[96px] saturate-[1.65] transition-[background-image] duration-700 dark:opacity-36"
-            style={{ backgroundImage: `url("${backdrop}")` }}
-          />
-        </div>
-      )}
+      {/* Full-bleed outer-canvas radial ambient glow with HSL lightness cap & bottom linear dissolve */}
+      <CanvasAmbientGlow coverUrl={activeSong?.coverUrl} />
 
       {/* Apple Music Editorial Header + Submode Segmented Control + Borderless Refresh */}
       <div className="relative flex flex-wrap items-end justify-between gap-4 border-b border-[var(--tv-border)] pb-3.5">

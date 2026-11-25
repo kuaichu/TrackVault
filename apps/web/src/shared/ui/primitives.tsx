@@ -3,6 +3,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { sanitizeExternalUrl } from "#shared";
 import { useToastStore } from "../store/toast-store.js";
 export { AppleSelect, type AppleSelectOption } from "./AppleSelect.js";
+export { CanvasAmbientGlow, MAIN_AMBIENT_SLOT_ID } from "./CanvasAmbientGlow.js";
 
 export function CoverArt({
   src,
