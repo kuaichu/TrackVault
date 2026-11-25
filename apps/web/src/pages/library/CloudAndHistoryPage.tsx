@@ -117,7 +117,7 @@ export function CloudPage() {
         />
       ) : (
         <>
-          <SongTable songs={songs} emptyText="云盘暂无歌曲" />
+          <SongTable songs={songs} showPlatformBadge={false} emptyText="云盘暂无歌曲" />
           {cloudQuery.isFetchNextPageError ? (
             <div className="flex flex-col items-center gap-2 pt-2 text-center">
               <p className="text-xs text-[var(--tv-danger)]">

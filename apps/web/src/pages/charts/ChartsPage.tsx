@@ -204,15 +204,23 @@ export function ChartDetailPage() {
           <MediaDetailHeader
             coverUrl={chart.coverUrl}
             coverAlt={chart.name}
-            platform={chart.platform}
+            eyebrow="排行榜"
             title={chart.name}
             meta={
-              <p className="text-xs text-[var(--tv-text-muted)]">
-                {chart.updateFrequency ? `${chart.updateFrequency} · ` : ""}共 {songs.length} 首上榜曲目
+              <p className="text-[13px] font-medium text-[var(--tv-text-muted)]">
+                <span>{platform === "qq" ? "QQ 音乐" : "网易云音乐"}</span>
+                {chart.updateFrequency ? (
+                  <>
+                    <span className="mx-1.5 opacity-45">·</span>
+                    <span>{chart.updateFrequency}</span>
+                  </>
+                ) : null}
+                <span className="mx-1.5 opacity-45">·</span>
+                <span className="tabular-nums">共 {songs.length} 首上榜曲目</span>
               </p>
             }
             actions={
-              <div className="pt-1">
+              <div className="pt-2">
                 <button
                   type="button"
                   disabled={songs.length === 0}
@@ -224,7 +232,7 @@ export function ChartDetailPage() {
                     }
                     void audioEngine.playTrack(first, { queue: songs });
                   }}
-                  className="inline-flex items-center gap-1.5 rounded-full bg-[var(--tv-accent)] px-5 py-2 text-xs font-semibold text-[var(--tv-accent-fg)] transition-colors hover:bg-[var(--tv-accent-hover)] disabled:opacity-40"
+                  className="inline-flex h-9 min-w-[110px] items-center justify-center gap-1.5 rounded-[8px] bg-[var(--tv-accent)] px-5 text-[13px] font-semibold text-[var(--tv-accent-fg)] transition-all hover:bg-[var(--tv-accent-hover)] active:scale-[0.98] disabled:opacity-40"
                 >
                   <Play className="h-3.5 w-3.5 fill-current" />
                   播放全部
@@ -233,7 +241,12 @@ export function ChartDetailPage() {
             }
           />
 
-          <SongTable songs={songs} emptyText="该榜单暂无曲目" />
+          <SongTable
+            songs={songs}
+            showHeaderMeta={false}
+            showPlatformBadge={false}
+            emptyText="该榜单暂无曲目"
+          />
         </>
       )}
     </div>

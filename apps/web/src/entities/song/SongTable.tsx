@@ -97,6 +97,7 @@ export interface PureSongTableProps {
   emptyText?: string;
   emptyDescription?: string;
   showHeaderMeta?: boolean;
+  showPlatformBadge?: boolean;
   indexOffset?: number;
   currentTrackKey?: string | null;
   isPlaying?: boolean;
@@ -130,6 +131,7 @@ export function SongTable({
   emptyText = "暂无歌曲",
   emptyDescription,
   showHeaderMeta = true,
+  showPlatformBadge = true,
   indexOffset = 0,
   currentTrackKey = null,
   isPlaying = false,
@@ -348,16 +350,20 @@ export function SongTable({
         </div>
       )}
 
-      {/* Container-query responsive column header */}
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 border-b border-[var(--tv-border)] px-2 pb-2 text-[11px] font-medium text-[var(--tv-text-subtle)] select-none @lg:grid-cols-[32px_minmax(0,1fr)_48px_96px] @lg:gap-3 @lg:px-3 @3xl:grid-cols-[36px_minmax(0,1.65fr)_minmax(0,1fr)_52px_104px]">
+      {/* Container-query responsive column header (subtle hairline, blank trailing action column) */}
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 border-b border-[var(--tv-sidebar-border)] px-2.5 pb-2 text-[11px] font-medium text-[var(--tv-text-subtle)]/75 select-none @lg:grid-cols-[32px_minmax(0,1fr)_48px_92px] @lg:gap-3 @lg:px-3 @3xl:grid-cols-[36px_minmax(0,1.65fr)_minmax(0,1fr)_52px_96px]">
         <span className="hidden text-center @lg:block">#</span>
         <span>标题</span>
         <span className="hidden @3xl:block">专辑</span>
         <span className="hidden text-right @lg:block">时长</span>
-        <span className="text-right">操作</span>
+        <span aria-hidden="true" />
       </div>
 
-      <div ref={listRef} className="mt-1 space-y-0.5" data-virtualized={isVirtualized ? "true" : "false"}>
+      <div
+        ref={listRef}
+        className="mt-1 space-y-[1px] pb-4"
+        data-virtualized={isVirtualized ? "true" : "false"}
+      >
         {topSpacerHeight > 0 && <div aria-hidden="true" style={{ height: `${topSpacerHeight}px` }} />}
 
         {renderedSongs.map((song, localIdx) => {
@@ -383,6 +389,8 @@ export function SongTable({
               song={song}
               rowKey={rowKey}
               displayIndex={indexOffset + idx + 1}
+              isEvenRow={idx % 2 === 1}
+              showPlatformBadge={showPlatformBadge}
               isActive={active}
               isPlaying={active && isPlaying}
               canLike={canLike}

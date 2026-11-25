@@ -68,31 +68,33 @@ export function AlbumDetailPage() {
           <MediaDetailHeader
             coverUrl={album.coverUrl}
             coverAlt={album.name}
-            platform={album.platform}
+            eyebrow="专辑"
             title={album.name}
             description={album.description}
             meta={
-              <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--tv-text-muted)]">
+              <div className="flex flex-wrap items-center gap-2 text-[13px] text-[var(--tv-text-muted)]">
                 <ArtistLinks
                   platform={album.platform}
                   artists={album.artists}
                   fallbackText="未知歌手"
-                  linkClassName="font-medium text-[var(--tv-text)] hover:text-[var(--tv-accent)] hover:underline"
+                  linkClassName="font-semibold text-[var(--tv-accent)] hover:opacity-85"
                 />
+                <span className="opacity-45">·</span>
+                <span>{album.platform === "qq" ? "QQ 音乐" : "网易云音乐"}</span>
                 {album.publishDate && (
                   <>
-                    <span>·</span>
-                    <span className="text-xs tabular-nums">{album.publishDate}</span>
+                    <span className="opacity-45">·</span>
+                    <span className="tabular-nums">{album.publishDate}</span>
                   </>
                 )}
                 {album.company && (
                   <>
-                    <span>·</span>
-                    <span className="text-xs">{album.company}</span>
+                    <span className="opacity-45">·</span>
+                    <span>{album.company}</span>
                   </>
                 )}
-                <span>·</span>
-                <span className="text-xs tabular-nums">{album.trackCount} 首</span>
+                <span className="opacity-45">·</span>
+                <span className="tabular-nums">{album.trackCount} 首</span>
               </div>
             }
             actions={
@@ -108,7 +110,7 @@ export function AlbumDetailPage() {
                     }
                     void audioEngine.playTrack(first, { queue: album.songs });
                   }}
-                  className="inline-flex items-center gap-1.5 rounded-full bg-[var(--tv-accent)] px-5 py-2 text-xs font-semibold text-[var(--tv-accent-fg)] transition-colors hover:bg-[var(--tv-accent-hover)] disabled:opacity-40"
+                  className="inline-flex h-9 min-w-[110px] items-center justify-center gap-1.5 rounded-[8px] bg-[var(--tv-accent)] px-5 text-[13px] font-semibold text-[var(--tv-accent-fg)] transition-all hover:bg-[var(--tv-accent-hover)] active:scale-[0.98] disabled:opacity-40"
                 >
                   <Play className="h-3.5 w-3.5 fill-current" />
                   播放专辑
@@ -117,7 +119,12 @@ export function AlbumDetailPage() {
             }
           />
 
-          <SongTable songs={album.songs} emptyText="专辑内暂无曲目" />
+          <SongTable
+            songs={album.songs}
+            showHeaderMeta={false}
+            showPlatformBadge={false}
+            emptyText="专辑内暂无曲目"
+          />
         </>
       )}
     </div>

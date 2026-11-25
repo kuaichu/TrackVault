@@ -28,6 +28,7 @@ export interface SongTableProps {
   emptyDescription?: string;
   onRemoveTrack?: (song: Song) => void;
   showHeaderMeta?: boolean;
+  showPlatformBadge?: boolean;
   indexOffset?: number;
 }
 
@@ -106,6 +107,7 @@ export function SongTable({
   emptyDescription,
   onRemoveTrack,
   showHeaderMeta = true,
+  showPlatformBadge = true,
   indexOffset = 0,
 }: SongTableProps) {
   const navigate = useNavigate();
@@ -305,6 +307,7 @@ export function SongTable({
       emptyText={emptyText}
       emptyDescription={emptyDescription}
       showHeaderMeta={showHeaderMeta}
+      showPlatformBadge={showPlatformBadge}
       indexOffset={indexOffset}
       currentTrackKey={currentTrackKey}
       isPlaying={isPlaying}

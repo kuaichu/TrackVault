@@ -401,7 +401,7 @@ export function DiscoverPage() {
           <h2 className="text-[19px] font-bold tracking-tight text-[var(--tv-text)] sm:text-[20px]">
             全部曲目
           </h2>
-          <SongTable songs={songs} />
+          <SongTable songs={songs} showHeaderMeta={false} showPlatformBadge={section !== "discover"} />
         </section>
       )}
     </div>

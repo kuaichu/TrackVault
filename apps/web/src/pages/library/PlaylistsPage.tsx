@@ -1,11 +1,24 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Loader2, Play, Plus, Search } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRightLeft,
+  Check,
+  ListEnd,
+  Loader2,
+  MoreHorizontal,
+  Play,
+  Plus,
+  Search,
+  Shuffle,
+  X,
+} from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import type { MusicPlatform, PlaylistSort, PlaylistSummary, Song } from "#shared";
 import { MediaDetailHeader, PlaylistCard } from "../../entities/music/index.js";
-import { findFirstPlayableSong } from "../../entities/song/index.js";
-import { audioEngine } from "../../features/player/index.js";
+import { findFirstPlayableSong, isSongPlayable } from "../../entities/song/index.js";
+import { useDownloadModeStore } from "../../features/downloads/index.js";
+import { audioEngine, usePlayerStore } from "../../features/player/index.js";
 import { api } from "../../shared/api/endpoints.js";
 import { useCapabilities } from "../../shared/hooks/use-capabilities.js";
 import { usePlatformParam } from "../../shared/hooks/use-platform-param.js";
@@ -310,6 +323,8 @@ export function PlaylistDetailPage() {
   const location = useLocation();
   const queryClient = useQueryClient();
   const capabilities = useCapabilities();
+  const downloadMode = useDownloadModeStore((s) => s.downloadMode);
+  const setDownloadMode = useDownloadModeStore((s) => s.setDownloadMode);
   const { platform: rawPlatform, id = "" } = useParams();
   const platform: MusicPlatform = rawPlatform === "qq" ? "qq" : "netease";
 
@@ -319,6 +334,7 @@ export function PlaylistDetailPage() {
   const [keywordInput, setKeywordInput] = useState("");
   const [debouncedKeyword, setDebouncedKeyword] = useState("");
   const [sort, setSort] = useState<PlaylistSort>("default");
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
 
   const prevRouteKeyRef = useRef(`${platform}:${id}`);
   useEffect(() => {
@@ -329,8 +345,23 @@ export function PlaylistDetailPage() {
       setKeywordInput("");
       setDebouncedKeyword("");
       setSort("default");
+      setMoreMenuOpen(false);
     }
   }, [platform, id]);
+
+  useEffect(() => {
+    if (!moreMenuOpen) return;
+    const close = () => setMoreMenuOpen(false);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMoreMenuOpen(false);
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [moreMenuOpen]);
 
   useEffect(() => {
     const trimmed = keywordInput.trim();
@@ -380,83 +411,179 @@ export function PlaylistDetailPage() {
   const total = detailQuery.data?.total ?? playlist?.trackCount ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const canManageTracks = capabilities[platform].canManagePlaylistTracks;
+  const platformLabel = platform === "qq" ? "QQ 音乐" : "网易云音乐";
+
+  const handlePlayPage = () => {
+    const first = findFirstPlayableSong(songs);
+    if (!first) {
+      toast.info("当前列表中的歌曲均不可播放");
+      return;
+    }
+    void audioEngine.playTrack(first, { queue: songs });
+  };
+
+  const handleShufflePage = () => {
+    const playable = songs.filter((item) => isSongPlayable(item));
+    if (playable.length === 0) {
+      toast.info("当前列表中的歌曲均不可播放");
+      return;
+    }
+    const randomStart = playable[Math.floor(Math.random() * playable.length)] ?? playable[0];
+    if (!randomStart) return;
+    usePlayerStore.getState().setStatePatch({ playbackMode: "shuffle" });
+    void audioEngine.playTrack(randomStart, { queue: songs });
+  };
+
+  const handleEnqueuePage = () => {
+    const playable = songs.filter((item) => isSongPlayable(item));
+    if (playable.length === 0) {
+      toast.info("当前列表中的歌曲均不可播放");
+      return;
+    }
+    for (const song of playable) {
+      audioEngine.addToQueue(song);
+    }
+    toast.success(`已将本页 ${playable.length} 首歌曲加入播放队列`);
+    setMoreMenuOpen(false);
+  };
+
+  const rangeStart = (page - 1) * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(page * PAGE_SIZE, total);
 
   return (
-    <div className="space-y-6">
-      <button
-        type="button"
-        onClick={() => navigate(`/playlists?platform=${platform}`)}
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--tv-text-muted)] transition-colors hover:text-[var(--tv-text)]"
-      >
-        <ArrowLeft className="h-3.5 w-3.5" />
-        返回歌单
-      </button>
-
+    <div className="space-y-7 pb-8">
       {playlist && (
         <MediaDetailHeader
           coverUrl={playlist.coverUrl}
           coverAlt={playlist.name}
-          platform={playlist.platform}
+          eyebrow={playlist.owned ? "我创建的歌单" : "收藏歌单"}
           title={playlist.name}
           description={playlist.description}
           meta={
-            <p className="text-xs text-[var(--tv-text-muted)]">
-              {playlist.creatorName} · 共 {total.toLocaleString("zh-CN")} 首曲目
+            <p className="text-[13px] font-medium text-[var(--tv-text-muted)]">
+              <span className="text-[var(--tv-text)]">{playlist.creatorName}</span>
+              <span className="mx-1.5 opacity-45">·</span>
+              <span>{platformLabel}</span>
+              <span className="mx-1.5 opacity-45">·</span>
+              <span className="tabular-nums">{total.toLocaleString("zh-CN")} 首歌曲</span>
             </p>
           }
           actions={
             <div className="flex flex-wrap items-center gap-2.5 pt-2">
               <button
                 type="button"
+                aria-label="播放本页"
                 disabled={songs.length === 0}
-                onClick={() => {
-                  const first = findFirstPlayableSong(songs);
-                  if (!first) {
-                    toast.info("当前列表中的歌曲均不可播放");
-                    return;
-                  }
-                  void audioEngine.playTrack(first, { queue: songs });
-                }}
-                className="inline-flex items-center gap-1.5 rounded-full bg-[var(--tv-accent)] px-5 py-2 text-xs font-semibold text-[var(--tv-accent-fg)] transition-colors hover:bg-[var(--tv-accent-hover)] disabled:opacity-40"
+                onClick={handlePlayPage}
+                className="inline-flex h-9 min-w-[110px] items-center justify-center gap-1.5 rounded-[8px] bg-[var(--tv-accent)] px-5 text-[13px] font-semibold text-[var(--tv-accent-fg)] shadow-xs transition-all hover:bg-[var(--tv-accent-hover)] active:scale-[0.98] disabled:opacity-40"
               >
                 <Play className="h-3.5 w-3.5 fill-current" />
-                播放本页
+                播放
               </button>
 
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--tv-text-subtle)]" />
-                <input
-                  type="text"
-                  value={keywordInput}
-                  onChange={(e) => setKeywordInput(e.target.value)}
-                  placeholder="在歌单中筛选"
-                  className="h-8 rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] pl-8 pr-3 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:border-[var(--tv-border-strong)] focus:outline-none"
-                />
-              </div>
-
-              <select
-                value={sort}
-                onChange={(e) => {
-                  setSort(e.target.value as PlaylistSort);
-                  setPage(1);
-                }}
-                aria-label="歌单排序"
-                className="rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] px-2.5 py-1.5 text-xs leading-normal text-[var(--tv-text)] focus:border-[var(--tv-border-strong)] focus:outline-none"
+              <button
+                type="button"
+                disabled={songs.length === 0}
+                onClick={handleShufflePage}
+                className="inline-flex h-9 min-w-[110px] items-center justify-center gap-1.5 rounded-[8px] bg-[var(--tv-nav-active)] px-5 text-[13px] font-semibold text-[var(--tv-accent)] transition-all hover:bg-[var(--tv-surface-active)] active:scale-[0.98] disabled:opacity-40"
               >
-                <option value="default">默认排序</option>
-                <option value="title-asc">按歌名 A–Z</option>
-                <option value="title-desc">按歌名 Z–A</option>
-                <option value="artist-asc">按歌手</option>
-                <option value="duration-desc">时长由长到短</option>
-                <option value="duration-asc">时长由短到长</option>
-              </select>
+                <Shuffle className="h-3.5 w-3.5" />
+                随机播放
+              </button>
 
-              {detailQuery.isFetching && !detailQuery.isLoading && (
-                <span className="inline-flex items-center gap-1.5 text-xs text-[var(--tv-text-subtle)]">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  载入中
-                </span>
-              )}
+              {/* Lightweight circular More menu housing download mode preferences & batch queue actions */}
+              {/* biome-ignore lint/a11y/useKeyWithClickEvents: stopPropagation guard wrapper for popover */}
+              <div
+                className="relative"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={() => setMoreMenuOpen((v) => !v)}
+                  aria-haspopup="menu"
+                  aria-expanded={moreMenuOpen}
+                  title="更多选项"
+                  aria-label="歌单更多选项"
+                  className={`inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors ${
+                    moreMenuOpen
+                      ? "bg-[var(--tv-surface-active)] text-[var(--tv-text)]"
+                      : "bg-[var(--tv-lcd-bg)] text-[var(--tv-text-muted)] hover:bg-[var(--tv-nav-active)] hover:text-[var(--tv-text)]"
+                  }`}
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </button>
+
+                {moreMenuOpen && (
+                  <div
+                    role="menu"
+                    aria-label="歌单操作菜单"
+                    className="tv-popover-in absolute top-full left-0 mt-2 w-56 rounded-2xl border border-[var(--tv-glass-border)] bg-[var(--tv-surface-elevated)]/95 p-1.5 shadow-[var(--tv-glass-shadow)] backdrop-blur-2xl"
+                    style={{ zIndex: "var(--tv-z-dropdown)" }}
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={songs.length === 0}
+                      onClick={handleEnqueuePage}
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)] disabled:opacity-40"
+                    >
+                      <ListEnd className="h-3.5 w-3.5 text-[var(--tv-text-muted)]" />
+                      将本页加入播放队列
+                    </button>
+
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMoreMenuOpen(false);
+                        navigate("/transfer");
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)]"
+                    >
+                      <ArrowRightLeft className="h-3.5 w-3.5 text-[var(--tv-text-muted)]" />
+                      前往歌单跨平台迁移
+                    </button>
+
+                    <div className="my-1 border-t border-[var(--tv-border)]" />
+                    <div className="px-2.5 py-1 text-[10.5px] font-medium text-[var(--tv-text-subtle)]">
+                      单曲下载方式
+                    </div>
+
+                    <button
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={downloadMode === "tagged_server"}
+                      onClick={() => {
+                        setDownloadMode("tagged_server");
+                        setMoreMenuOpen(false);
+                      }}
+                      className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)]"
+                    >
+                      <span>写标签下载（含封面歌词）</span>
+                      {downloadMode === "tagged_server" && (
+                        <Check className="h-3.5 w-3.5 text-[var(--tv-accent)]" />
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={downloadMode === "direct_link"}
+                      onClick={() => {
+                        setDownloadMode("direct_link");
+                        setMoreMenuOpen(false);
+                      }}
+                      className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--tv-text)] transition-colors hover:bg-[var(--tv-surface-hover)]"
+                    >
+                      <span>直链下载（原始音频流）</span>
+                      {downloadMode === "direct_link" && (
+                        <Check className="h-3.5 w-3.5 text-[var(--tv-accent)]" />
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           }
         />
@@ -483,7 +610,7 @@ export function PlaylistDetailPage() {
           }
         />
       ) : (
-        <>
+        <div className="space-y-3">
           {detailQuery.data?.truncated && (
             <output className="flex items-start gap-2 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-500">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -495,20 +622,101 @@ export function PlaylistDetailPage() {
               </span>
             </output>
           )}
+
+          {/* Subtle List Toolbar right above the track table (borderless search & sort) */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-xs text-[var(--tv-text-subtle)] tabular-nums">
+              {debouncedKeyword ? (
+                <span>筛选出 {total.toLocaleString("zh-CN")} 首曲目</span>
+              ) : total > PAGE_SIZE ? (
+                <span>
+                  当前第 {rangeStart.toLocaleString("zh-CN")}–{rangeEnd.toLocaleString("zh-CN")} 首
+                </span>
+              ) : null}
+              {detailQuery.isFetching && !detailQuery.isLoading && (
+                <span className="inline-flex items-center gap-1.5 text-[var(--tv-text-subtle)]">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  同步中
+                </span>
+              )}
+            </div>
+
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--tv-text-subtle)]" />
+                <input
+                  type="text"
+                  value={keywordInput}
+                  onChange={(e) => setKeywordInput(e.target.value)}
+                  placeholder="在歌单中搜索"
+                  className="h-8 w-44 rounded-[8px] bg-[var(--tv-lcd-bg)] pr-7 pl-8 text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] transition-all focus:w-56 focus:bg-[var(--tv-nav-active)] focus:outline-none sm:w-48"
+                />
+                {keywordInput && (
+                  <button
+                    type="button"
+                    onClick={() => setKeywordInput("")}
+                    aria-label="清空歌单筛选"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-[var(--tv-text-subtle)] hover:text-[var(--tv-text)]"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+
+              <select
+                value={sort}
+                onChange={(e) => {
+                  setSort(e.target.value as PlaylistSort);
+                  setPage(1);
+                }}
+                aria-label="歌单排序"
+                className="h-8 rounded-[8px] bg-[var(--tv-lcd-bg)] px-2.5 text-xs text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-nav-active)] hover:text-[var(--tv-text)] focus:outline-none"
+              >
+                <option value="default" className="bg-[var(--tv-surface-elevated)] text-[var(--tv-text)]">
+                  默认排序
+                </option>
+                <option value="title-asc" className="bg-[var(--tv-surface-elevated)] text-[var(--tv-text)]">
+                  按歌名 A–Z
+                </option>
+                <option value="title-desc" className="bg-[var(--tv-surface-elevated)] text-[var(--tv-text)]">
+                  按歌名 Z–A
+                </option>
+                <option value="artist-asc" className="bg-[var(--tv-surface-elevated)] text-[var(--tv-text)]">
+                  按歌手
+                </option>
+                <option
+                  value="duration-desc"
+                  className="bg-[var(--tv-surface-elevated)] text-[var(--tv-text)]"
+                >
+                  时长由长到短
+                </option>
+                <option
+                  value="duration-asc"
+                  className="bg-[var(--tv-surface-elevated)] text-[var(--tv-text)]"
+                >
+                  时长由短到长
+                </option>
+              </select>
+            </div>
+          </div>
+
           <SongTable
             songs={songs}
+            showHeaderMeta={false}
+            showPlatformBadge={false}
             indexOffset={(page - 1) * PAGE_SIZE}
             onRemoveTrack={
               playlist?.owned && canManageTracks ? (song) => removeMutation.mutate(song) : undefined
             }
           />
+
           {(page > 1 || detailQuery.data?.hasMore) && (
             <div className="flex items-center justify-center gap-3 pt-2 text-xs text-[var(--tv-text-muted)]">
               <button
                 type="button"
                 disabled={page <= 1 || detailQuery.isFetching}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="rounded-lg bg-[var(--tv-surface)] px-3.5 py-1.5 font-medium hover:bg-[var(--tv-surface-active)] disabled:opacity-35"
+                className="rounded-[8px] bg-[var(--tv-lcd-bg)] px-3.5 py-1.5 font-medium transition-colors hover:bg-[var(--tv-nav-active)] hover:text-[var(--tv-text)] disabled:opacity-35"
               >
                 上一页
               </button>
@@ -519,13 +727,13 @@ export function PlaylistDetailPage() {
                 type="button"
                 disabled={!detailQuery.data?.hasMore || detailQuery.isFetching}
                 onClick={() => setPage((p) => p + 1)}
-                className="rounded-lg bg-[var(--tv-surface)] px-3.5 py-1.5 font-medium hover:bg-[var(--tv-surface-active)] disabled:opacity-35"
+                className="rounded-[8px] bg-[var(--tv-lcd-bg)] px-3.5 py-1.5 font-medium transition-colors hover:bg-[var(--tv-nav-active)] hover:text-[var(--tv-text)] disabled:opacity-35"
               >
                 下一页
               </button>
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );

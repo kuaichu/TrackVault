@@ -129,7 +129,12 @@ export function ArtistDetailPage() {
           />
 
           {tab === "songs" ? (
-            <SongTable songs={artist.hotSongs} emptyText="暂无热门歌曲" />
+            <SongTable
+              songs={artist.hotSongs}
+              showHeaderMeta={false}
+              showPlatformBadge={false}
+              emptyText="暂无热门歌曲"
+            />
           ) : artist.albums.length === 0 ? (
             <EmptyState title="暂无专辑记录" />
           ) : (
