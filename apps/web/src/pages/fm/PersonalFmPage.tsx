@@ -1,7 +1,7 @@
 import { Maximize2, Plus, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { type PersonalFmMode, QUALITY_META, type Song, getSongKey } from "#shared";
+import { type PersonalFmMode, type Song, getSongKey } from "#shared";
 import { AlbumLink, ArtistLinks } from "../../entities/music/index.js";
 import { useLikedIdsQuery, useToggleLikeMutation } from "../../entities/song/index.js";
 import {
@@ -13,7 +13,6 @@ import {
   SfPlayFill,
   SfSlashCircle,
   audioEngine,
-  resolveEffectivePlaybackQuality,
   usePlayerStore,
   useTrackLyricsQuery,
 } from "../../features/player/index.js";
@@ -127,9 +126,6 @@ export function PersonalFmPage() {
   const fmRecentTracks = usePlayerStore((s) => s.fmRecentTracks);
   const fmLoading = usePlayerStore((s) => s.fmLoading);
   const fmError = usePlayerStore((s) => s.fmError);
-  const defaultPlaybackQuality = usePlayerStore((s) => s.defaultPlaybackQuality);
-  const preferredTrackQuality = usePlayerStore((s) => s.preferredTrackQuality);
-  const loadedStreamQuality = usePlayerStore((s) => s.loadedStreamQuality);
   const setFullscreenOpen = usePlayerStore((s) => s.setFullscreenOpen);
 
   const [trashingId, setTrashingId] = useState<string | null>(null);
@@ -155,14 +151,6 @@ export function PersonalFmPage() {
   const isCurrentActive = Boolean(
     activeSong && currentTrack && getSongKey(activeSong) === getSongKey(currentTrack),
   );
-
-  // Synchronized with PlayerBar's active stream quality badge
-  const effectiveQuality = resolveEffectivePlaybackQuality(
-    activeSong,
-    isCurrentActive ? (loadedStreamQuality ?? preferredTrackQuality) : preferredTrackQuality,
-    defaultPlaybackQuality,
-  );
-  const effectiveQualityLabel = QUALITY_META[effectiveQuality].shortLabel;
 
   const activeQueueIdx = useMemo(
     () => (activeSongKey ? fmQueue.findIndex((item) => getSongKey(item) === activeSongKey) : -1),
@@ -586,33 +574,18 @@ export function PersonalFmPage() {
               </div>
             </div>
 
-            {/* Right Column: Standby-Frosted Preview vs Live Synchronized Lyrics */}
+            {/* Right Column: Pure Synchronized Lyrics Stage (Standby Pill Only Before Takeover) */}
             <div className="min-w-0 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2 px-3">
-                {isCurrentActive ? (
-                  <span className="inline-flex items-center gap-2 text-xs font-medium text-[var(--tv-accent)]">
-                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--tv-accent)] animate-pulse" />
-                    <span>正在漫游 · 词曲实时同步</span>
-                  </span>
-                ) : (
+              {!isCurrentActive && (
+                <div className="px-3">
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--tv-lcd-bg)] px-2.5 py-1 text-[11.5px] font-medium text-[var(--tv-text-muted)]">
                     <span>待机预览 · 点击左侧「开始漫游」或任意歌词切入电台</span>
                   </span>
-                )}
-
-                <div className="flex items-center gap-2 text-[11.5px] tabular-nums text-[var(--tv-text-subtle)]">
-                  <span>{effectiveQualityLabel}</span>
-                  {activeSong.duration && (
-                    <>
-                      <span className="opacity-45">·</span>
-                      <span>{activeSong.duration}</span>
-                    </>
-                  )}
                 </div>
-              </div>
+              )}
 
               <div
-                className={`relative h-[280px] overflow-hidden transition-all duration-500 sm:h-[330px] lg:h-[368px] ${
+                className={`relative h-[280px] overflow-hidden transition-all duration-500 sm:h-[330px] lg:h-[380px] ${
                   isCurrentActive
                     ? "opacity-100 blur-none"
                     : "opacity-55 blur-[0.75px] hover:opacity-95 hover:blur-none focus-within:opacity-95 focus-within:blur-none"
