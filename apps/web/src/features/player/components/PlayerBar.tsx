@@ -70,10 +70,10 @@ export function PlayerBar() {
 
   return (
     <footer className="pointer-events-auto relative select-none">
-      {/* Mobile Floating Liquid Glass Capsule (< md) */}
+      {/* Mobile Floating iOS Apple Music Mini-Player (< md): borderless shadow-elevated glass + 42px thumb targets */}
       <div
-        className="relative mx-2.5 mb-1.5 flex h-[56px] items-center justify-between gap-2.5 rounded-[18px] border border-[var(--tv-glass-border)] bg-[var(--tv-glass-bg)] px-3.5 backdrop-blur-[28px] backdrop-saturate-[180%] md:hidden"
-        style={{ boxShadow: "var(--tv-glass-highlight), var(--tv-glass-shadow)" }}
+        className="relative mx-3 mb-2 flex h-[58px] items-center justify-between gap-2 rounded-[16px] border-0 bg-[var(--tv-mini-player-bg)] pr-2 pl-3 backdrop-blur-[28px] backdrop-saturate-[190%] md:hidden"
+        style={{ boxShadow: "var(--tv-glass-highlight), var(--tv-mini-player-shadow)" }}
       >
         <MiniProgressStripe />
 
@@ -81,34 +81,30 @@ export function PlayerBar() {
           <button
             type="button"
             onClick={() => setFullscreenOpen(true)}
-            className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+            className="flex min-w-0 flex-1 items-center gap-3 py-1 text-left"
           >
             <CoverArt
               src={currentTrack.coverUrl}
               alt={currentTrack.title}
-              className="h-9 w-9 shadow-sm"
+              className="h-10 w-10 shadow-sm ring-1 ring-white/10"
               rounded="rounded-[8px]"
             />
             <div className="min-w-0 flex-1 space-y-0.5">
-              <div className="truncate text-[13px] font-semibold tracking-tight text-[var(--tv-text)]">
+              <div className="truncate text-[13.5px] font-semibold tracking-tight text-[var(--tv-text)]">
                 {currentTrack.title}
               </div>
-              <div className="truncate text-[11px] text-[var(--tv-text-muted)]">
+              <div className="truncate text-[11.5px] text-[var(--tv-text-muted)]">
                 {playerError ? (
                   <span className="text-[var(--tv-danger)]">{playerError}</span>
                 ) : (
-                  <>
-                    {currentTrack.artist}
-                    <span className="mx-1 opacity-45">·</span>
-                    <span className="text-[var(--tv-text-subtle)]">{platformText}</span>
-                  </>
+                  currentTrack.artist
                 )}
               </div>
             </div>
           </button>
         ) : (
-          <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-[8px] bg-[var(--tv-lcd-bg)] text-[var(--tv-text-subtle)]">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-[8px] bg-[var(--tv-lcd-bg)] text-[var(--tv-text-subtle)]">
               <Music2 className="h-4 w-4 opacity-60" />
             </div>
             <span className="text-xs text-[var(--tv-text-subtle)]">未在播放</span>
@@ -116,41 +112,19 @@ export function PlayerBar() {
         )}
 
         <div className="flex shrink-0 items-center gap-0.5">
-          {canLike && currentTrack && (
-            <button
-              type="button"
-              onClick={() =>
-                likeMutation.mutate({
-                  platform: currentTrack.platform,
-                  songId: currentTrack.id,
-                  nextLiked: !isLiked,
-                  songTitle: currentTrack.title,
-                })
-              }
-              className={`inline-flex items-center justify-center rounded-full p-1.5 transition-colors ${
-                isLiked ? "text-[var(--tv-accent)]" : "text-[var(--tv-text-muted)]"
-              }`}
-              aria-label={isLiked ? "取消喜欢" : "喜欢"}
-            >
-              <SfHeart filled={isLiked} className={`h-4 w-4 ${isLiked ? "tv-heart-pop" : ""}`} />
-            </button>
-          )}
-
-          <QuickCollectPopover song={currentTrack} variant="mobile-bar" />
-
           <button
             type="button"
             onClick={() => void audioEngine.togglePlay()}
             disabled={!canControl}
             aria-label={isPlaying ? "暂停" : "播放"}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-transparent text-[var(--tv-text)] transition-transform active:scale-90 disabled:opacity-35"
+            className="inline-flex h-[42px] w-[42px] items-center justify-center rounded-full bg-transparent text-[var(--tv-text)] transition-all hover:bg-[var(--tv-surface-hover)] active:scale-90 disabled:opacity-35"
           >
             {isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin text-[var(--tv-text-muted)]" />
+              <Loader2 className="h-5 w-5 animate-spin text-[var(--tv-text-muted)]" />
             ) : isPlaying ? (
-              <SfPauseFill className="h-[19px] w-[19px]" />
+              <SfPauseFill className="h-[22px] w-[22px]" />
             ) : (
-              <SfPlayFill className="h-[19px] w-[19px]" />
+              <SfPlayFill className="h-[22px] w-[22px]" />
             )}
           </button>
 
@@ -158,21 +132,10 @@ export function PlayerBar() {
             type="button"
             onClick={() => void audioEngine.playNext()}
             disabled={!canControl}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[var(--tv-text)] transition-transform active:scale-90 disabled:opacity-35"
+            className="inline-flex h-[42px] w-[42px] items-center justify-center rounded-full bg-transparent text-[var(--tv-text)] transition-all hover:bg-[var(--tv-surface-hover)] active:scale-90 disabled:opacity-35"
             aria-label="下一首"
           >
-            <SfForwardFill className="h-[17px] w-[17px]" />
-          </button>
-
-          <button
-            type="button"
-            onClick={() => toggleDrawerTab("queue")}
-            className={`inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
-              drawerOpen && drawerTab === "queue" ? "text-[var(--tv-accent)]" : "text-[var(--tv-text-muted)]"
-            }`}
-            aria-label="播放队列"
-          >
-            <SfQueueList className="h-4 w-4" />
+            <SfForwardFill className="h-[19px] w-[19px]" />
           </button>
         </div>
       </div>

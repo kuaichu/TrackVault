@@ -196,7 +196,7 @@ describe("Phase 6 · Responsive layout, safe-area, focus trap, keyboard a11y, an
 
     render(
       <QueryClientProvider client={qc}>
-        <MemoryRouter initialEntries={["/discover"]}>
+        <MemoryRouter initialEntries={["/fm"]}>
           <AppShell user={ADMIN_USER}>
             <div>
               <button type="button">普通按钮</button>
@@ -242,17 +242,24 @@ describe("Phase 6 · Responsive layout, safe-area, focus trap, keyboard a11y, an
     expect(document.activeElement).toBe(searchInput);
     searchInput.blur();
 
-    // Open mobile navigation drawer -> underlying main shell becomes inert
+    // Open mobile "更多" frosted Bottom Sheet -> underlying shell becomes inert, omits primary tabs, and exposes inline theme row
     fireEvent.click(screen.getByRole("button", { name: "打开导航菜单" }));
     const mobileNavDialog = screen.getByRole("dialog", { name: "导航菜单" });
     expect(mobileNavDialog).toBeTruthy();
+    expect(mobileNavDialog.className).toContain("rounded-t-[24px]");
+    expect(mobileNavDialog.className).toContain("backdrop-blur-[32px]");
+    expect(screen.getByText("外观主题")).toBeInTheDocument();
+    expect(mobileNavDialog.querySelectorAll("a[href='/discover']")).toHaveLength(0);
+    expect(mobileNavDialog.querySelectorAll("a[href='/charts']")).toHaveLength(0);
+    expect(mobileNavDialog.querySelectorAll("a[href='/search']")).toHaveLength(0);
+    expect(mobileNavDialog.querySelectorAll("a[href='/playlists']")).toHaveLength(0);
     const mainEl = screen.getByRole("main");
     expect(mainEl.closest("[inert]")).not.toBeNull();
 
-    // Clicking the already-active '/discover' link inside mobile drawer closes it immediately (U03)
-    const discoverLinks = mobileNavDialog.querySelectorAll("a[href='/discover']");
-    expect(discoverLinks.length).toBeGreaterThan(0);
-    fireEvent.click(discoverLinks[0] as HTMLElement);
+    // Clicking the already-active '/fm' link inside mobile drawer closes it immediately (U03)
+    const fmLinks = mobileNavDialog.querySelectorAll("a[href='/fm']");
+    expect(fmLinks.length).toBeGreaterThan(0);
+    fireEvent.click(fmLinks[0] as HTMLElement);
     expect(screen.queryByRole("dialog", { name: "导航菜单" })).toBeNull();
     expect(mainEl.closest("[inert]")).toBeNull();
 

@@ -16,10 +16,12 @@ export function MiniProgressStripe() {
   const duration = usePlaybackClockStore((s) => s.duration);
   const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
 
+  if (pct <= 0) return null;
+
   return (
-    <div className="pointer-events-none absolute inset-x-4 bottom-0 h-[2px] overflow-hidden rounded-full bg-[var(--tv-slider-track)]">
+    <div className="pointer-events-none absolute inset-x-4 bottom-[0.5px] h-[1.5px] overflow-hidden rounded-full">
       <div
-        className="h-full rounded-full bg-[var(--tv-slider-fill)] transition-[width] duration-150"
+        className="h-full rounded-full bg-[var(--tv-slider-fill)]/70 transition-[width] duration-150"
         style={{ width: `${pct}%` }}
       />
     </div>

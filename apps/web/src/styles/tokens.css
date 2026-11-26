@@ -23,6 +23,11 @@
   --tv-glass-border: rgba(255, 255, 255, 0.045);
   --tv-glass-highlight: inset 0 0.5px 0 0 rgba(255, 255, 255, 0.08);
   --tv-glass-shadow: 0 16px 42px -8px rgba(0, 0, 0, 0.65), 0 4px 12px -2px rgba(0, 0, 0, 0.35);
+  --tv-mini-player-bg: rgba(38, 38, 44, 0.74);
+  --tv-mini-player-shadow: 0 16px 36px -6px rgba(0, 0, 0, 0.74), 0 4px 14px rgba(0, 0, 0, 0.44);
+  --tv-tabbar-glass-bg: rgba(19, 19, 22, 0.68);
+  --tv-drawer-glass-bg: rgba(28, 28, 33, 0.78);
+  --tv-ios-hairline: rgba(255, 255, 255, 0.08);
   --tv-np-hover: rgba(255, 255, 255, 0.045);
   --tv-lcd-bg: rgba(255, 255, 255, 0.05);
   --tv-lcd-border: rgba(255, 255, 255, 0.05);
@@ -83,6 +88,11 @@
   --tv-glass-border: rgba(0, 0, 0, 0.06);
   --tv-glass-highlight: inset 0 1px 0 0 rgba(255, 255, 255, 0.9);
   --tv-glass-shadow: 0 12px 34px rgba(15, 15, 25, 0.12), 0 2px 8px rgba(15, 15, 25, 0.06);
+  --tv-mini-player-bg: rgba(252, 252, 255, 0.82);
+  --tv-mini-player-shadow: 0 14px 32px -6px rgba(15, 15, 25, 0.18), 0 4px 10px rgba(15, 15, 25, 0.08);
+  --tv-tabbar-glass-bg: rgba(249, 249, 252, 0.74);
+  --tv-drawer-glass-bg: rgba(246, 246, 250, 0.82);
+  --tv-ios-hairline: rgba(0, 0, 0, 0.08);
   --tv-np-hover: rgba(0, 0, 0, 0.038);
   --tv-lcd-bg: rgba(0, 0, 0, 0.04);
   --tv-lcd-border: rgba(0, 0, 0, 0.055);
@@ -475,6 +485,13 @@ select:not(:disabled) {
     transparent 1px,
     transparent 11px
   );
+}
+
+/* Reserve right-edge space on Row 1 of mobile primary pages so inline page controls align beside the top-right avatar */
+@media (max-width: 767px) {
+  [data-primary-canvas="true"] > div > div > :first-child:not([data-custom-avatar-inset]) {
+    padding-right: 2.625rem;
+  }
 }
 
 /* Mobile safe-area inset support for bottom nav / fullscreen player (additive over base padding via CSS vars) */

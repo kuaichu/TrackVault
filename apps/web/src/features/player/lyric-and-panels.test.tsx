@@ -526,18 +526,18 @@ describe("LyricScroller, RightDrawer, and Fullscreen inline panels", () => {
     expect(screen.getByTitle("切换试听音质").className).not.toContain("border-");
     expect(screen.getByRole("button", { name: "歌词" }).textContent).toBe("");
 
-    const collectBtns = screen.getAllByRole("button", { name: "收藏到歌单" });
-    expect(collectBtns.length).toBeGreaterThanOrEqual(2); // mobile + desktop bars
+    // Mobile mini-bar keeps only 42px Play + Next thumb targets; Heart & Collect live on desktop bar
+    expect(screen.getAllByRole("button", { name: "播放" })[0]?.className).toContain("h-[42px]");
+    const desktopCollectBtn = screen.getByRole("button", { name: "收藏到歌单" });
+    const desktopLikeBtn = screen.getByRole("button", { name: "喜欢" });
 
     // Clicking the inner <svg>/<path> of heart or collect in PlayerBar must NOT bubble to open FullscreenPlayer
-    const desktopLikeBtn = screen.getAllByRole("button", { name: "喜欢" })[1] as HTMLElement;
     const likeSvgPath = desktopLikeBtn.querySelector("path") ?? desktopLikeBtn.querySelector("svg");
     expect(likeSvgPath).not.toBeNull();
     vi.spyOn(api, "toggleSongLike").mockResolvedValue({ liked: true });
     fireEvent.click(likeSvgPath as Element);
     expect(usePlayerStore.getState().fullscreenOpen).toBe(false);
 
-    const desktopCollectBtn = collectBtns[collectBtns.length - 1] as HTMLElement;
     const collectSvg = desktopCollectBtn.querySelector("svg") ?? desktopCollectBtn;
     fireEvent.click(collectSvg);
     expect(usePlayerStore.getState().fullscreenOpen).toBe(false);

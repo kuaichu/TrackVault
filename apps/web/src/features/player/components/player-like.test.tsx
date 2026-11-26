@@ -76,7 +76,7 @@ describe("MR-03 · PlayerBar & FullscreenPlayer single liked-ids source of truth
     );
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "取消喜欢" })).toHaveLength(3);
+      expect(screen.getAllByRole("button", { name: "取消喜欢" })).toHaveLength(2);
     });
     expect(getLikedIdsSpy).toHaveBeenCalledTimes(1);
     expect(toggleLikeSpy).not.toHaveBeenCalled();
@@ -87,7 +87,7 @@ describe("MR-03 · PlayerBar & FullscreenPlayer single liked-ids source of truth
       usePlayerStore.setState({ currentTrack: song2 });
     });
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "喜欢" })).toHaveLength(3);
+      expect(screen.getAllByRole("button", { name: "喜欢" })).toHaveLength(2);
     });
     expect(getLikedIdsSpy).toHaveBeenCalledTimes(1);
     expect(toggleLikeSpy).not.toHaveBeenCalled();
@@ -100,7 +100,7 @@ describe("MR-03 · PlayerBar & FullscreenPlayer single liked-ids source of truth
     fireEvent.click(playerBarBtn);
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "取消喜欢" })).toHaveLength(3);
+      expect(screen.getAllByRole("button", { name: "取消喜欢" })).toHaveLength(2);
     });
     await waitFor(() => {
       expect(screen.getByText("已喜欢「夜曲」")).toBeInTheDocument();
@@ -110,12 +110,12 @@ describe("MR-03 · PlayerBar & FullscreenPlayer single liked-ids source of truth
 
     // Click heart in FullscreenPlayer -> unlikes song2 and shows toast with songTitle
     const unlikeBtns = screen.getAllByRole("button", { name: "取消喜欢" });
-    const fullscreenBtn = unlikeBtns[2];
+    const fullscreenBtn = unlikeBtns[1];
     if (!fullscreenBtn) throw new Error("Expected FullscreenPlayer heart button");
     fireEvent.click(fullscreenBtn);
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "喜欢" })).toHaveLength(3);
+      expect(screen.getAllByRole("button", { name: "喜欢" })).toHaveLength(2);
     });
     await waitFor(() => {
       expect(screen.getByText("已取消喜欢「夜曲」")).toBeInTheDocument();
