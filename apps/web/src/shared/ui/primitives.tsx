@@ -159,19 +159,20 @@ export function PlatformBadge({
   );
 }
 
-export function EqualizerBars() {
+export function EqualizerBars({ tone = "accent" }: { tone?: "accent" | "light" } = {}) {
+  const barColorClass = tone === "light" ? "bg-white/90" : "bg-[var(--tv-accent)]";
   return (
     <span className="inline-flex h-3.5 items-end gap-[2px]" aria-label="播放中">
       <span
-        className="tv-eq-bar h-full w-[2.5px] rounded-full bg-[var(--tv-accent)]"
+        className={`tv-eq-bar h-full w-[2.5px] rounded-full ${barColorClass}`}
         style={{ animationDelay: "0ms" }}
       />
       <span
-        className="tv-eq-bar h-full w-[2.5px] rounded-full bg-[var(--tv-accent)]"
+        className={`tv-eq-bar h-full w-[2.5px] rounded-full ${barColorClass}`}
         style={{ animationDelay: "220ms" }}
       />
       <span
-        className="tv-eq-bar h-full w-[2.5px] rounded-full bg-[var(--tv-accent)]"
+        className={`tv-eq-bar h-full w-[2.5px] rounded-full ${barColorClass}`}
         style={{ animationDelay: "440ms" }}
       />
     </span>

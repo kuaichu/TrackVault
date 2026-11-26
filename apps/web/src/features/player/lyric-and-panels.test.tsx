@@ -7,7 +7,11 @@ import { makeTestSong, renderWithProviders } from "../../test-utils/fixtures.js"
 import { FullscreenPlayer } from "./components/FullscreenPlayer.js";
 import { LyricScroller } from "./components/LyricScroller.js";
 import { PlayerBar } from "./components/PlayerBar.js";
-import { PlayQueuePanel, TrackCommentsPanel } from "./components/PlayerDrawerPanels.js";
+import {
+  PlayQueuePanel,
+  TrackCommentsPanel,
+  formatShortCommentTime,
+} from "./components/PlayerDrawerPanels.js";
 import { RightDrawer } from "./components/RightDrawer.js";
 import { audioEngine } from "./engine/audio-engine.js";
 import { usePlaybackClockStore, usePlayerStore } from "./store/player-store.js";
@@ -561,5 +565,81 @@ describe("LyricScroller, RightDrawer, and Fullscreen inline panels", () => {
     await waitFor(() => {
       expect(createPlaylistSpy).toHaveBeenCalledWith("netease", "新歌速藏", ["s-collect"]);
     });
+  });
+
+  it("renders frameless fullscreen comments & queue with hidden scrollbars, edge masks, clean queue rows, magazine dates, and dot playback-mode indicator", async () => {
+    expect(formatShortCommentTime("2024-07-12 14:42")).toBe("2024.07.12");
+    expect(formatShortCommentTime("2025年11月7日 09:05")).toBe("2025.11.07");
+    expect(formatShortCommentTime("刚刚")).toBe("刚刚");
+
+    vi.spyOn(api, "getComments").mockResolvedValue({
+      songId: "s-frameless",
+      platform: "netease",
+      total: 1,
+      page: 1,
+      limit: 20,
+      hasMore: false,
+      hotComments: [
+        {
+          id: "c-mag-1",
+          userId: "u-mag",
+          nickname: "青花鱼",
+          content: "杂志摘录质感正文",
+          timeText: "2024-07-12 14:42",
+          liked: false,
+          likedCount: 11696,
+          replyCount: 0,
+        },
+      ],
+      comments: [],
+    });
+
+    const song1 = makeTestSong("s-frameless", { title: "咬合力", artist: "三Z-STUDIO" });
+    const song2 = makeTestSong("s-next", { title: "覆灭重生", artist: "HOYO-MiX" });
+    usePlayerStore.setState({
+      currentTrack: song1,
+      queue: [song1, song2],
+      isPlaying: true,
+      playbackMode: "shuffle",
+      fullscreenOpen: true,
+    });
+
+    renderWithProviders(<FullscreenPlayer />);
+
+    // Shuffle mode button stays frameless (bg-transparent) and shows a subtle dot underneath
+    const modeBtn = screen.getByRole("button", { name: "切换播放模式" });
+    expect(modeBtn.className).toContain("bg-transparent");
+    expect(modeBtn.className).not.toContain("bg-white/12");
+    expect(screen.getByTestId("playback-mode-dot")).toBeInTheDocument();
+
+    // Comments panel: frameless (no bg-white/[0.04] outer box), hidden scrollbar, edge mask, compact date
+    fireEvent.click(screen.getByRole("button", { name: "查看评论" }));
+    await waitFor(() => expect(screen.getByText("杂志摘录质感正文")).toBeInTheDocument());
+    expect(screen.getByText("2024.07.12")).toBeInTheDocument();
+    expect(screen.queryByText("2024-07-12 14:42")).toBeNull();
+
+    const commentScroll = screen.getByText("精彩评论").closest(".tv-no-scrollbar") as HTMLElement | null;
+    expect(commentScroll).not.toBeNull();
+    expect(commentScroll?.className).toContain("tv-panel-mask-bottom");
+    expect(commentScroll?.parentElement?.className ?? "").not.toContain("bg-white/[0.04]");
+
+    // Scrolling switches top mask smoothly to tv-panel-mask-both
+    Object.defineProperty(commentScroll, "scrollTop", { value: 48, writable: true, configurable: true });
+    fireEvent.scroll(commentScroll as HTMLElement);
+    expect(commentScroll?.className).toContain("tv-panel-mask-both");
+
+    // Queue panel: frameless, 44px covers (h-11 w-11), soft current highlight, and no repeated platform dots
+    fireEvent.click(screen.getByRole("button", { name: "查看队列" }));
+    expect(screen.getByText("待播清单")).toBeInTheDocument();
+    expect(screen.getByText("覆灭重生")).toBeInTheDocument();
+    // Only the single header PlatformBadge exists; queue rows do NOT repeat "网易云"
+    expect(screen.getAllByText("网易云")).toHaveLength(1);
+
+    const activeRow = screen.getAllByText("咬合力")[1]?.closest(".group") as HTMLElement | null;
+    expect(activeRow?.className).toContain("bg-white/[0.10]");
+    expect(activeRow?.className).toContain("rounded-[10px]");
+    const queueScroll = activeRow?.parentElement;
+    expect(queueScroll?.className).toContain("tv-no-scrollbar");
+    expect(queueScroll?.className).toContain("tv-panel-mask-bottom");
   });
 });

@@ -319,13 +319,16 @@ export function FullscreenPlayer() {
           </div>
         </div>
 
-        {/* Right Panel: Lyrics / Comments / Queue */}
+        {/* Right Panel: Frameless Lyrics / Comments / Queue locked to left column top-cover & bottom-volume baselines */}
         <div
-          className={`min-h-0 overflow-hidden md:col-start-2 md:row-start-1 md:row-span-2 md:h-[min(68dvh,calc(100dvh-96px))] ${
-            !mobileShowCover ? "flex flex-1 flex-col" : "hidden md:flex md:flex-col"
+          className={`min-h-0 overflow-hidden md:relative md:col-start-2 md:row-start-1 md:row-span-2 md:self-stretch ${
+            !mobileShowCover ? "flex flex-1 flex-col" : "hidden md:block"
           }`}
         >
-          <div key={rightPanel} className="tv-panel-enter flex min-h-0 flex-1 flex-col">
+          <div
+            key={rightPanel}
+            className="tv-panel-enter flex min-h-0 flex-1 flex-col md:absolute md:inset-0"
+          >
             {rightPanel === "lyrics" && (
               <LyricScroller
                 lines={lyricData?.lyrics.lines ?? []}
@@ -339,16 +342,10 @@ export function FullscreenPlayer() {
             )}
 
             {rightPanel === "comments" && (
-              <div className="tv-subtle-scrollbar flex-1 overflow-y-auto rounded-2xl bg-white/[0.04] backdrop-blur-md">
-                <TrackCommentsPanel active={Boolean(isActive && rightPanel === "comments")} onDarkBackdrop />
-              </div>
+              <TrackCommentsPanel active={Boolean(isActive && rightPanel === "comments")} onDarkBackdrop />
             )}
 
-            {rightPanel === "queue" && (
-              <div className="tv-subtle-scrollbar flex-1 overflow-y-auto rounded-2xl bg-white/[0.04] backdrop-blur-md">
-                <PlayQueuePanel onDarkBackdrop />
-              </div>
-            )}
+            {rightPanel === "queue" && <PlayQueuePanel onDarkBackdrop />}
           </div>
         </div>
 
@@ -380,10 +377,8 @@ export function FullscreenPlayer() {
                       ? "随机播放"
                       : "列表循环"
                 }
-                className={`inline-flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-150 hover:bg-white/10 active:scale-95 ${
-                  playbackMode === "sequential"
-                    ? "text-white/55 hover:text-white/95"
-                    : "bg-white/12 text-white"
+                className={`relative inline-flex h-9 w-9 items-center justify-center rounded-full bg-transparent transition-all duration-150 hover:bg-white/10 active:scale-95 ${
+                  playbackMode === "sequential" ? "text-white/50 hover:text-white/90" : "text-white"
                 }`}
                 aria-label="切换播放模式"
               >
@@ -393,6 +388,13 @@ export function FullscreenPlayer() {
                   <SfShuffle className="h-[18px] w-[18px]" />
                 ) : (
                   <SfRepeat className="h-[18px] w-[18px]" />
+                )}
+                {playbackMode !== "sequential" && (
+                  <span
+                    aria-hidden="true"
+                    data-testid="playback-mode-dot"
+                    className="pointer-events-none absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-white/95 shadow-[0_0_6px_rgba(255,255,255,0.65)]"
+                  />
                 )}
               </button>
             </div>

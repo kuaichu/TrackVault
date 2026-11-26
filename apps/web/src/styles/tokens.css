@@ -404,6 +404,29 @@ select:not(:disabled) {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 78%, transparent 100%);
 }
 
+/* Soft vertical edge-fade masks for frameless fullscreen queue & comments lists */
+.tv-panel-mask-bottom {
+  mask-image: linear-gradient(to bottom, black 0%, black calc(100% - 56px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, black calc(100% - 56px), transparent 100%);
+}
+
+.tv-panel-mask-both {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0px,
+    black 28px,
+    black calc(100% - 56px),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0px,
+    black 28px,
+    black calc(100% - 56px),
+    transparent 100%
+  );
+}
+
 /* Edge scrims for borderless Apple Music top canvas & floating Liquid Glass bottom bar */
 .tv-top-scrim {
   background: linear-gradient(
