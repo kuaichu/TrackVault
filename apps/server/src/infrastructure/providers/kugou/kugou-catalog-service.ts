@@ -468,7 +468,7 @@ export class KugouCatalogService {
       this.#client.request<{ data?: { total?: number; songs?: RawKugouKmrSong[] } }>({
         path: "/v1/album_audio/lite",
         method: "POST",
-        data: { album_id: idVal, is_buy: "", page: 1, pagesize: 100 },
+        data: { album_id: idVal, is_buy: "", page: 1, pagesize: 50 },
         headers: { "x-router": "openapi.kugou.com", "kg-tid": "255" },
         cookieMap,
         edition,
@@ -476,14 +476,32 @@ export class KugouCatalogService {
       }),
     ]);
 
-    const songs =
-      songsRes.status === "fulfilled"
-        ? (songsRes.value.data?.songs ?? [])
-            .map((item) => mapKugouKmrSong(item, { vipEnabled: auth.vipEnabled, isLite }))
-            .filter((s): s is Song => s !== null)
-        : [];
-    const info = infoRes.status === "fulfilled" ? infoRes.value.data?.[0] : undefined;
+    const rawSongs: RawKugouKmrSong[] =
+      songsRes.status === "fulfilled" ? [...(songsRes.value.data?.songs ?? [])] : [];
     const total = songsRes.status === "fulfilled" ? songsRes.value.data?.total : undefined;
+
+    // `/v1/album_audio/lite` silently returns empty when pagesize > 50; paginate page 2 for multi-disc albums
+    if (typeof total === "number" && total > 50 && rawSongs.length === 50) {
+      try {
+        const page2 = await this.#client.request<{ data?: { songs?: RawKugouKmrSong[] } }>({
+          path: "/v1/album_audio/lite",
+          method: "POST",
+          data: { album_id: idVal, is_buy: "", page: 2, pagesize: 50 },
+          headers: { "x-router": "openapi.kugou.com", "kg-tid": "255" },
+          cookieMap,
+          edition,
+          signal: auth.signal,
+        });
+        rawSongs.push(...(page2.data?.songs ?? []));
+      } catch {
+        // Keep page 1 tracks if page 2 fails transiently
+      }
+    }
+
+    const songs = rawSongs
+      .map((item) => mapKugouKmrSong(item, { vipEnabled: auth.vipEnabled, isLite }))
+      .filter((s): s is Song => s !== null);
+    const info = infoRes.status === "fulfilled" ? infoRes.value.data?.[0] : undefined;
 
     const detail = mapKugouAlbumDetail(cleanId, info, songs, total);
     if (!detail) {
