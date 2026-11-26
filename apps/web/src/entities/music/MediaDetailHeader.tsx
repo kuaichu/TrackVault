@@ -5,7 +5,10 @@ import { CoverArt, ExpandableText } from "../../shared/ui/primitives.js";
 
 function toHiResCoverUrl(url?: string): string | undefined {
   if (!url) return undefined;
-  return url.replace(/param=\d+y\d+/, "param=800y800").replace(/T002R\d+x\d+/, "T002R800x800");
+  return url
+    .replace(/param=\d+y\d+/, "param=800y800")
+    .replace(/T002R\d+x\d+/, "T002R800x800")
+    .replace(/\/(stdmusic|custom|mcommon)\/(?:240|400)\//, "/$1/480/");
 }
 
 /**

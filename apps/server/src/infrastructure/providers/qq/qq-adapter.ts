@@ -8,6 +8,7 @@ import {
   type PlaylistTracksPage,
   type ProviderCapabilities,
   type QqQrLoginChannel,
+  type QrLoginChannel,
   type QrStartResult,
   type QualityLevel,
   type Song,
@@ -257,8 +258,11 @@ export class QqMusicAdapter implements MusicProviderAdapter {
     return this.#catalog.searchEntities(query, type, auth, limit);
   }
 
-  startQrLogin(scopeKey: string, options?: { channel?: QqQrLoginChannel }): Promise<QrStartResult> {
-    return this.#qrAuth.start(scopeKey, options?.channel);
+  startQrLogin(scopeKey: string, options?: { channel?: QrLoginChannel }): Promise<QrStartResult> {
+    const ch = options?.channel;
+    const qqChannel: QqQrLoginChannel | undefined =
+      ch === "mobile" || ch === "qq" || ch === "wx" ? ch : undefined;
+    return this.#qrAuth.start(scopeKey, qqChannel);
   }
 
   async checkQrLogin(scopeKey: string, key: string): Promise<ProviderQrCheckResult> {

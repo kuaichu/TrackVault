@@ -389,6 +389,7 @@ describe("Phase 6 · Responsive layout, safe-area, focus trap, keyboard a11y, an
       fallbacks: {
         netease: { platform: "netease", configured: true, enabled: true, updatedAt: 10 },
         qq: { platform: "qq", configured: false, enabled: false, updatedAt: null },
+        kugou: { platform: "kugou", configured: false, enabled: false, updatedAt: null },
       },
     });
     const saveFallbackSpy = vi.spyOn(api, "saveSystemFallback").mockResolvedValue({

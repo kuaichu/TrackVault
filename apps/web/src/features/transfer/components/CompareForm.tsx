@@ -9,6 +9,7 @@ import { TRANSFER_INPUT_CLASS } from "../transfer-constants.js";
 const COMPARE_PLATFORM_OPTIONS: ReadonlyArray<{ value: MusicPlatform; label: string }> = [
   { value: "netease", label: "网易云" },
   { value: "qq", label: "QQ 音乐" },
+  { value: "kugou", label: "酷狗音乐" },
 ];
 
 export function CompareForm({ onJobCreated }: { onJobCreated: (jobId: string) => void }) {

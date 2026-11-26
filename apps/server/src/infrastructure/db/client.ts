@@ -126,6 +126,46 @@ const MIGRATIONS: readonly Migration[] = [
       CREATE UNIQUE INDEX IF NOT EXISTS idx_users_lower_username ON users(lower(username));
     `,
   },
+  {
+    version: 3,
+    name: "add_kugou_platform_credentials",
+    sql: `
+      CREATE TABLE platform_credentials_v3 (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        platform TEXT NOT NULL CHECK (platform IN ('netease', 'qq', 'kugou')),
+        encrypted_cookie TEXT NOT NULL,
+        account_uid TEXT,
+        display_name TEXT,
+        avatar_url TEXT,
+        vip_enabled INTEGER NOT NULL DEFAULT 0,
+        vip_expire_at INTEGER,
+        verified_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, platform)
+      );
+      INSERT INTO platform_credentials_v3 (
+        user_id, platform, encrypted_cookie, account_uid, display_name, avatar_url,
+        vip_enabled, vip_expire_at, verified_at
+      )
+      SELECT
+        user_id, platform, encrypted_cookie, account_uid, display_name, avatar_url,
+        vip_enabled, vip_expire_at, verified_at
+      FROM platform_credentials;
+      DROP TABLE platform_credentials;
+      ALTER TABLE platform_credentials_v3 RENAME TO platform_credentials;
+
+      CREATE TABLE system_fallback_credentials_v3 (
+        platform TEXT PRIMARY KEY CHECK (platform IN ('netease', 'qq', 'kugou')),
+        encrypted_cookie TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO system_fallback_credentials_v3 (platform, encrypted_cookie, enabled, updated_at)
+      SELECT platform, encrypted_cookie, enabled, updated_at
+      FROM system_fallback_credentials;
+      DROP TABLE system_fallback_credentials;
+      ALTER TABLE system_fallback_credentials_v3 RENAME TO system_fallback_credentials;
+    `,
+  },
 ];
 
 export type SqliteJournalMode = "WAL" | "TRUNCATE" | "DELETE";

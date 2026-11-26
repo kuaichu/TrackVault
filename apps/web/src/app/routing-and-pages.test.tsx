@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AuthStatus,
+  MusicPlatform,
   PlaylistSummary,
   PlaylistTracksPage,
   ProviderCapabilities,
@@ -47,7 +48,7 @@ function makeSettings(overrides: Partial<UserSettings> = {}): UserSettings {
   };
 }
 
-function makeSong(id: string, platform: "netease" | "qq" = "netease", title = `歌曲 ${id}`): Song {
+function makeSong(id: string, platform: MusicPlatform = "netease", title = `歌曲 ${id}`): Song {
   return {
     id,
     platform,
@@ -366,6 +367,16 @@ describe("Phase 5 · Routing, providerMode defaults, URL state, QR polling, erro
             vipExpireAt: null,
             verifiedAt: null,
           },
+          kugou: {
+            platform: "kugou",
+            connected: false,
+            accountUid: null,
+            displayName: null,
+            avatarUrl: null,
+            vipEnabled: false,
+            vipExpireAt: null,
+            verifiedAt: null,
+          },
         },
       });
 
@@ -529,6 +540,16 @@ describe("Phase 5 · Routing, providerMode defaults, URL state, QR polling, erro
           vipExpireAt: null,
           verifiedAt: null,
         },
+        kugou: {
+          platform: "kugou",
+          connected: false,
+          accountUid: null,
+          displayName: null,
+          avatarUrl: null,
+          vipEnabled: false,
+          vipExpireAt: null,
+          verifiedAt: null,
+        },
       },
     });
     vi.spyOn(api, "listMembers").mockResolvedValue({ members: [ADMIN_USER] });
@@ -536,6 +557,7 @@ describe("Phase 5 · Routing, providerMode defaults, URL state, QR polling, erro
       fallbacks: {
         netease: { platform: "netease", configured: false, enabled: false, updatedAt: null },
         qq: { platform: "qq", configured: false, enabled: false, updatedAt: null },
+        kugou: { platform: "kugou", configured: false, enabled: false, updatedAt: null },
       },
     });
 
@@ -554,9 +576,10 @@ describe("Phase 5 · Routing, providerMode defaults, URL state, QR polling, erro
 
     await waitFor(() => {
       const saveButtons = screen.getAllByRole("button", { name: "保存并启用" });
-      expect(saveButtons).toHaveLength(2);
+      expect(saveButtons).toHaveLength(3);
       expect(saveButtons[0]).toBeDisabled();
       expect(saveButtons[1]).toBeDisabled();
+      expect(saveButtons[2]).toBeDisabled();
     });
 
     const [neteaseCookieInput] = screen.getAllByPlaceholderText("输入新的保底 Cookie");
@@ -568,15 +591,17 @@ describe("Phase 5 · Routing, providerMode defaults, URL state, QR polling, erro
     const saveButtonsAfter = screen.getAllByRole("button", { name: "保存并启用" });
     expect(saveButtonsAfter[0]).not.toBeDisabled();
     expect(saveButtonsAfter[1]).toBeDisabled();
+    expect(saveButtonsAfter[2]).toBeDisabled();
   });
 
   it("SongTable disables only the clicked song's download button and PlaylistsPage obeys api.getCapabilities (B51/C066)", async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     vi.spyOn(api, "getSettings").mockResolvedValue({ settings: makeSettings() });
     vi.spyOn(api, "getLikedSongIds").mockResolvedValue({ ids: [] });
-    const customCaps: Record<"netease" | "qq", ProviderCapabilities> = {
+    const customCaps: Record<MusicPlatform, ProviderCapabilities> = {
       netease: { ...DEFAULT_PROVIDER_CAPABILITIES.netease, canCreatePlaylist: false },
       qq: { ...DEFAULT_PROVIDER_CAPABILITIES.qq, canCreatePlaylist: true },
+      kugou: { ...DEFAULT_PROVIDER_CAPABILITIES.kugou, canCreatePlaylist: true },
     };
     vi.spyOn(api, "getCapabilities").mockResolvedValue({ capabilities: customCaps });
     vi.spyOn(api, "getUserPlaylists").mockResolvedValue({ playlists: [] });
@@ -730,8 +755,11 @@ describe("Phase 5 · Routing, providerMode defaults, URL state, QR polling, erro
       expect(screen.getAllByText("冬天又来临").length).toBeGreaterThanOrEqual(2);
     });
 
-    // Primary route hides mobile '<' back button (`hidden md:inline-flex`), omits '点击即播', and exposes '···' menu
-    expect(screen.getByRole("button", { name: "后退" }).className).toContain("hidden md:inline-flex");
+    // Primary route hides mobile '<' back button (`hidden md:inline-flex`), keeps top-bar flex-1 wrapper pointer-events-none so Row 1 controls stay clickable, and sets scroll-px-4 on showcase strip
+    const primaryBackBtn = screen.getByRole("button", { name: "后退" });
+    expect(primaryBackBtn.className).toContain("hidden md:inline-flex");
+    expect(primaryBackBtn.parentElement?.parentElement?.className).toContain("pointer-events-none");
+    expect(document.querySelector("[data-discover-carousel='true']")?.className).toContain("scroll-px-4");
     expect(screen.queryByText("点击即播")).toBeNull();
     expect(screen.getByRole("button", { name: "播放全部" }).parentElement?.className).toContain(
       "items-center",

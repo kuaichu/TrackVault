@@ -1,6 +1,11 @@
 import { CheckCircle2, ChevronDown, ChevronUp, Info, Music2, X, XCircle } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { sanitizeExternalUrl } from "#shared";
+import {
+  type MusicPlatform,
+  getPlatformDisplayName,
+  getPlatformShortName,
+  sanitizeExternalUrl,
+} from "#shared";
 import { useToastStore } from "../store/toast-store.js";
 export { AppleSelect, type AppleSelectOption } from "./AppleSelect.js";
 export { CanvasAmbientGlow, MAIN_AMBIENT_SLOT_ID } from "./CanvasAmbientGlow.js";
@@ -133,17 +138,22 @@ export function PlatformBadge({
   platform,
   subtle = false,
 }: {
-  platform: "netease" | "qq";
+  platform: MusicPlatform;
   subtle?: boolean;
 }) {
-  const dotColor = platform === "netease" ? "bg-[var(--tv-netease)]" : "bg-[var(--tv-qq)]";
-  const label = platform === "netease" ? "网易云" : "QQ";
+  const dotColor =
+    platform === "netease"
+      ? "bg-[var(--tv-netease)]"
+      : platform === "qq"
+        ? "bg-[var(--tv-qq)]"
+        : "bg-[var(--tv-kugou)]";
+  const label = getPlatformShortName(platform);
 
   if (subtle) {
     return (
       <span
         className="inline-flex shrink-0 items-center gap-1 text-[11px] text-[var(--tv-text-subtle)]"
-        title={platform === "netease" ? "网易云音乐" : "QQ 音乐"}
+        title={getPlatformDisplayName(platform)}
       >
         <span className={`h-1.5 w-1.5 rounded-full ${dotColor}`} />
         {label}

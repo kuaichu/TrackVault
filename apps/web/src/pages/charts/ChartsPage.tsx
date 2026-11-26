@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Loader2, Play } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import type { ChartSummary, MusicPlatform } from "#shared";
+import { type ChartSummary, type MusicPlatform, getPlatformDisplayName } from "#shared";
 import { MediaDetailHeader } from "../../entities/music/index.js";
 import { findFirstPlayableSong } from "../../entities/song/index.js";
 import { audioEngine } from "../../features/player/index.js";
@@ -54,6 +54,7 @@ export function ChartsPage() {
           items={[
             { id: "netease", label: "网易云音乐" },
             { id: "qq", label: "QQ 音乐" },
+            { id: "kugou", label: "酷狗音乐" },
           ]}
         />
       </div>
@@ -156,7 +157,7 @@ export function ChartsPage() {
 
 export function ChartDetailPage() {
   const { platform: rawPlatform, id = "" } = useParams();
-  const platform: MusicPlatform = rawPlatform === "qq" ? "qq" : "netease";
+  const platform: MusicPlatform = rawPlatform === "qq" ? "qq" : rawPlatform === "kugou" ? "kugou" : "netease";
 
   const detailQuery = useQuery({
     queryKey: ["chart-detail", platform, id],
@@ -198,7 +199,7 @@ export function ChartDetailPage() {
             title={chart.name}
             meta={
               <p className="text-[13px] font-medium text-[var(--tv-text-muted)]">
-                <span>{platform === "qq" ? "QQ 音乐" : "网易云音乐"}</span>
+                <span>{getPlatformDisplayName(platform)}</span>
                 {chart.updateFrequency ? (
                   <>
                     <span className="mx-1.5 opacity-45">·</span>

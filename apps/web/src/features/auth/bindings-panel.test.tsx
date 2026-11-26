@@ -8,7 +8,7 @@ import { useToastStore } from "../../shared/store/toast-store.js";
 import { BindingsPanel, shouldInvalidateQueryForPlatformChange } from "./BindingsPanel.js";
 
 function makeBinding(
-  platform: "netease" | "qq",
+  platform: "netease" | "qq" | "kugou",
   connected: boolean,
   overrides: Partial<PlatformBindingView> = {},
 ): PlatformBindingView {
@@ -96,6 +96,7 @@ describe("Platform-scoped cache invalidation in BindingsPanel", () => {
       bindings: {
         netease: makeBinding("netease", true),
         qq: makeBinding("qq", qqConnected),
+        kugou: makeBinding("kugou", false),
       },
     }));
 
@@ -198,6 +199,7 @@ describe("Platform-scoped cache invalidation in BindingsPanel", () => {
       bindings: {
         netease: makeBinding("netease", false),
         qq: makeBinding("qq", false),
+        kugou: makeBinding("kugou", false),
       },
     });
 
@@ -250,6 +252,34 @@ describe("Platform-scoped cache invalidation in BindingsPanel", () => {
     await waitFor(() => {
       expect(startQrSpy).toHaveBeenCalledWith("qq", "wx");
       expect(screen.getByText("请打开手机微信扫一扫")).toBeInTheDocument();
+    });
+
+    // Also verify Kugou selectable edition/channel switcher (概念版 App / 酷狗 App / 微信 · 概念版 / 微信 · 标准版)
+    expect(screen.getByRole("group", { name: "酷狗音乐扫码通道" })).toBeInTheDocument();
+    const kgLiteTab = screen.getByRole("button", { name: "概念版 App" });
+    const kgStdTab = screen.getByRole("button", { name: "酷狗 App" });
+    const kgWxLiteTab = screen.getByRole("button", { name: "微信 · 概念版" });
+    expect(kgLiteTab).toHaveAttribute("aria-pressed", "true");
+    expect(kgStdTab).toHaveAttribute("aria-pressed", "false");
+
+    const kgScanBtn = scanButtons[2];
+    if (!kgScanBtn) throw new Error("Expected Kugou QR login button");
+    fireEvent.click(kgScanBtn);
+
+    await waitFor(() => {
+      expect(startQrSpy).toHaveBeenCalledWith("kugou", "kg_lite");
+      expect(screen.getByText("请打开手机「酷狗概念版」App 扫一扫")).toBeInTheDocument();
+    });
+
+    fireEvent.click(kgStdTab);
+    await waitFor(() => {
+      expect(startQrSpy).toHaveBeenCalledWith("kugou", "kg_std");
+      expect(screen.getByText("请打开手机「酷狗音乐」标准版 App 扫一扫")).toBeInTheDocument();
+    });
+
+    fireEvent.click(kgWxLiteTab);
+    await waitFor(() => {
+      expect(startQrSpy).toHaveBeenCalledWith("kugou", "kg_wx_lite");
     });
   });
 });

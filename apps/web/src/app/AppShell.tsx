@@ -129,11 +129,11 @@ function resolvePrimaryRouteTitle(pathname: string): string | null {
 }
 
 function resolveDetailParentFallback(pathname: string): string | null {
-  const playlistMatch = /^\/playlists\/(netease|qq)\//.exec(pathname);
+  const playlistMatch = /^\/playlists\/(netease|qq|kugou)\//.exec(pathname);
   if (playlistMatch) return `/playlists?platform=${playlistMatch[1]}`;
-  const chartMatch = /^\/charts\/(netease|qq)\//.exec(pathname);
+  const chartMatch = /^\/charts\/(netease|qq|kugou)\//.exec(pathname);
   if (chartMatch) return `/charts?platform=${chartMatch[1]}`;
-  const mediaMatch = /^\/(?:artist|album)\/(netease|qq)\//.exec(pathname);
+  const mediaMatch = /^\/(?:artist|album)\/(netease|qq|kugou)\//.exec(pathname);
   if (mediaMatch) return `/discover?platform=${mediaMatch[1]}`;
   return null;
 }
@@ -660,8 +660,8 @@ function AppShellInner({
               }`}
               style={{ zIndex: "var(--tv-z-sticky)" }}
             >
-              <div className="pointer-events-auto flex min-w-0 flex-1 items-center gap-1">
-                <div className="flex shrink-0 items-center gap-0.5">
+              <div className="pointer-events-none flex min-w-0 flex-1 items-center gap-1">
+                <div className="pointer-events-auto flex shrink-0 items-center gap-0.5">
                   <button
                     type="button"
                     disabled={!canGoBack}
@@ -703,7 +703,7 @@ function AppShellInner({
                       isDetailSubpage ? "ml-1" : "ml-0.5 md:ml-1.5"
                     } min-w-0 max-w-[260px] truncate text-left text-[15px] font-bold tracking-tight text-[var(--tv-text)] transition-all duration-200 sm:max-w-[440px] md:text-[14px] ${
                       showCompactHeader
-                        ? "translate-y-0 opacity-100"
+                        ? "pointer-events-auto translate-y-0 opacity-100"
                         : "pointer-events-none translate-y-1 opacity-0"
                     }`}
                   >
@@ -712,11 +712,11 @@ function AppShellInner({
                 )}
               </div>
 
-              <div className="pointer-events-auto flex shrink-0 items-center gap-1.5">
+              <div className="pointer-events-none flex shrink-0 items-center gap-1.5">
                 <button
                   type="button"
                   onClick={toggleLightDark}
-                  className="hidden h-[30px] w-[30px] items-center justify-center rounded-full text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-nav-active)] hover:text-[var(--tv-text)] md:inline-flex"
+                  className="pointer-events-auto hidden h-[30px] w-[30px] items-center justify-center rounded-full text-[var(--tv-text-muted)] transition-colors hover:bg-[var(--tv-nav-active)] hover:text-[var(--tv-text)] md:inline-flex"
                   title={resolvedTheme === "dark" ? "切换浅色模式" : "切换深色模式"}
                   aria-label="切换明暗主题"
                 >
@@ -726,7 +726,7 @@ function AppShellInner({
                 <button
                   type="button"
                   onClick={() => setMobileMenuOpen(true)}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[var(--tv-surface-active)] text-xs font-semibold uppercase text-[var(--tv-text)] ring-1 ring-[var(--tv-sidebar-border)] transition-transform active:scale-95 md:hidden"
+                  className="pointer-events-auto inline-flex h-8 w-8 items-center justify-center rounded-full bg-[var(--tv-surface-active)] text-xs font-semibold uppercase text-[var(--tv-text)] ring-1 ring-[var(--tv-sidebar-border)] transition-transform active:scale-95 md:hidden"
                   title={`${user.username} · 账号与更多`}
                   aria-label="账号与更多"
                 >
@@ -743,7 +743,7 @@ function AppShellInner({
                 const nextStage: 0 | 1 | 2 = top > 196 ? 2 : top > 52 ? 1 : 0;
                 setMainScrollStage((prev) => (prev === nextStage ? prev : nextStage));
               }}
-              className={`tv-pt-safe relative flex-1 overflow-y-auto px-4 pb-38 sm:px-6 sm:pb-40 md:px-8 md:pb-40 md:[--tv-safe-pt-base:2.75rem] ${
+              className={`tv-pt-safe relative flex-1 overflow-x-hidden overflow-y-auto px-4 pb-38 sm:px-6 sm:pb-40 md:px-8 md:pb-40 md:[--tv-safe-pt-base:2.75rem] ${
                 isDetailSubpage
                   ? "[--tv-safe-pt-base:2.75rem] sm:[--tv-safe-pt-base:3rem]"
                   : "[--tv-safe-pt-base:0.875rem] sm:[--tv-safe-pt-base:2.5rem]"

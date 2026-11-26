@@ -59,7 +59,8 @@ export function PlayerBar() {
     loadedStreamQuality ?? preferredTrackQuality,
     defaultPlaybackQuality,
   );
-  const platformText = currentTrack?.platform === "qq" ? "QQ 音乐" : "网易云";
+  const platformText =
+    currentTrack?.platform === "qq" ? "QQ 音乐" : currentTrack?.platform === "kugou" ? "酷狗音乐" : "网易云";
 
   const handleNowPlayingRegionClick = (event: MouseEvent<HTMLDivElement>) => {
     if (!currentTrack) return;

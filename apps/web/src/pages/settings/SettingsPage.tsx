@@ -2,12 +2,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2, UserPlus } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import {
+  MUSIC_PLATFORMS,
   type MusicPlatform,
   PREFERENCE_QUALITY_OPTIONS,
   type PreferenceQualityLevel,
   type ProviderMode,
   type StartupView,
   type UserSummary,
+  getPlatformDisplayName,
 } from "#shared";
 import { BindingsPanel } from "../../features/auth/index.js";
 import { audioEngine } from "../../features/player/index.js";
@@ -23,7 +25,8 @@ const USERNAME_REGEX = /^[a-zA-Z0-9_.-]{2,32}$/;
 const PROVIDER_MODE_OPTIONS: ReadonlyArray<{ value: ProviderMode; label: string }> = [
   { value: "netease", label: "网易云音乐" },
   { value: "qq", label: "QQ 音乐" },
-  { value: "aggregate", label: "双平台聚合" },
+  { value: "kugou", label: "酷狗音乐" },
+  { value: "aggregate", label: "多平台聚合" },
 ];
 
 const QUALITY_SELECT_OPTIONS: ReadonlyArray<{ value: PreferenceQualityLevel; label: string }> =
@@ -70,6 +73,7 @@ function AdminConsole() {
   const [fallbackDrafts, setFallbackDrafts] = useState<Record<MusicPlatform, string>>({
     netease: "",
     qq: "",
+    kugou: "",
   });
 
   const membersQuery = useQuery({
@@ -287,8 +291,8 @@ function AdminConsole() {
             </button>
           </div>
         ) : (
-          <div className="grid gap-3 border-t border-[var(--tv-border)] pt-4 md:grid-cols-2">
-            {(["netease", "qq"] as const).map((platform) => {
+          <div className="grid gap-3 border-t border-[var(--tv-border)] pt-4 md:grid-cols-3">
+            {MUSIC_PLATFORMS.map((platform) => {
               const fb = fallbacksQuery.data?.fallbacks[platform];
               const trimmedDraft = fallbackDrafts[platform].trim();
               const canSubmitFallback = Boolean(trimmedDraft || fb?.configured);
@@ -297,7 +301,7 @@ function AdminConsole() {
                 <div key={platform} className="space-y-2.5 rounded-xl bg-[var(--tv-bg)] p-3.5">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-medium text-[var(--tv-text)]">
-                      {platform === "netease" ? "网易云保底凭证" : "QQ 音乐保底凭证"}
+                      {`${getPlatformDisplayName(platform)}保底凭证`}
                     </span>
                     <span className="text-[var(--tv-text-subtle)]">
                       {fb?.configured ? (fb.enabled ? "已启用" : "已停用") : "未配置"}

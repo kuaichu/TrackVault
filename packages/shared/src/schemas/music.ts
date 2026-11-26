@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { QualityLevelSchema } from "../quality.js";
-import { MusicPlatformSchema, QqQrLoginChannelSchema } from "./auth.js";
+import { MusicPlatformSchema, QrLoginChannelSchema } from "./auth.js";
 
 export const SongAvailabilityStateSchema = z.enum([
   "available",
@@ -200,7 +200,7 @@ export const SongLyricsSchema = z.object({
   songId: z.string(),
   platform: MusicPlatformSchema,
   lines: z.array(LyricLineSchema),
-  source: z.enum(["netease_new", "netease_legacy", "qqmusic", "none"]),
+  source: z.enum(["netease_new", "netease_legacy", "qqmusic", "kugou", "none"]),
 });
 export type SongLyrics = z.infer<typeof SongLyricsSchema>;
 
@@ -255,7 +255,7 @@ export const ProviderCapabilitiesSchema = z.object({
   canReadComments: z.boolean(),
   canLikeComments: z.boolean(),
   canQrLogin: z.boolean(),
-  qrLoginChannels: z.array(QqQrLoginChannelSchema).optional(),
+  qrLoginChannels: z.array(QrLoginChannelSchema).optional(),
   shareUrlTemplate: z.string(),
 });
 export type ProviderCapabilities = z.infer<typeof ProviderCapabilitiesSchema>;

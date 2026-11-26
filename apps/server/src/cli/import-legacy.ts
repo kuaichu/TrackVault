@@ -70,7 +70,8 @@ function formatDurationSeconds(seconds: number): string {
 
 export function mapLegacySong(raw: Record<string, unknown>): Song | null {
   const sourceVal = String(raw.source ?? raw.platform ?? "").toLowerCase();
-  const platform = sourceVal === "qqmusic" || sourceVal === "qq" ? "qq" : "netease";
+  const platform =
+    sourceVal === "qqmusic" || sourceVal === "qq" ? "qq" : sourceVal === "kugou" ? "kugou" : "netease";
 
   const durationSeconds = parseDurationToSeconds(raw.duration, raw.durationSeconds);
   const duration =

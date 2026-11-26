@@ -1,17 +1,18 @@
-import type {
-  AuthStatus,
-  CreateMemberInput,
-  LoginInput,
-  MusicPlatform,
-  PlatformBindingView,
-  QqQrLoginChannel,
-  QrCheckResult,
-  QrStartResult,
-  SetupAdminInput,
-  SystemFallbackView,
-  UpdateMemberInput,
-  UpdateSystemFallbackInput,
-  UserSummary,
+import {
+  type AuthStatus,
+  type CreateMemberInput,
+  type LoginInput,
+  MUSIC_PLATFORMS,
+  type MusicPlatform,
+  type PlatformBindingView,
+  type QrCheckResult,
+  type QrLoginChannel,
+  type QrStartResult,
+  type SetupAdminInput,
+  type SystemFallbackView,
+  type UpdateMemberInput,
+  type UpdateSystemFallbackInput,
+  type UserSummary,
 } from "#shared";
 import type { ActorContext } from "../../domain/context.js";
 import { AppError } from "../../domain/errors.js";
@@ -248,7 +249,7 @@ export class AuthService {
   async startPlatformQrLogin(
     actor: ActorContext,
     platform: MusicPlatform,
-    channel?: QqQrLoginChannel,
+    channel?: QrLoginChannel,
   ): Promise<QrStartResult> {
     const adapter = this.#providers.get(platform);
     if (!adapter.startQrLogin) {
@@ -308,6 +309,7 @@ export class AuthService {
     return {
       netease: this.#credentials.getSystemFallbackView("netease"),
       qq: this.#credentials.getSystemFallbackView("qq"),
+      kugou: this.#credentials.getSystemFallbackView("kugou"),
     };
   }
 
@@ -349,7 +351,7 @@ export class AuthService {
   }
 
   #invalidateAllProviderScopes(scopeKey: string): void {
-    for (const platform of ["netease", "qq"] as const) {
+    for (const platform of MUSIC_PLATFORMS) {
       try {
         this.#providers.get(platform).invalidateScope?.(scopeKey);
       } catch {

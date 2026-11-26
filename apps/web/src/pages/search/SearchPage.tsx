@@ -24,7 +24,8 @@ export function SearchPage() {
 
   const urlQ = searchParams.get("q") ?? "";
   const rawMode = searchParams.get("mode");
-  const hasExplicitMode = rawMode === "netease" || rawMode === "qq" || rawMode === "aggregate";
+  const hasExplicitMode =
+    rawMode === "netease" || rawMode === "qq" || rawMode === "kugou" || rawMode === "aggregate";
   const loadedDefaultMode = settingsQuery.data?.settings.providerMode;
   const defaultMode: ProviderMode = loadedDefaultMode ?? "aggregate";
   const mode: ProviderMode = hasExplicitMode ? rawMode : defaultMode;
@@ -140,6 +141,7 @@ export function SearchPage() {
             { id: "aggregate", label: "聚合" },
             { id: "netease", label: "网易云" },
             { id: "qq", label: "QQ 音乐" },
+            { id: "kugou", label: "酷狗音乐" },
           ]}
         />
       </div>
@@ -237,7 +239,10 @@ export function SearchPage() {
       )}
 
       {!activeQuery ? (
-        <EmptyState title="跨平台曲库检索" description="支持检索网易云与 QQ 音乐的单曲、歌手、专辑与歌单。" />
+        <EmptyState
+          title="跨平台曲库检索"
+          description="支持检索网易云、QQ 音乐与酷狗音乐的单曲、歌手、专辑与歌单。"
+        />
       ) : activeLoading ? (
         <div className="space-y-2">
           {["s1", "s2", "s3", "s4", "s5", "s6"].map((rowId) => (

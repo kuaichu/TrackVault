@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Play } from "lucide-react";
 import { useParams } from "react-router-dom";
-import type { MusicPlatform } from "#shared";
+import { type MusicPlatform, getPlatformDisplayName } from "#shared";
 import { ArtistLinks, MediaDetailHeader } from "../../entities/music/index.js";
 import { findFirstPlayableSong } from "../../entities/song/index.js";
 import { audioEngine } from "../../features/player/index.js";
@@ -12,7 +12,7 @@ import { SongTable } from "../../widgets/song-table/index.js";
 
 export function AlbumDetailPage() {
   const { platform: rawPlatform, id = "" } = useParams();
-  const platform: MusicPlatform = rawPlatform === "qq" ? "qq" : "netease";
+  const platform: MusicPlatform = rawPlatform === "qq" ? "qq" : rawPlatform === "kugou" ? "kugou" : "netease";
 
   const albumQuery = useQuery({
     queryKey: ["album-detail", platform, id],
@@ -70,7 +70,7 @@ export function AlbumDetailPage() {
                   linkClassName="font-semibold text-[var(--tv-accent)] hover:opacity-85"
                 />
                 <span className="opacity-45">·</span>
-                <span>{album.platform === "qq" ? "QQ 音乐" : "网易云音乐"}</span>
+                <span>{getPlatformDisplayName(album.platform)}</span>
                 {album.publishDate && (
                   <>
                     <span className="opacity-45">·</span>

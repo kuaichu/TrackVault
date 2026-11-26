@@ -217,7 +217,9 @@ export function TrackCommentsPanel({
   };
 
   const commentSongId =
-    currentTrack?.platform === "qq" ? (currentTrack.providerSongId ?? currentTrack.id) : currentTrack?.id;
+    currentTrack?.platform === "qq" || currentTrack?.platform === "kugou"
+      ? (currentTrack.providerSongId ?? currentTrack.id)
+      : currentTrack?.id;
 
   const commentsQuery = useInfiniteQuery({
     queryKey: ["comments", currentTrack?.platform, commentSongId],

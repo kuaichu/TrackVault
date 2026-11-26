@@ -14,7 +14,7 @@ import { SongTable } from "../../widgets/song-table/index.js";
 export function ArtistDetailPage() {
   const navigate = useNavigate();
   const { platform: rawPlatform, id = "" } = useParams();
-  const platform: MusicPlatform = rawPlatform === "qq" ? "qq" : "netease";
+  const platform: MusicPlatform = rawPlatform === "qq" ? "qq" : rawPlatform === "kugou" ? "kugou" : "netease";
 
   const [tab, setTab] = useState<"songs" | "albums">("songs");
 

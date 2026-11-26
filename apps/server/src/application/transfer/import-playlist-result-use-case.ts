@@ -1,4 +1,9 @@
-import type { ImportAuditResult, MusicPlatform, TransferResult } from "#shared";
+import {
+  type ImportAuditResult,
+  type MusicPlatform,
+  type TransferResult,
+  getPlatformDisplayName,
+} from "#shared";
 import type { ActorContext } from "../../domain/context.js";
 import { AppError } from "../../domain/errors.js";
 import type { CreatePlaylistResult, ProviderRegistry } from "../../domain/ports/music-provider.js";
@@ -8,6 +13,7 @@ import type { BackgroundJobManager } from "../jobs/background-job-manager.js";
 const PLAYLIST_URL_TEMPLATES: Record<MusicPlatform, string> = {
   netease: "https://music.163.com/#/playlist?id={id}",
   qq: "https://y.qq.com/n/ryqq/playlist/{id}",
+  kugou: "https://www.kugou.com/yy/special/single/{id}.html",
 };
 
 export function buildProviderPlaylistUrl(platform: MusicPlatform, playlistId: string): string {
@@ -42,7 +48,7 @@ async function importTracksIntoTargetPlaylist(params: {
     if (!adapter.addTracksToPlaylist) {
       throw new AppError(
         "FEATURE_UNSUPPORTED",
-        `${platform === "qq" ? "QQ 音乐" : platform} 暂不支持向已有歌单追加曲目。`,
+        `${getPlatformDisplayName(platform)} 暂不支持向已有歌单追加曲目。`,
       );
     }
     const { addedCount } = await adapter.addTracksToPlaylist(existingPlaylistId, trackIds, auth);

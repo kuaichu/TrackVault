@@ -26,6 +26,18 @@ export const DEFAULT_PROVIDER_CAPABILITIES: Record<MusicPlatform, ProviderCapabi
     qrLoginChannels: ["mobile", "qq", "wx"],
     shareUrlTemplate: "https://y.qq.com/n/ryqq/songDetail/{id}",
   },
+  kugou: {
+    platform: "kugou",
+    canLikeSong: false,
+    canManagePlaylistTracks: true,
+    canCreatePlaylist: true,
+    canLoadCloudDisk: false,
+    canReadComments: true,
+    canLikeComments: false,
+    canQrLogin: true,
+    qrLoginChannels: ["kg_lite", "kg_std", "kg_wx_lite", "kg_wx_std"],
+    shareUrlTemplate: "https://www.kugou.com/song/#hash={id}",
+  },
 };
 
 export function useCapabilitiesQuery() {
@@ -39,5 +51,9 @@ export function useCapabilitiesQuery() {
 
 export function useCapabilities(): Record<MusicPlatform, ProviderCapabilities> {
   const query = useCapabilitiesQuery();
-  return query.data?.capabilities ?? DEFAULT_PROVIDER_CAPABILITIES;
+  if (!query.data?.capabilities) return DEFAULT_PROVIDER_CAPABILITIES;
+  return {
+    ...DEFAULT_PROVIDER_CAPABILITIES,
+    ...query.data.capabilities,
+  };
 }

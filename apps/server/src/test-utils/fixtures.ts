@@ -235,16 +235,18 @@ export function createStubProviderAdapter(
     capabilities: {
       platform,
       canLikeSong: platform === "netease",
-      canManagePlaylistTracks: platform === "netease",
-      canCreatePlaylist: platform === "netease",
+      canManagePlaylistTracks: platform === "netease" || platform === "kugou",
+      canCreatePlaylist: platform === "netease" || platform === "kugou",
       canLoadCloudDisk: platform === "netease",
       canReadComments: true,
-      canLikeComments: true,
+      canLikeComments: platform !== "kugou",
       canQrLogin: true,
       shareUrlTemplate:
         platform === "netease"
           ? "https://music.163.com/#/song?id={id}"
-          : "https://y.qq.com/n/ryqq/songDetail/{id}",
+          : platform === "qq"
+            ? "https://y.qq.com/n/ryqq/songDetail/{id}"
+            : "https://www.kugou.com/song/#hash={id}",
     },
     verifyCredential: async () => ({
       ok: true,

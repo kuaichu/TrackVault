@@ -1,4 +1,4 @@
-import type { MusicPlatform, PlatformBindingView } from "#shared";
+import { type MusicPlatform, type PlatformBindingView, getPlatformDisplayName } from "#shared";
 import type { ActorContext } from "../../domain/context.js";
 import { AppError } from "../../domain/errors.js";
 import type { ProviderAuthContext } from "../../domain/ports/music-provider.js";
@@ -69,6 +69,7 @@ export class ProviderAuthResolver {
     return {
       netease: this.getBindingView(userId, "netease"),
       qq: this.getBindingView(userId, "qq"),
+      kugou: this.getBindingView(userId, "kugou"),
     };
   }
 
@@ -137,7 +138,7 @@ export class ProviderAuthResolver {
       }
       throw new AppError(
         "CREDENTIAL_REQUIRED",
-        `请先在「账号绑定」中绑定你的 ${platform === "netease" ? "网易云音乐" : "QQ 音乐"} 账号后再播放或下载。`,
+        `请先在「账号绑定」中绑定你的 ${getPlatformDisplayName(platform)} 账号后再播放或下载。`,
       );
     }
 

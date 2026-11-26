@@ -40,6 +40,15 @@ test("normalizeCoverUrl upgrades http, validates host whitelist, and sets param 
     "https://p2.music.126.net/abc.jpg?param=500y500",
   );
   assert.equal(normalizeCoverUrl("http://thirdqq.qlogo.cn/g?b=sdk", 300), "https://thirdqq.qlogo.cn/g?b=sdk");
+  assert.equal(
+    normalizeCoverUrl("http://imge.kugou.com/stdmusic/{size}/20230920/20230920142503632013.jpg", 400),
+    "https://imge.kugou.com/stdmusic/400/20230920/20230920142503632013.jpg",
+  );
+  assert.equal(
+    normalizeCoverUrl("http://c1.kgimg.com/custom/{size}/20211004/20211004180327643187.jpg", 600),
+    "https://c1.kgimg.com/custom/480/20211004/20211004180327643187.jpg",
+  );
+  assert.equal(normalizeCoverUrl("https://www.kugou.com/a.jpg", 400), undefined);
   assert.equal(normalizeCoverUrl("https://evilmusic.126.net/a.jpg", 400), undefined);
   assert.equal(normalizeCoverUrl("https://evil.example.com/a.jpg", 400), undefined);
 });

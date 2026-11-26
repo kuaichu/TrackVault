@@ -1,7 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp, QrCode, Unlink } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import type { MusicPlatform, PlatformBindingView, QqQrLoginChannel } from "#shared";
+import {
+  type MusicPlatform,
+  type PlatformBindingView,
+  type QrLoginChannel,
+  getPlatformDisplayName,
+} from "#shared";
 import { api } from "../../shared/api/endpoints.js";
 import { useCapabilities } from "../../shared/hooks/use-capabilities.js";
 import { toast } from "../../shared/store/toast-store.js";
@@ -55,7 +60,7 @@ export function shouldInvalidateQueryForPlatformChange(
 const QR_POLL_INTERVAL_MS = 2500;
 const QR_MAX_CONSECUTIVE_ERRORS = 3;
 
-const QQ_CHANNEL_META: Record<QqQrLoginChannel, { label: string; promptMessage: string; subHint: string }> = {
+const QR_CHANNEL_META: Record<QrLoginChannel, { label: string; promptMessage: string; subHint: string }> = {
   mobile: {
     label: "QQ 音乐 App",
     promptMessage: "请打开手机 QQ 音乐 App 扫一扫",
@@ -71,12 +76,32 @@ const QQ_CHANNEL_META: Record<QqQrLoginChannel, { label: string; promptMessage: 
     promptMessage: "请打开手机微信扫一扫",
     subHint: "绑定微信体系下的 QQ 音乐账号（与 QQ 号会员资产相互独立）。",
   },
+  kg_lite: {
+    label: "概念版 App",
+    promptMessage: "请打开手机「酷狗概念版」App 扫一扫",
+    subHint: "推荐 · 概念版协议，非会员标准音质畅听更友好，扫码确认后自动保存。",
+  },
+  kg_std: {
+    label: "酷狗 App",
+    promptMessage: "请打开手机「酷狗音乐」标准版 App 扫一扫",
+    subHint: "标准版协议，适合已开通酷狗豪华 VIP 的账号，扫码确认后自动保存。",
+  },
+  kg_wx_lite: {
+    label: "微信 · 概念版",
+    promptMessage: "请打开手机微信扫一扫",
+    subHint: "无需安装概念版 App，直接用微信授权登录酷狗概念版身份。",
+  },
+  kg_wx_std: {
+    label: "微信 · 标准版",
+    promptMessage: "请打开手机微信扫一扫",
+    subHint: "通过微信授权登录酷狗音乐标准版身份。",
+  },
 };
 
 interface QrState {
   key: string;
   qrImage: string;
-  channel?: QqQrLoginChannel;
+  channel?: QrLoginChannel;
   message: string;
   error?: string | null;
 }
@@ -91,15 +116,22 @@ function PlatformCard({
   const queryClient = useQueryClient();
   const capabilities = useCapabilities();
   const canQrLogin = capabilities[platform].canQrLogin;
-  const qrChannels = capabilities[platform].qrLoginChannels;
+  const qrChannels = capabilities[platform]?.qrLoginChannels;
   const hasChannelSelector = Boolean(qrChannels && qrChannels.length > 1);
-  const [selectedChannel, setSelectedChannel] = useState<QqQrLoginChannel>(qrChannels?.[0] ?? "mobile");
+  const [selectedChannel, setSelectedChannel] = useState<QrLoginChannel>(
+    qrChannels?.[0] ?? (platform === "kugou" ? "kg_lite" : "mobile"),
+  );
   const [cookieDraft, setCookieDraft] = useState("");
   const [showManualCookie, setShowManualCookie] = useState(false);
   const [qrState, setQrState] = useState<QrState | null>(null);
 
-  const label = platform === "netease" ? "网易云音乐" : "QQ 音乐";
-  const dotClass = platform === "netease" ? "bg-[var(--tv-netease)]" : "bg-[var(--tv-qq)]";
+  const label = getPlatformDisplayName(platform);
+  const dotClass =
+    platform === "netease"
+      ? "bg-[var(--tv-netease)]"
+      : platform === "qq"
+        ? "bg-[var(--tv-qq)]"
+        : "bg-[var(--tv-kugou)]";
 
   const invalidateAccountCaches = useCallback(() => {
     audioEngine.resetPlatformFmState(platform);
@@ -129,7 +161,7 @@ function PlatformCard({
   });
 
   const startQrMutation = useMutation({
-    mutationFn: (channelOverride?: QqQrLoginChannel) => {
+    mutationFn: (channelOverride?: QrLoginChannel) => {
       const targetChannel = hasChannelSelector ? (channelOverride ?? selectedChannel) : undefined;
       return api.startQrLogin(platform, targetChannel);
     },
@@ -137,7 +169,7 @@ function PlatformCard({
       const effectiveChannel =
         res.channel ?? (hasChannelSelector ? (requestedChannel ?? selectedChannel) : undefined);
       const initialPrompt = effectiveChannel
-        ? QQ_CHANNEL_META[effectiveChannel].promptMessage
+        ? QR_CHANNEL_META[effectiveChannel].promptMessage
         : "请打开手机客户端扫描";
       setQrState({
         key: res.key,
@@ -150,7 +182,7 @@ function PlatformCard({
     onError: (err) => toast.error(err instanceof Error ? err.message : "生成二维码失败"),
   });
 
-  const handleSelectChannel = (nextChannel: QqQrLoginChannel) => {
+  const handleSelectChannel = (nextChannel: QrLoginChannel) => {
     setSelectedChannel(nextChannel);
     if (qrState && !startQrMutation.isPending && qrState.channel !== nextChannel) {
       startQrMutation.mutate(nextChannel);
@@ -228,7 +260,7 @@ function PlatformCard({
   }, [platform, qrKey, invalidateAccountCaches]);
 
   const activeQrHint = qrState?.channel
-    ? QQ_CHANNEL_META[qrState.channel].subHint
+    ? QR_CHANNEL_META[qrState.channel].subHint
     : "扫码确认后自动保存，无需手动复制。";
 
   return (
@@ -286,7 +318,7 @@ function PlatformCard({
                     : "text-[var(--tv-text-muted)] hover:text-[var(--tv-text)]"
                 }`}
               >
-                {QQ_CHANNEL_META[ch].label}
+                {QR_CHANNEL_META[ch].label}
               </button>
             );
           })}
@@ -351,14 +383,24 @@ function PlatformCard({
             htmlFor={`cookie-input-${platform}`}
             className="block text-xs font-medium text-[var(--tv-text-muted)]"
           >
-            {platform === "netease" ? "粘贴包含 MUSIC_U 的 Cookie" : "粘贴包含 uin 与 qm_keyst 的 Cookie"}
+            {platform === "netease"
+              ? "粘贴包含 MUSIC_U 的 Cookie"
+              : platform === "qq"
+                ? "粘贴包含 uin 与 qm_keyst 的 Cookie"
+                : "粘贴包含 userid 与 token 的 Cookie（可选附带 kg_edition=lite|standard）"}
           </label>
           <textarea
             id={`cookie-input-${platform}`}
             rows={2}
             value={cookieDraft}
             onChange={(e) => setCookieDraft(e.target.value)}
-            placeholder={platform === "netease" ? "MUSIC_U=..." : "uin=...; qm_keyst=..."}
+            placeholder={
+              platform === "netease"
+                ? "MUSIC_U=..."
+                : platform === "qq"
+                  ? "uin=...; qm_keyst=..."
+                  : "userid=...; token=...; kg_edition=lite"
+            }
             className="w-full rounded-lg border border-[var(--tv-border)] bg-[var(--tv-bg)] p-2.5 font-mono text-xs text-[var(--tv-text)] placeholder:text-[var(--tv-text-subtle)] focus:border-[var(--tv-border-strong)] focus:outline-none"
           />
           <div className="flex items-center justify-end gap-2">
@@ -412,10 +454,25 @@ export function BindingsPanel() {
     );
   }
 
+  const fallbackEmpty = (platform: MusicPlatform): PlatformBindingView => ({
+    platform,
+    connected: false,
+    accountUid: null,
+    displayName: null,
+    avatarUrl: null,
+    vipEnabled: false,
+    vipExpireAt: null,
+    verifiedAt: null,
+  });
+
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      <PlatformCard platform="netease" binding={bindingsQuery.data.bindings.netease} />
-      <PlatformCard platform="qq" binding={bindingsQuery.data.bindings.qq} />
+      <PlatformCard
+        platform="netease"
+        binding={bindingsQuery.data.bindings.netease ?? fallbackEmpty("netease")}
+      />
+      <PlatformCard platform="qq" binding={bindingsQuery.data.bindings.qq ?? fallbackEmpty("qq")} />
+      <PlatformCard platform="kugou" binding={bindingsQuery.data.bindings.kugou ?? fallbackEmpty("kugou")} />
     </div>
   );
 }

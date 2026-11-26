@@ -158,3 +158,97 @@ export function evaluateQqAvailability(
         : { status: "available", locked: false, label: "可下载", reason: "支持下载。" },
   };
 }
+
+export interface KugouPrivilegeInput {
+  privilege?: number | string | null;
+  payType?: number | string | null;
+  oldHide?: number | string | null;
+  hasHash?: boolean;
+}
+
+export interface KugouAvailabilityOptions {
+  vipEnabled?: boolean;
+  isLite?: boolean;
+}
+
+export function evaluateKugouAvailability(
+  input: KugouPrivilegeInput,
+  options?: KugouAvailabilityOptions,
+): SongAvailability | undefined {
+  const privilege = parseOptionalNumber(input.privilege);
+  const payType = parseOptionalNumber(input.payType);
+  const oldHide = parseOptionalNumber(input.oldHide);
+
+  if (input.hasHash === false || privilege === 5 || (oldHide === 1 && input.hasHash !== true)) {
+    return {
+      playback: {
+        status: "copyright",
+        locked: true,
+        label: "无版权",
+        reason: "酷狗音乐暂无该歌曲播放版权。",
+      },
+      download: {
+        status: "copyright",
+        locked: true,
+        label: "无版权",
+        reason: "酷狗音乐暂无该歌曲下载版权。",
+      },
+    };
+  }
+
+  if (privilege === null && payType === null) {
+    return undefined;
+  }
+
+  const isPaidAlbum = payType === 2;
+  const isVipPlay =
+    privilege === 10 || (payType !== null && payType > 0 && privilege !== 0 && privilege !== 8);
+  const isVipDownload = isVipPlay || (privilege === 8 && payType !== null && payType > 0);
+  const nonVipKnown = options?.vipEnabled === false;
+  const isLite = options?.isLite ?? true;
+
+  if (isPaidAlbum) {
+    return {
+      playback: {
+        status: "paid_album",
+        locked: nonVipKnown,
+        label: "付费专辑",
+        reason: "需要购买酷狗数字专辑后播放完整版。",
+      },
+      download: {
+        status: "paid_album",
+        locked: nonVipKnown,
+        label: "付费专辑",
+        reason: "需要购买酷狗数字专辑后下载。",
+      },
+    };
+  }
+
+  const playbackLocked = nonVipKnown && isVipPlay && !isLite;
+  const downloadLocked = nonVipKnown && isVipDownload;
+
+  return {
+    playback: isVipPlay
+      ? {
+          status: "vip",
+          locked: playbackLocked,
+          label: isLite && !options?.vipEnabled ? "概念版可播" : "酷狗 VIP",
+          reason: playbackLocked
+            ? "当前酷狗标准版账号未开通豪华 VIP，无法播放完整版（可切换概念版扫码）。"
+            : isLite && !options?.vipEnabled
+              ? "酷狗概念版支持标准音质畅听，高品/无损需 VIP。"
+              : "需要酷狗音乐 VIP 权限播放高音质完整版。",
+        }
+      : { status: "available", locked: false, label: "可播放", reason: "可正常播放。" },
+    download: isVipDownload
+      ? {
+          status: "vip",
+          locked: downloadLocked,
+          label: "酷狗 VIP",
+          reason: downloadLocked
+            ? "当前酷狗音乐账号未开通 VIP，无法下载高品/完整版。"
+            : "需要酷狗音乐 VIP 下载权限。",
+        }
+      : { status: "available", locked: false, label: "可下载", reason: "支持下载。" },
+  };
+}

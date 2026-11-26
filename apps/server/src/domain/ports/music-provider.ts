@@ -13,8 +13,8 @@ import type {
   PlaylistSummary,
   PlaylistTracksPage,
   ProviderCapabilities,
-  QqQrLoginChannel,
   QrCheckResult,
+  QrLoginChannel,
   QrStartResult,
   QualityLevel,
   Song,
@@ -98,7 +98,7 @@ export interface ProviderQrCheckResult extends QrCheckResult {
 
 export interface ProviderAuthPort {
   verifyCredential(cookie: string): Promise<CredentialVerificationResult>;
-  startQrLogin?(scopeKey: string, options?: { channel?: QqQrLoginChannel }): Promise<QrStartResult>;
+  startQrLogin?(scopeKey: string, options?: { channel?: QrLoginChannel }): Promise<QrStartResult>;
   checkQrLogin?(scopeKey: string, key: string): Promise<ProviderQrCheckResult>;
   /** Clears all per-user scoped caches (e.g., on bind/unbind/account switch/member deletion). */
   invalidateScope?(scopeKey: string): void;
@@ -245,6 +245,14 @@ export class ProviderRegistry {
 
   register(adapter: MusicProviderAdapter): void {
     this.#adapters.set(adapter.platform, adapter);
+  }
+
+  has(platform: MusicPlatform): boolean {
+    return this.#adapters.has(platform);
+  }
+
+  listPlatforms(): MusicPlatform[] {
+    return [...this.#adapters.keys()];
   }
 
   get(platform: MusicPlatform): MusicProviderAdapter {

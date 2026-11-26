@@ -202,8 +202,10 @@ export function useSongActions(songs: Song[]) {
 
   const isSongLiked = useCallback(
     (song: Song) => {
-      if (!capabilities[song.platform].canLikeSong) return false;
-      return song.platform === "netease" ? neteaseLikedSet.has(song.id) : qqLikedSet.has(song.id);
+      if (!capabilities[song.platform]?.canLikeSong) return false;
+      if (song.platform === "netease") return neteaseLikedSet.has(song.id);
+      if (song.platform === "qq") return qqLikedSet.has(song.id);
+      return false;
     },
     [capabilities, neteaseLikedSet, qqLikedSet],
   );

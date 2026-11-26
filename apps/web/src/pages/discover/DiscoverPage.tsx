@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, ChevronRight, Loader2, MoreHorizontal, RefreshCw } from "lucide-react";
 import { type TouchEvent, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { type PlaylistSummary, getSongKey, sanitizeExternalUrl } from "#shared";
+import { type PlaylistSummary, getPlatformDisplayName, getSongKey, sanitizeExternalUrl } from "#shared";
 import { ArtistLinks, PlaylistCard } from "../../entities/music/index.js";
 import { findFirstPlayableSong } from "../../entities/song/index.js";
 import { audioEngine } from "../../features/player/index.js";
@@ -14,7 +14,10 @@ import { SongTable, useStandaloneSongMenu } from "../../widgets/song-table/index
 
 function toHeroCoverUrl(url?: string): string | undefined {
   if (!url) return undefined;
-  return url.replace(/param=\d+y\d+/, "param=800y800").replace(/T002R\d+x\d+/, "T002R800x800");
+  return url
+    .replace(/param=\d+y\d+/, "param=800y800")
+    .replace(/T002R\d+x\d+/, "T002R800x800")
+    .replace(/\/(stdmusic|custom|mcommon)\/(?:240|400)\//, "/$1/480/");
 }
 
 function PlayTriangleIcon({ className = "h-4 w-4" }: { className?: string }) {
@@ -111,6 +114,11 @@ export function DiscoverPage() {
   };
 
   const handleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest("button, a, [role='menu'], [data-discover-carousel='true']")) {
+      pullStartYRef.current = null;
+      return;
+    }
     const mainScrollEl = event.currentTarget.closest("main");
     if (mainScrollEl && mainScrollEl.scrollTop > 2) {
       pullStartYRef.current = null;
@@ -139,7 +147,7 @@ export function DiscoverPage() {
     setPullDistance(0);
   };
 
-  const platformLabel = platform === "netease" ? "网易云音乐" : "QQ 音乐";
+  const platformLabel = getPlatformDisplayName(platform);
   const showcaseCards: Array<{
     id: string;
     eyebrow: string;
@@ -265,10 +273,14 @@ export function DiscoverPage() {
               >
                 <span
                   className={`h-1.5 w-1.5 rounded-full ${
-                    platform === "netease" ? "bg-[var(--tv-netease)]" : "bg-[var(--tv-qq)]"
+                    platform === "netease"
+                      ? "bg-[var(--tv-netease)]"
+                      : platform === "qq"
+                        ? "bg-[var(--tv-qq)]"
+                        : "bg-[var(--tv-kugou)]"
                   }`}
                 />
-                <span>{platform === "netease" ? "网易云" : "QQ 音乐"}</span>
+                <span>{platform === "netease" ? "网易云" : platform === "qq" ? "QQ 音乐" : "酷狗"}</span>
                 <ChevronDown
                   className={`h-3.5 w-3.5 text-[var(--tv-text-subtle)] transition-transform ${
                     platformMenuOpen ? "rotate-180" : ""
@@ -298,6 +310,7 @@ export function DiscoverPage() {
                   [
                     { id: "netease", label: "网易云音乐", dot: "bg-[var(--tv-netease)]" },
                     { id: "qq", label: "QQ 音乐", dot: "bg-[var(--tv-qq)]" },
+                    { id: "kugou", label: "酷狗音乐", dot: "bg-[var(--tv-kugou)]" },
                   ] as const
                 ).map((item) => {
                   const selected = platform === item.id;
@@ -352,6 +365,7 @@ export function DiscoverPage() {
                 items={[
                   { id: "netease", label: "网易云" },
                   { id: "qq", label: "QQ 音乐" },
+                  { id: "kugou", label: "酷狗音乐" },
                 ]}
               />
             )}
@@ -426,10 +440,13 @@ export function DiscoverPage() {
           }
         />
       ) : (
-        <section className="grid items-end gap-7 lg:grid-cols-[1.05fr_1fr]">
-          {/* Left: Tall iOS Apple Music Showcase Carousel (mobile horizontal peek; blurred aura + uncropped 1:1 cover) */}
+        <section className="grid grid-cols-1 items-end gap-7 lg:grid-cols-[1.05fr_1fr]">
+          {/* Left: Tall iOS Apple Music Showcase Carousel (scroll-pl-4 keeps Card 1 aligned at 16px, never snapped into -mx-4) */}
           <div className="min-w-0">
-            <div className="tv-no-scrollbar -mx-4 flex snap-x snap-mandatory gap-3.5 overflow-x-auto px-4 sm:mx-0 sm:px-0 lg:block">
+            <div
+              data-discover-carousel="true"
+              className="tv-no-scrollbar -mx-4 flex scroll-px-4 snap-x snap-mandatory gap-3 overflow-x-auto px-4 after:w-1 after:shrink-0 sm:mx-0 sm:scroll-px-0 sm:px-0 sm:after:hidden lg:block"
+            >
               {showcaseCards.map((card) => {
                 const safeBackdropUrl = sanitizeExternalUrl(card.coverUrl);
                 return (
@@ -437,15 +454,15 @@ export function DiscoverPage() {
                     key={card.id}
                     className={`snap-start space-y-2 ${
                       showcaseCards.length > 1
-                        ? "w-[86%] max-w-[344px] shrink-0 sm:w-[320px] lg:w-full lg:max-w-none"
+                        ? "w-[calc(100vw-3.25rem)] max-w-[364px] shrink-0 sm:w-[320px] lg:w-full lg:max-w-none"
                         : "w-full"
                     } ${card.desktopVisible ? "" : "lg:hidden"}`}
                   >
-                    <div>
-                      <div className="text-[11px] font-semibold tracking-wider text-[var(--tv-text-subtle)] uppercase">
+                    <div className="min-w-0 pr-2">
+                      <div className="truncate text-[11px] font-semibold tracking-wider text-[var(--tv-text-subtle)] uppercase">
                         {card.eyebrow}
                       </div>
-                      <div className="mt-0.5 text-[16.5px] font-bold tracking-tight text-[var(--tv-text)]">
+                      <div className="mt-0.5 truncate text-[16.5px] font-bold tracking-tight text-[var(--tv-text)]">
                         {card.heading}
                       </div>
                     </div>

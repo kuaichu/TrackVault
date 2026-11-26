@@ -24,6 +24,7 @@ import { CredentialRepository } from "./infrastructure/db/repositories/credentia
 import { JobRepository } from "./infrastructure/db/repositories/job-repository.js";
 import { UserRepository } from "./infrastructure/db/repositories/user-repository.js";
 import { UserStateRepository } from "./infrastructure/db/repositories/user-state-repository.js";
+import { KugouMusicAdapter } from "./infrastructure/providers/kugou/kugou-adapter.js";
 import { NeteaseAdapter } from "./infrastructure/providers/netease/netease-adapter.js";
 import { QqMusicAdapter } from "./infrastructure/providers/qq/qq-adapter.js";
 import { AesGcmCredentialVault, loadOrCreateMasterKey } from "./infrastructure/security/credential-vault.js";
@@ -83,6 +84,7 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
       new NeteaseAdapter({ realIp: config.neteaseRealIp, timeoutMs: config.upstreamTimeoutMs }),
     );
     providers.register(new QqMusicAdapter(httpClient));
+    providers.register(new KugouMusicAdapter(httpClient));
   }
 
   // 2) Application layer
@@ -194,6 +196,8 @@ export async function buildServer(options: BuildAppOptions): Promise<BuiltServer
           "https://*.y.qq.com",
           "https://y.qq.com",
           "https://*.qlogo.cn",
+          "https://*.kugou.com",
+          "https://*.kgimg.com",
         ],
         mediaSrc: ["'self'", "blob:"],
         connectSrc: ["'self'"],

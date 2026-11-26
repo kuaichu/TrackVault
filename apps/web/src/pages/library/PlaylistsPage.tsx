@@ -14,7 +14,13 @@ import {
 } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import type { MusicPlatform, PlaylistSort, PlaylistSummary, Song } from "#shared";
+import {
+  type MusicPlatform,
+  type PlaylistSort,
+  type PlaylistSummary,
+  type Song,
+  getPlatformDisplayName,
+} from "#shared";
 import { MediaDetailHeader, PlaylistCard } from "../../entities/music/index.js";
 import { findFirstPlayableSong, isSongPlayable } from "../../entities/song/index.js";
 import { useDownloadModeStore } from "../../features/downloads/index.js";
@@ -179,6 +185,7 @@ export function PlaylistsPage() {
             items={[
               { id: "netease", label: "网易云音乐" },
               { id: "qq", label: "QQ 音乐" },
+              { id: "kugou", label: "酷狗音乐" },
             ]}
           />
         </div>
@@ -334,7 +341,7 @@ export function PlaylistDetailPage() {
   const downloadMode = useDownloadModeStore((s) => s.downloadMode);
   const setDownloadMode = useDownloadModeStore((s) => s.setDownloadMode);
   const { platform: rawPlatform, id = "" } = useParams();
-  const platform: MusicPlatform = rawPlatform === "qq" ? "qq" : "netease";
+  const platform: MusicPlatform = rawPlatform === "qq" ? "qq" : rawPlatform === "kugou" ? "kugou" : "netease";
 
   const initialSummary = (location.state as { playlist?: PlaylistSummary } | null)?.playlist;
 
@@ -419,7 +426,7 @@ export function PlaylistDetailPage() {
   const total = detailQuery.data?.total ?? playlist?.trackCount ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const canManageTracks = capabilities[platform].canManagePlaylistTracks;
-  const platformLabel = platform === "qq" ? "QQ 音乐" : "网易云音乐";
+  const platformLabel = getPlatformDisplayName(platform);
 
   const handlePlayPage = () => {
     const first = findFirstPlayableSong(songs);

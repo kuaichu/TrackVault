@@ -27,6 +27,10 @@ test("assertSafeDirectDownloadUrl enforces HTTPS and audio CDN host allowlist", 
     assertSafeDirectDownloadUrl("https://ws.stream.qqmusic.qq.com/M800.mp3?vkey=1"),
     "https://ws.stream.qqmusic.qq.com/M800.mp3?vkey=1",
   );
+  assert.equal(
+    assertSafeDirectDownloadUrl("https://fsandroid.tx.kugou.com/20261126/track.mp3"),
+    "https://fsandroid.tx.kugou.com/20261126/track.mp3",
+  );
 
   for (const unsafe of [
     "http://m7.music.126.net/track.mp3",
@@ -36,6 +40,8 @@ test("assertSafeDirectDownloadUrl enforces HTTPS and audio CDN host allowlist", 
     "https://localhost/track.mp3",
     "https://evil.example.com/track.mp3",
     "https://music.163.com/track.mp3",
+    "https://www.kugou.com/track.mp3",
+    "https://gateway.kugou.com/v5/url",
   ]) {
     assert.throws(
       () => assertSafeDirectDownloadUrl(unsafe),

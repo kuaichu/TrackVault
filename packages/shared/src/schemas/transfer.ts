@@ -1,8 +1,11 @@
 import { z } from "zod";
 import { MusicPlatformSchema } from "./auth.js";
 
+export const TransferSourceProviderSchema = z.enum(["netease", "qq", "kugou", "text", "csv"]);
+export type TransferSourceProvider = z.infer<typeof TransferSourceProviderSchema>;
+
 export const TransferTrackSchema = z.object({
-  source: z.enum(["netease", "qq", "text", "csv"]),
+  source: TransferSourceProviderSchema,
   sourceTrackId: z.string().max(128).optional(),
   title: z.string().min(1).max(300),
   artists: z.array(z.string().max(120)).max(20),
@@ -99,7 +102,7 @@ export const TransferSummarySchema = z.object({
 export type TransferSummary = z.infer<typeof TransferSummarySchema>;
 
 export const StartTransferInputSchema = z.object({
-  sourceProvider: z.enum(["netease", "qq", "text", "csv"]),
+  sourceProvider: TransferSourceProviderSchema,
   targetProvider: MusicPlatformSchema,
   playlistId: z.string().trim().max(128).optional(),
   playlistName: z.string().trim().max(200).optional(),
@@ -111,7 +114,7 @@ export const StartTransferInputSchema = z.object({
 export type StartTransferInput = z.infer<typeof StartTransferInputSchema>;
 
 export const TransferResultSchema = z.object({
-  sourceProvider: z.enum(["netease", "qq", "text", "csv"]),
+  sourceProvider: TransferSourceProviderSchema,
   targetProvider: MusicPlatformSchema,
   playlistName: z.string(),
   summary: TransferSummarySchema,

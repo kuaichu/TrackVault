@@ -2,10 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { classifyAudioFormat, getQualityLabel, inferQualityLevelFromBitrate } from "./quality.js";
 import {
+  KugouQrLoginChannelSchema,
+  MusicPlatformSchema,
   PlatformBindingViewSchema,
+  ProviderModeSchema,
   QqQrLoginChannelSchema,
+  QrLoginChannelSchema,
   QrStartResultSchema,
   StartQrLoginInputSchema,
+  getPlatformDisplayName,
 } from "./schemas/auth.js";
 import {
   JobDetailViewSchema,
@@ -359,8 +364,16 @@ test("PlayHistoryResponseSchema, preferredQuality, and credentialCorrupted parse
   for (const ch of ["mobile", "qq", "wx"] as const) {
     assert.equal(QqQrLoginChannelSchema.parse(ch), ch);
   }
+  for (const ch of ["kg_lite", "kg_std", "kg_wx_lite", "kg_wx_std"] as const) {
+    assert.equal(KugouQrLoginChannelSchema.parse(ch), ch);
+    assert.equal(QrLoginChannelSchema.parse(ch), ch);
+  }
+  assert.equal(MusicPlatformSchema.parse("kugou"), "kugou");
+  assert.equal(ProviderModeSchema.parse("kugou"), "kugou");
+  assert.equal(getPlatformDisplayName("kugou"), "酷狗音乐");
   assert.deepEqual(StartQrLoginInputSchema.parse({}), {});
   assert.deepEqual(StartQrLoginInputSchema.parse({ channel: "mobile" }), { channel: "mobile" });
+  assert.deepEqual(StartQrLoginInputSchema.parse({ channel: "kg_lite" }), { channel: "kg_lite" });
   assert.equal(
     QrStartResultSchema.parse({ key: "k1", qrImage: "data:image/png;base64,AA==", channel: "wx" }).channel,
     "wx",
@@ -378,4 +391,17 @@ test("PlayHistoryResponseSchema, preferredQuality, and credentialCorrupted parse
     shareUrlTemplate: "https://y.qq.com/n/ryqq/songDetail/{id}",
   });
   assert.deepEqual(qqCaps.qrLoginChannels, ["mobile", "qq", "wx"]);
+  const kgCaps = ProviderCapabilitiesSchema.parse({
+    platform: "kugou",
+    canLikeSong: false,
+    canManagePlaylistTracks: true,
+    canCreatePlaylist: true,
+    canLoadCloudDisk: false,
+    canReadComments: true,
+    canLikeComments: false,
+    canQrLogin: true,
+    qrLoginChannels: ["kg_lite", "kg_std", "kg_wx_lite", "kg_wx_std"],
+    shareUrlTemplate: "https://www.kugou.com/song/#hash={id}",
+  });
+  assert.deepEqual(kgCaps.qrLoginChannels, ["kg_lite", "kg_std", "kg_wx_lite", "kg_wx_std"]);
 });

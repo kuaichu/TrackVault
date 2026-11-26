@@ -1,46 +1,47 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import type { MusicPlatform } from "#shared";
+import type { MusicPlatform, TransferSourceProvider } from "#shared";
 import { api } from "../../../shared/api/endpoints.js";
 import { toast } from "../../../shared/store/toast-store.js";
 import { AppleSelect } from "../../../shared/ui/primitives.js";
 import { TRANSFER_INPUT_CLASS } from "../transfer-constants.js";
 
 const SOURCE_PROVIDER_OPTIONS: ReadonlyArray<{
-  value: "netease" | "qq" | "text" | "csv";
+  value: TransferSourceProvider;
   label: string;
 }> = [
   { value: "text", label: "纯文本曲目列表" },
   { value: "csv", label: "CSV 表格" },
   { value: "netease", label: "网易云歌单 ID" },
   { value: "qq", label: "QQ 音乐歌单 ID" },
+  { value: "kugou", label: "酷狗音乐歌单 ID" },
 ];
 
 const TARGET_PROVIDER_OPTIONS: ReadonlyArray<{ value: MusicPlatform; label: string }> = [
   { value: "netease", label: "网易云音乐" },
   { value: "qq", label: "QQ 音乐" },
+  { value: "kugou", label: "酷狗音乐" },
 ];
 
 export function TransferForm({ onJobCreated }: { onJobCreated: (jobId: string) => void }) {
   const queryClient = useQueryClient();
-  const [sourceProvider, setSourceProvider] = useState<"netease" | "qq" | "text" | "csv">("text");
+  const [sourceProvider, setSourceProvider] = useState<TransferSourceProvider>("text");
   const [targetProvider, setTargetProvider] = useState<MusicPlatform>("netease");
   const [playlistId, setPlaylistId] = useState("");
   const [playlistName, setPlaylistName] = useState("");
   const [rawText, setRawText] = useState("");
   const [checkAvailability, setCheckAvailability] = useState(false);
 
-  const canStartTransfer =
-    sourceProvider === "netease" || sourceProvider === "qq"
-      ? playlistId.trim().length > 0
-      : rawText.trim().length > 0;
+  const isPlaylistIdSource =
+    sourceProvider === "netease" || sourceProvider === "qq" || sourceProvider === "kugou";
+  const canStartTransfer = isPlaylistIdSource ? playlistId.trim().length > 0 : rawText.trim().length > 0;
 
   const startTransferMutation = useMutation({
     mutationFn: () =>
       api.startTransferJob({
         sourceProvider,
         targetProvider,
-        playlistId: sourceProvider === "netease" || sourceProvider === "qq" ? playlistId.trim() : undefined,
+        playlistId: isPlaylistIdSource ? playlistId.trim() : undefined,
         playlistName: playlistName.trim() || undefined,
         rawText: sourceProvider === "text" || sourceProvider === "csv" ? rawText : undefined,
         checkAvailability,
@@ -92,7 +93,7 @@ export function TransferForm({ onJobCreated }: { onJobCreated: (jobId: string) =
         </label>
       </div>
 
-      {sourceProvider === "netease" || sourceProvider === "qq" ? (
+      {isPlaylistIdSource ? (
         <input
           type="text"
           value={playlistId}

@@ -200,6 +200,7 @@ export class CredentialRepository {
     return {
       netease: this.#resolveRow(userId, "netease", byPlatform.get("netease")).view,
       qq: this.#resolveRow(userId, "qq", byPlatform.get("qq")).view,
+      kugou: this.#resolveRow(userId, "kugou", byPlatform.get("kugou")).view,
     };
   }
 

@@ -3,11 +3,24 @@ import { z } from "zod";
 export const UserRoleSchema = z.enum(["admin", "member"]);
 export type UserRole = z.infer<typeof UserRoleSchema>;
 
-export const MusicPlatformSchema = z.enum(["netease", "qq"]);
+export const MUSIC_PLATFORMS = ["netease", "qq", "kugou"] as const;
+export const MusicPlatformSchema = z.enum(MUSIC_PLATFORMS);
 export type MusicPlatform = z.infer<typeof MusicPlatformSchema>;
 
-export const ProviderModeSchema = z.enum(["netease", "qq", "aggregate"]);
+export const ProviderModeSchema = z.enum(["netease", "qq", "kugou", "aggregate"]);
 export type ProviderMode = z.infer<typeof ProviderModeSchema>;
+
+export function getPlatformDisplayName(platform: MusicPlatform): string {
+  if (platform === "qq") return "QQ 音乐";
+  if (platform === "kugou") return "酷狗音乐";
+  return "网易云音乐";
+}
+
+export function getPlatformShortName(platform: MusicPlatform): string {
+  if (platform === "qq") return "QQ";
+  if (platform === "kugou") return "酷狗";
+  return "网易云";
+}
 
 export const UserSummarySchema = z.object({
   id: z.string(),
@@ -103,8 +116,22 @@ export type UpdateSystemFallbackInput = z.infer<typeof UpdateSystemFallbackInput
 export const QqQrLoginChannelSchema = z.enum(["mobile", "qq", "wx"]);
 export type QqQrLoginChannel = z.infer<typeof QqQrLoginChannelSchema>;
 
+export const KugouQrLoginChannelSchema = z.enum(["kg_lite", "kg_std", "kg_wx_lite", "kg_wx_std"]);
+export type KugouQrLoginChannel = z.infer<typeof KugouQrLoginChannelSchema>;
+
+export const QrLoginChannelSchema = z.enum([
+  "mobile",
+  "qq",
+  "wx",
+  "kg_lite",
+  "kg_std",
+  "kg_wx_lite",
+  "kg_wx_std",
+]);
+export type QrLoginChannel = z.infer<typeof QrLoginChannelSchema>;
+
 export const StartQrLoginInputSchema = z.object({
-  channel: QqQrLoginChannelSchema.optional(),
+  channel: QrLoginChannelSchema.optional(),
 });
 export type StartQrLoginInput = z.infer<typeof StartQrLoginInputSchema>;
 
@@ -112,7 +139,7 @@ export const QrStartResultSchema = z.object({
   key: z.string(),
   qrImage: z.string(),
   qrUrl: z.string().optional(),
-  channel: QqQrLoginChannelSchema.optional(),
+  channel: QrLoginChannelSchema.optional(),
 });
 export type QrStartResult = z.infer<typeof QrStartResultSchema>;
 

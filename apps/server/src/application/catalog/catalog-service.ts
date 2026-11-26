@@ -58,44 +58,51 @@ export class CatalogService {
     const keyword = query.trim();
     if (!keyword) return { results: [], warnings: [] };
 
-    if (mode === "netease" || mode === "qq") {
+    if (mode !== "aggregate") {
       const results = await this.#providers
         .get(mode)
         .searchTracks(keyword, this.#buildPublicReadAuth(actor, mode));
       return { results, warnings: [] };
     }
 
-    // Aggregate mode: query both in parallel, surface partial failure explicitly in warnings instead of silent swallow
-    const [neteaseRes, qqRes] = await Promise.allSettled([
-      this.#providers.get("netease").searchTracks(keyword, this.#buildPublicReadAuth(actor, "netease"), 20),
-      this.#providers.get("qq").searchTracks(keyword, this.#buildPublicReadAuth(actor, "qq"), 20),
-    ]);
+    const activePlatforms = this.#providers.listPlatforms();
+    const platformsToQuery: MusicPlatform[] =
+      activePlatforms.length > 0 ? activePlatforms : ["netease", "qq"];
+    const labelMap: Record<MusicPlatform, string> = {
+      netease: "网易云",
+      qq: "QQ 音乐",
+      kugou: "酷狗音乐",
+    };
+
+    // Aggregate mode: query all registered providers in parallel, surface partial failure explicitly in warnings
+    const settled = await Promise.allSettled(
+      platformsToQuery.map((p) =>
+        this.#providers.get(p).searchTracks(keyword, this.#buildPublicReadAuth(actor, p), 20),
+      ),
+    );
 
     const warnings: string[] = [];
-    let neteaseSongs: Song[] = [];
-    if (neteaseRes.status === "fulfilled") {
-      neteaseSongs = neteaseRes.value;
-    } else {
-      warnings.push(
-        `网易云搜索失败：${neteaseRes.reason instanceof Error ? neteaseRes.reason.message : "未知错误"}`,
-      );
-    }
-
-    let qqSongs: Song[] = [];
-    if (qqRes.status === "fulfilled") {
-      qqSongs = qqRes.value;
-    } else {
-      warnings.push(`QQ 音乐搜索失败：${qqRes.reason instanceof Error ? qqRes.reason.message : "未知错误"}`);
+    const lists: Song[][] = [];
+    for (let idx = 0; idx < platformsToQuery.length; idx += 1) {
+      const p = platformsToQuery[idx] ?? "netease";
+      const res = settled[idx];
+      if (res?.status === "fulfilled") {
+        lists.push(res.value);
+      } else {
+        const reason = res?.status === "rejected" ? res.reason : undefined;
+        warnings.push(`${labelMap[p]}搜索失败：${reason instanceof Error ? reason.message : "未知错误"}`);
+        lists.push([]);
+      }
     }
 
     // Interleave results fairly
     const merged: Song[] = [];
-    const maxLen = Math.max(neteaseSongs.length, qqSongs.length);
+    const maxLen = Math.max(0, ...lists.map((l) => l.length));
     for (let i = 0; i < maxLen; i += 1) {
-      const n = neteaseSongs[i];
-      const q = qqSongs[i];
-      if (n) merged.push(n);
-      if (q) merged.push(q);
+      for (const list of lists) {
+        const song = list[i];
+        if (song) merged.push(song);
+      }
     }
 
     return { results: merged, warnings };
@@ -129,49 +136,53 @@ export class CatalogService {
       };
     };
 
-    if (mode === "netease" || mode === "qq") {
+    if (mode !== "aggregate") {
       const res = await runSingle(mode);
       return { type, ...res, warnings: [] };
     }
 
-    const [neRes, qqRes] = await Promise.allSettled([runSingle("netease"), runSingle("qq")]);
-    const warnings: string[] = [];
-    const ne =
-      neRes.status === "fulfilled"
-        ? neRes.value
-        : (() => {
-            warnings.push(
-              `网易云搜索失败：${neRes.reason instanceof Error ? neRes.reason.message : "未知错误"}`,
-            );
-            return { artists: [], albums: [], playlists: [] };
-          })();
-    const qq =
-      qqRes.status === "fulfilled"
-        ? qqRes.value
-        : (() => {
-            warnings.push(
-              `QQ 音乐搜索失败：${qqRes.reason instanceof Error ? qqRes.reason.message : "未知错误"}`,
-            );
-            return { artists: [], albums: [], playlists: [] };
-          })();
+    const activePlatforms = this.#providers.listPlatforms();
+    const platformsToQuery: MusicPlatform[] =
+      activePlatforms.length > 0 ? activePlatforms : ["netease", "qq"];
+    const labelMap: Record<MusicPlatform, string> = {
+      netease: "网易云",
+      qq: "QQ 音乐",
+      kugou: "酷狗音乐",
+    };
 
-    const interleave = <T>(a: T[], b: T[]): T[] => {
+    const settled = await Promise.allSettled(platformsToQuery.map((p) => runSingle(p)));
+    const warnings: string[] = [];
+    const groups = platformsToQuery.map((p, idx) => {
+      const res = settled[idx];
+      if (res?.status === "fulfilled") {
+        return res.value;
+      }
+      const reason = res?.status === "rejected" ? res.reason : undefined;
+      warnings.push(`${labelMap[p]}搜索失败：${reason instanceof Error ? reason.message : "未知错误"}`);
+      return {
+        artists: [] as ArtistSummary[],
+        albums: [] as AlbumSummary[],
+        playlists: [] as PlaylistSummary[],
+      };
+    });
+
+    const interleaveMany = <T>(arrays: ReadonlyArray<readonly T[]>): T[] => {
       const out: T[] = [];
-      const max = Math.max(a.length, b.length);
+      const max = Math.max(0, ...arrays.map((arr) => arr.length));
       for (let i = 0; i < max; i += 1) {
-        const left = a[i];
-        const right = b[i];
-        if (left) out.push(left);
-        if (right) out.push(right);
+        for (const arr of arrays) {
+          const item = arr[i];
+          if (item) out.push(item);
+        }
       }
       return out;
     };
 
     return {
       type,
-      artists: interleave(ne.artists, qq.artists),
-      albums: interleave(ne.albums, qq.albums),
-      playlists: interleave(ne.playlists, qq.playlists),
+      artists: interleaveMany(groups.map((g) => g.artists)),
+      albums: interleaveMany(groups.map((g) => g.albums)),
+      playlists: interleaveMany(groups.map((g) => g.playlists)),
       warnings,
     };
   }
@@ -248,29 +259,34 @@ export class CatalogService {
 
   async getDiscover(actor: ActorContext, platform?: MusicPlatform): Promise<Song[]> {
     const mode = platform ?? this.#userState.getSettings(actor.userId).providerMode;
-    if (mode === "netease" || mode === "qq") {
+    if (mode !== "aggregate") {
       return this.#providers.get(mode).getDiscoverTracks(this.#buildPublicReadAuth(actor, mode));
     }
 
-    // C030: In aggregate mode, combine discover tracks from both Netease and QQ interleaved
-    const [neRes, qqRes] = await Promise.allSettled([
-      this.#providers.get("netease").getDiscoverTracks(this.#buildPublicReadAuth(actor, "netease")),
-      this.#providers.get("qq").getDiscoverTracks(this.#buildPublicReadAuth(actor, "qq")),
-    ]);
+    const activePlatforms = this.#providers.listPlatforms();
+    const platformsToQuery: MusicPlatform[] =
+      activePlatforms.length > 0 ? activePlatforms : ["netease", "qq"];
 
-    const neSongs = neRes.status === "fulfilled" ? neRes.value : [];
-    const qqSongs = qqRes.status === "fulfilled" ? qqRes.value : [];
-    if (neRes.status === "rejected" && qqRes.status === "rejected") {
-      throw neRes.reason;
+    // C030: In aggregate mode, combine discover tracks from all registered platforms interleaved
+    const settled = await Promise.allSettled(
+      platformsToQuery.map((p) =>
+        this.#providers.get(p).getDiscoverTracks(this.#buildPublicReadAuth(actor, p)),
+      ),
+    );
+
+    if (settled.every((r) => r.status === "rejected")) {
+      const firstRejected = settled.find((r) => r.status === "rejected");
+      throw firstRejected?.reason ?? new AppError("UPSTREAM_ERROR", "获取发现曲目失败。");
     }
 
+    const lists = settled.map((r) => (r.status === "fulfilled" ? r.value : []));
     const merged: Song[] = [];
-    const maxLen = Math.max(neSongs.length, qqSongs.length);
+    const maxLen = Math.max(0, ...lists.map((l) => l.length));
     for (let i = 0; i < maxLen; i += 1) {
-      const n = neSongs[i];
-      const q = qqSongs[i];
-      if (n) merged.push(n);
-      if (q) merged.push(q);
+      for (const list of lists) {
+        const song = list[i];
+        if (song) merged.push(song);
+      }
     }
     return merged;
   }

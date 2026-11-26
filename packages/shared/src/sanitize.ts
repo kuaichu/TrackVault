@@ -4,6 +4,9 @@ export const ALLOWED_COVER_HOST_SUFFIXES = [
   "qpic.cn",
   "y.qq.com",
   "qlogo.cn",
+  "imge.kugou.com",
+  "singerimg.kugou.com",
+  "kgimg.com",
 ] as const;
 
 export function parseSafeHttpUrl(raw: string | null | undefined): URL | null {
@@ -49,6 +52,16 @@ export function normalizeCoverUrl(raw: string | null | undefined, size = 400): s
   const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
   if (host === "music.126.net" || host.endsWith(".music.126.net")) {
     parsed.searchParams.set("param", `${size}y${size}`);
+  } else if (
+    host === "imge.kugou.com" ||
+    host.endsWith(".imge.kugou.com") ||
+    host === "singerimg.kugou.com" ||
+    host.endsWith(".singerimg.kugou.com") ||
+    host === "kgimg.com" ||
+    host.endsWith(".kgimg.com")
+  ) {
+    const kgSize = size <= 240 ? 240 : size <= 400 ? 400 : 480;
+    parsed.pathname = parsed.pathname.replace(/%7Bsize%7D|\{size\}/gi, String(kgSize));
   }
   return parsed.toString();
 }
