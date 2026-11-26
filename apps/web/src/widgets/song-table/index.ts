@@ -1,1 +1,6 @@
-export { SongTable, type SongTableProps } from "./SongTable.js";
+export {
+  SongTable,
+  useSongActions,
+  useStandaloneSongMenu,
+  type SongTableProps,
+} from "./SongTable.js";

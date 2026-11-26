@@ -183,13 +183,21 @@ export function SegmentedTabs<T extends string>({
   items,
   value,
   onChange,
+  fullWidthOnMobile = false,
+  compact = false,
 }: {
   items: ReadonlyArray<{ id: T; label: string }>;
   value: T;
   onChange: (next: T) => void;
+  fullWidthOnMobile?: boolean;
+  compact?: boolean;
 }) {
   return (
-    <div className="inline-flex items-center rounded-[9px] bg-[var(--tv-lcd-bg)] p-[3px] text-xs ring-1 ring-[var(--tv-sidebar-border)] ring-inset">
+    <div
+      className={`items-center rounded-[9px] bg-[var(--tv-lcd-bg)] p-[3px] ring-1 ring-[var(--tv-sidebar-border)] ring-inset ${
+        fullWidthOnMobile ? "grid w-full grid-cols-2 sm:inline-flex sm:w-auto" : "inline-flex"
+      } ${compact ? "text-[11.5px]" : "text-xs"}`}
+    >
       {items.map((item) => {
         const active = item.id === value;
         return (
@@ -197,7 +205,13 @@ export function SegmentedTabs<T extends string>({
             key={item.id}
             type="button"
             onClick={() => onChange(item.id)}
-            className={`rounded-[7px] px-2.5 py-1 font-medium transition-all duration-150 ${
+            className={`rounded-[7px] text-center font-medium transition-all duration-150 ${
+              compact
+                ? "px-2.5 py-[3.5px]"
+                : fullWidthOnMobile
+                  ? "px-3 py-1.5 sm:px-2.5 sm:py-1"
+                  : "px-2.5 py-1"
+            } ${
               active
                 ? "bg-[var(--tv-nav-active)] text-[var(--tv-text)] shadow-xs"
                 : "text-[var(--tv-text-muted)] hover:text-[var(--tv-text)]"

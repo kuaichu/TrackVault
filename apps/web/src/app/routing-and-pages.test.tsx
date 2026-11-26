@@ -704,4 +704,67 @@ describe("Phase 5 · Routing, providerMode defaults, URL state, QR polling, erro
     expect(screen.queryByText("孤独诗人的慰藉")).toBeNull();
     expect(screen.getByRole("button", { name: /新建歌单/ })).toBeInTheDocument();
   });
+
+  it("DiscoverPage omits '点击即播', exposes '···' context menu on quick picks, and AppShell shows mobile '< 返回' only on detail sub-pages", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.spyOn(api, "getSettings").mockResolvedValue({ settings: makeSettings() });
+    vi.spyOn(api, "getCapabilities").mockResolvedValue({ capabilities: DEFAULT_PROVIDER_CAPABILITIES });
+    vi.spyOn(api, "getLikedSongIds").mockResolvedValue({ ids: [] });
+    vi.spyOn(api, "listJobs").mockResolvedValue({ jobs: [] });
+    vi.spyOn(api, "getDiscover").mockResolvedValue({
+      songs: [makeSong("d-1", "netease", "冬天又来临"), makeSong("d-2", "netease", "Hong Kong")],
+    });
+    vi.spyOn(api, "getRecommendedPlaylists").mockResolvedValue({ playlists: [] });
+
+    const { unmount } = render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/discover"]}>
+          <AppShell user={ADMIN_USER}>
+            <DiscoverPage />
+          </AppShell>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText("冬天又来临").length).toBeGreaterThanOrEqual(2);
+    });
+
+    // Primary route hides mobile '<' back button (`hidden md:inline-flex`), omits '点击即播', and exposes '···' menu
+    expect(screen.getByRole("button", { name: "后退" }).className).toContain("hidden md:inline-flex");
+    expect(screen.queryByText("点击即播")).toBeNull();
+    expect(screen.getByRole("button", { name: "播放全部" }).parentElement?.className).toContain(
+      "items-center",
+    );
+
+    // Compact mobile platform dropdown pill opens popover with platform radio items & refresh action
+    const mobilePlatformPill = document.querySelector("button[aria-haspopup='menu']") as HTMLElement | null;
+    expect(mobilePlatformPill).not.toBeNull();
+    fireEvent.click(mobilePlatformPill as HTMLElement);
+    expect(screen.getByRole("menu", { name: "选择推荐音源" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /刷新推荐/ })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    fireEvent.click(screen.getByRole("button", { name: "更多操作 冬天又来临" }));
+    const portalMenu = screen.getByRole("menu", { name: "冬天又来临 操作菜单" });
+    expect(portalMenu).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /下一首播放/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /收藏到歌单/ })).toBeInTheDocument();
+    unmount();
+
+    // Detail sub-page reveals mobile '< 返回' (`inline-flex`)
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/playlists/netease/pl-99"]}>
+          <AppShell user={ADMIN_USER}>
+            <div>详情页</div>
+          </AppShell>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const detailBackBtn = screen.getByRole("button", { name: "后退" });
+    expect(detailBackBtn.className).toContain("inline-flex");
+    expect(detailBackBtn.className).not.toContain("hidden md:inline-flex");
+    expect(detailBackBtn).toHaveTextContent("返回");
+  });
 });

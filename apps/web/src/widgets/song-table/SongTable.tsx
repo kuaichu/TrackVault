@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   type DownloadMode,
@@ -12,6 +12,8 @@ import {
 } from "#shared";
 import {
   SongTable as PureSongTable,
+  type SongMenuAnchor,
+  SongRowMenu,
   useLikedIdsQuery,
   useToggleLikeMutation,
 } from "../../entities/song/index.js";
@@ -98,22 +100,11 @@ function PlaylistSubmenuContent({
 }
 
 /**
- * Business-wired `<SongTable>` widget connecting the pure virtualized `entities/song` table
- * with player transport, liked state, playlist mutations, and download mode preferences.
+ * Shared business actions hook for song rows and standalone track shelves (e.g. Discover Quick Picks).
  */
-export function SongTable({
-  songs,
-  emptyText = "暂无歌曲",
-  emptyDescription,
-  onRemoveTrack,
-  showHeaderMeta = true,
-  showPlatformBadge = true,
-  indexOffset = 0,
-}: SongTableProps) {
+export function useSongActions(songs: Song[]) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const currentTrack = usePlayerStore((s) => s.currentTrack);
-  const isPlaying = usePlayerStore((s) => s.isPlaying);
   const downloadMode = useDownloadModeStore((s) => s.downloadMode);
   const setDownloadMode = useDownloadModeStore((s) => s.setDownloadMode);
 
@@ -207,8 +198,6 @@ export function SongTable({
     onError: (err) => toast.error(err instanceof Error ? err.message : "收藏到歌单失败"),
   });
 
-  const currentTrackKey = currentTrack ? getSongKey(currentTrack) : null;
-
   const canLikeSong = useCallback((song: Song) => capabilities[song.platform].canLikeSong, [capabilities]);
 
   const isSongLiked = useCallback(
@@ -301,6 +290,121 @@ export function SongTable({
     [addToPlaylistMutation],
   );
 
+  return {
+    downloadMode,
+    setDownloadMode,
+    canLikeSong,
+    isSongLiked,
+    isSongDownloading,
+    canManagePlaylists,
+    getPreferredDownloadQuality,
+    handlePlaySong,
+    handleToggleLike,
+    handleDownloadSong,
+    handleQueueNext,
+    handleQueueAdd,
+    handleNavigateArtist,
+    handleNavigateAlbum,
+    renderPlaylistSubmenu,
+  };
+}
+
+/**
+ * Standalone single-instance context menu hook + portal for non-table song shelves (e.g. Discover `···`).
+ */
+export function useStandaloneSongMenu(songs: Song[]) {
+  const actions = useSongActions(songs);
+  const [menuAnchor, setMenuAnchor] = useState<SongMenuAnchor | null>(null);
+
+  useEffect(() => {
+    if (!menuAnchor) return;
+    const stillPresent = songs.some((s, i) => `${getSongKey(s)}-${i}` === menuAnchor.rowKey);
+    if (!stillPresent) {
+      setMenuAnchor(null);
+    }
+  }, [songs, menuAnchor]);
+
+  const openMenu = useCallback((song: Song, idx: number, triggerEl: HTMLButtonElement) => {
+    const rowKey = `${getSongKey(song)}-${idx}`;
+    setMenuAnchor((prev) => {
+      if (prev?.rowKey === rowKey) return null;
+      const rect = triggerEl.getBoundingClientRect();
+      const hasLayoutRect = rect.height > 0 && window.innerHeight > 0;
+      const upward = hasLayoutRect ? window.innerHeight - rect.bottom < 280 && rect.top > 240 : false;
+      return {
+        song,
+        rowKey,
+        top: rect.top,
+        bottom: rect.bottom,
+        right: rect.right,
+        hasLayoutRect,
+        upward,
+      };
+    });
+  }, []);
+
+  const closeMenu = useCallback(() => setMenuAnchor(null), []);
+
+  const menuSong = menuAnchor?.song;
+  const menuDownloadLocked = Boolean(menuSong?.availability?.download.locked);
+  const menuDownloading = menuSong ? actions.isSongDownloading(menuSong) : false;
+  const menuPreferred = menuSong ? actions.getPreferredDownloadQuality(menuSong) : null;
+
+  const menuPortal =
+    menuAnchor && menuSong && menuPreferred ? (
+      <SongRowMenu
+        anchor={menuAnchor}
+        canLike={actions.canLikeSong(menuSong)}
+        isLiked={actions.canLikeSong(menuSong) && actions.isSongLiked(menuSong)}
+        canManagePlaylists={actions.canManagePlaylists(menuSong)}
+        downloadDisabled={menuDownloading || menuDownloadLocked}
+        downloadLocked={menuDownloadLocked}
+        downloadTitle={
+          menuDownloadLocked
+            ? (menuSong.availability?.download.reason ?? "当前曲目暂不可下载")
+            : menuDownloading
+              ? "正在加入下载..."
+              : `下载 ${menuPreferred.label}`
+        }
+        preferredLevel={menuPreferred.level}
+        onClose={closeMenu}
+        onQueueNext={actions.handleQueueNext}
+        onQueueAdd={actions.handleQueueAdd}
+        onToggleLike={actions.handleToggleLike}
+        onDownloadQuality={(targetSong, level) =>
+          actions.handleDownloadSong(targetSong, level, actions.downloadMode)
+        }
+        onNavigateArtist={actions.handleNavigateArtist}
+        onNavigateAlbum={actions.handleNavigateAlbum}
+        renderPlaylistSubmenu={actions.renderPlaylistSubmenu}
+      />
+    ) : null;
+
+  return {
+    openRowKey: menuAnchor?.rowKey ?? null,
+    openMenu,
+    menuPortal,
+  };
+}
+
+/**
+ * Business-wired `<SongTable>` widget connecting the pure virtualized `entities/song` table
+ * with player transport, liked state, playlist mutations, and download mode preferences.
+ */
+export function SongTable({
+  songs,
+  emptyText = "暂无歌曲",
+  emptyDescription,
+  onRemoveTrack,
+  showHeaderMeta = true,
+  showPlatformBadge = true,
+  indexOffset = 0,
+}: SongTableProps) {
+  const currentTrack = usePlayerStore((s) => s.currentTrack);
+  const isPlaying = usePlayerStore((s) => s.isPlaying);
+  const currentTrackKey = currentTrack ? getSongKey(currentTrack) : null;
+  const actions = useSongActions(songs);
+
   return (
     <PureSongTable
       songs={songs}
@@ -311,22 +415,22 @@ export function SongTable({
       indexOffset={indexOffset}
       currentTrackKey={currentTrackKey}
       isPlaying={isPlaying}
-      downloadMode={downloadMode}
-      onChangeDownloadMode={setDownloadMode}
-      canLikeSong={canLikeSong}
-      isSongLiked={isSongLiked}
-      isSongDownloading={isSongDownloading}
-      canManagePlaylists={canManagePlaylists}
-      getPreferredDownloadQuality={getPreferredDownloadQuality}
-      onPlaySong={handlePlaySong}
-      onToggleLike={handleToggleLike}
-      onDownloadSong={handleDownloadSong}
-      onQueueNext={handleQueueNext}
-      onQueueAdd={handleQueueAdd}
+      downloadMode={actions.downloadMode}
+      onChangeDownloadMode={actions.setDownloadMode}
+      canLikeSong={actions.canLikeSong}
+      isSongLiked={actions.isSongLiked}
+      isSongDownloading={actions.isSongDownloading}
+      canManagePlaylists={actions.canManagePlaylists}
+      getPreferredDownloadQuality={actions.getPreferredDownloadQuality}
+      onPlaySong={actions.handlePlaySong}
+      onToggleLike={actions.handleToggleLike}
+      onDownloadSong={actions.handleDownloadSong}
+      onQueueNext={actions.handleQueueNext}
+      onQueueAdd={actions.handleQueueAdd}
       onRemoveTrack={onRemoveTrack}
-      onNavigateArtist={handleNavigateArtist}
-      onNavigateAlbum={handleNavigateAlbum}
-      renderPlaylistSubmenu={renderPlaylistSubmenu}
+      onNavigateArtist={actions.handleNavigateArtist}
+      onNavigateAlbum={actions.handleNavigateAlbum}
+      renderPlaylistSubmenu={actions.renderPlaylistSubmenu}
     />
   );
 }
