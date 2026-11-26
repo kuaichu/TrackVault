@@ -7,6 +7,7 @@ import {
   type PlaylistSummary,
   type PlaylistTracksPage,
   type ProviderCapabilities,
+  type QqQrLoginChannel,
   type QrStartResult,
   type QualityLevel,
   type Song,
@@ -30,7 +31,7 @@ import { QQ_ALBUM_CID, QQ_PROFILE_HOMEPAGE_URL, type RawQqProfileResponse } from
 import { computeQqGtk, extractEssentialQqCookie, serializeQqCookie } from "./qq-cookie.js";
 import { QqMusicHttpClient } from "./qq-http-client.js";
 import { QqPlaylistService } from "./qq-playlist-service.js";
-import { QqQrAuthManager } from "./qq-qr-auth.js";
+import { QqQrAuthManager, type QqQrAuthOptions } from "./qq-qr-auth.js";
 
 /**
  * Stateless QQ Music Adapter facade:
@@ -48,6 +49,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
     canReadComments: true,
     canLikeComments: true,
     canQrLogin: true,
+    qrLoginChannels: ["mobile", "qq", "wx"],
     shareUrlTemplate: "https://y.qq.com/n/ryqq/songDetail/{id}",
   };
 
@@ -57,9 +59,9 @@ export class QqMusicAdapter implements MusicProviderAdapter {
   readonly #playlists: QqPlaylistService;
   readonly #audioResolver: QqAudioResolver;
 
-  constructor(http: SafeHttpClient) {
+  constructor(http: SafeHttpClient, qrOptions?: QqQrAuthOptions) {
     this.#client = new QqMusicHttpClient(http);
-    this.#qrAuth = new QqQrAuthManager(http);
+    this.#qrAuth = new QqQrAuthManager(http, qrOptions);
     this.#catalog = new QqCatalogService(this.#client);
     this.#playlists = new QqPlaylistService(this.#client);
     this.#audioResolver = new QqAudioResolver(this.#client);
@@ -69,6 +71,10 @@ export class QqMusicAdapter implements MusicProviderAdapter {
     this.#qrAuth.invalidateScope(scopeKey);
     this.#catalog.invalidateScope(scopeKey);
     this.#playlists.invalidateScope(scopeKey);
+  }
+
+  close(): void {
+    this.#qrAuth.close();
   }
 
   async verifyCredential(cookie: string): Promise<CredentialVerificationResult> {
@@ -96,18 +102,29 @@ export class QqMusicAdapter implements MusicProviderAdapter {
       };
     }
 
+    const requestCookies: Record<string, string> = {
+      ...essential,
+      qqmusic_uin: essential.qqmusic_uin || essential.uin,
+    };
+
     try {
       const profile = await this.#client.requestJson<RawQqProfileResponse>({
         url: QQ_PROFILE_HOMEPAGE_URL,
         query: {
           cid: QQ_ALBUM_CID,
           userid: essential.uin,
+          loginUin: essential.uin,
+          hostUin: 0,
           reqfrom: 1,
           format: "json",
-          g_tk: computeQqGtk(essential),
+          inCharset: "utf-8",
+          outCharset: "utf-8",
+          notice: 0,
+          needNewCode: 0,
+          g_tk: computeQqGtk(requestCookies),
         },
         referer: "https://y.qq.com/portal/profile.html",
-        cookieMap: essential,
+        cookieMap: requestCookies,
       });
 
       if (
@@ -145,7 +162,7 @@ export class QqMusicAdapter implements MusicProviderAdapter {
         avatarUrl,
         vipEnabled,
         vipExpireAt,
-        normalizedCookie: serializeQqCookie(essential),
+        normalizedCookie: serializeQqCookie(requestCookies),
         message: `QQ 音乐账号验证成功：${displayName}`,
       };
     } catch (error) {
@@ -240,15 +257,31 @@ export class QqMusicAdapter implements MusicProviderAdapter {
     return this.#catalog.searchEntities(query, type, auth, limit);
   }
 
-  startQrLogin(scopeKey: string): Promise<QrStartResult> {
-    return this.#qrAuth.start(scopeKey);
+  startQrLogin(scopeKey: string, options?: { channel?: QqQrLoginChannel }): Promise<QrStartResult> {
+    return this.#qrAuth.start(scopeKey, options?.channel);
   }
 
   async checkQrLogin(scopeKey: string, key: string): Promise<ProviderQrCheckResult> {
     const check = await this.#qrAuth.check(scopeKey, key);
     if (check.status === "confirmed" && check.rawCookie) {
-      const verification = await this.verifyCredential(check.rawCookie);
-      return { ...check, verification };
+      const baseVerification = await this.verifyCredential(check.rawCookie);
+      if (!baseVerification.ok) {
+        return { ...check, verification: baseVerification };
+      }
+      const fallbackLabel = baseVerification.accountUid ? `QQ ${baseVerification.accountUid}` : "";
+      const displayName =
+        baseVerification.displayName === fallbackLabel && check.nickname
+          ? check.nickname
+          : baseVerification.displayName;
+      const avatarUrl = baseVerification.avatarUrl ?? normalizeCoverUrl(check.avatarUrl, 200) ?? null;
+      return {
+        ...check,
+        verification: {
+          ...baseVerification,
+          displayName,
+          avatarUrl,
+        },
+      };
     }
     return check;
   }

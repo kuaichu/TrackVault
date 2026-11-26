@@ -26,6 +26,7 @@ import type {
   PlaylistTracksPage,
   ProviderCapabilities,
   ProviderMode,
+  QqQrLoginChannel,
   QrCheckResult,
   QrStartResult,
   QualityLevel,
@@ -84,8 +85,11 @@ export const api = {
     }),
   unbindPlatform: (platform: MusicPlatform) =>
     apiRequest<{ binding: PlatformBindingView }>(`/api/bindings/${platform}`, { method: "DELETE" }),
-  startQrLogin: (platform: MusicPlatform) =>
-    apiRequest<QrStartResult>(`/api/bindings/${platform}/qr/start`, { method: "POST" }),
+  startQrLogin: (platform: MusicPlatform, channel?: QqQrLoginChannel) =>
+    apiRequest<QrStartResult>(`/api/bindings/${platform}/qr/start`, {
+      method: "POST",
+      ...(channel ? { body: { channel } } : {}),
+    }),
   checkQrLogin: (platform: MusicPlatform, key: string, signal?: AbortSignal) =>
     apiRequest<QrCheckResult>(`/api/bindings/${platform}/qr/check?key=${encodeURIComponent(key)}`, {
       signal,

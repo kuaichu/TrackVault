@@ -13,6 +13,7 @@ import type {
   PlaylistSummary,
   PlaylistTracksPage,
   ProviderCapabilities,
+  QqQrLoginChannel,
   QrCheckResult,
   QrStartResult,
   QualityLevel,
@@ -90,12 +91,14 @@ export interface PlaylistScanInspection {
 
 export interface ProviderQrCheckResult extends QrCheckResult {
   rawCookie?: string;
+  nickname?: string;
+  avatarUrl?: string;
   verification?: CredentialVerificationResult;
 }
 
 export interface ProviderAuthPort {
   verifyCredential(cookie: string): Promise<CredentialVerificationResult>;
-  startQrLogin?(scopeKey: string): Promise<QrStartResult>;
+  startQrLogin?(scopeKey: string, options?: { channel?: QqQrLoginChannel }): Promise<QrStartResult>;
   checkQrLogin?(scopeKey: string, key: string): Promise<ProviderQrCheckResult>;
   /** Clears all per-user scoped caches (e.g., on bind/unbind/account switch/member deletion). */
   invalidateScope?(scopeKey: string): void;

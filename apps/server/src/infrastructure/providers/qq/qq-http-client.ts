@@ -108,6 +108,8 @@ export class QqMusicHttpClient {
   ): Promise<T> {
     const uin = cookieMap?.uin ?? "0";
     const key = cookieMap?.qm_keyst || cookieMap?.qqmusic_key || "";
+    const rawLoginType = cookieMap?.tmeLoginType || (key.startsWith("W_X") ? "1" : key ? "2" : undefined);
+    const parsedLoginType = rawLoginType ? Number(rawLoginType) : Number.NaN;
     const body = JSON.stringify({
       comm: {
         uin,
@@ -115,6 +117,7 @@ export class QqMusicHttpClient {
         ct: 19,
         cv: 0,
         ...(key ? { authst: key } : {}),
+        ...(Number.isFinite(parsedLoginType) && parsedLoginType > 0 ? { tmeLoginType: parsedLoginType } : {}),
       },
       ...payload,
     });

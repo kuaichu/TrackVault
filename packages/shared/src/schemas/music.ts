@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { QualityLevelSchema } from "../quality.js";
-import { MusicPlatformSchema } from "./auth.js";
+import { MusicPlatformSchema, QqQrLoginChannelSchema } from "./auth.js";
 
 export const SongAvailabilityStateSchema = z.enum([
   "available",
@@ -255,6 +255,7 @@ export const ProviderCapabilitiesSchema = z.object({
   canReadComments: z.boolean(),
   canLikeComments: z.boolean(),
   canQrLogin: z.boolean(),
+  qrLoginChannels: z.array(QqQrLoginChannelSchema).optional(),
   shareUrlTemplate: z.string(),
 });
 export type ProviderCapabilities = z.infer<typeof ProviderCapabilitiesSchema>;

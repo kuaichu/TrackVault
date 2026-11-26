@@ -4,6 +4,7 @@ import { parseCookieEntries, serializeCookieMap } from "../common/cookie-parser.
 
 const ESSENTIAL_QQ_COOKIE_KEYS = new Set([
   "uin",
+  "qqmusic_uin",
   "wxuin",
   "o_cookie",
   "qm_keyst",
@@ -13,6 +14,8 @@ const ESSENTIAL_QQ_COOKIE_KEYS = new Set([
   "psrf_qqopenid",
   "psrf_qqaccess_token",
   "psrf_qqrefresh_token",
+  "psrf_qqrefresh_key",
+  "psrf_qqunionid",
   "psrf_musickey_createtime",
   "euin",
   "login_type",
@@ -33,7 +36,7 @@ export function parseQqCookie(raw: string): Record<string, string> {
   if (Number(map.login_type) === 2 && map.wxuin) {
     map.uin = map.wxuin;
   }
-  const rawUin = map.uin || map.o_cookie || map.wxuin || "";
+  const rawUin = map.uin || map.qqmusic_uin || map.o_cookie || map.wxuin || "";
   const numericUin = rawUin.replace(/\D/g, "");
   if (numericUin) {
     map.uin = numericUin;
@@ -60,8 +63,8 @@ export function serializeQqCookie(cookieMap: Record<string, string>): string {
 /**
  * Computes QQ Music CSRF token (g_tk / ptqrtoken) via DJB-style hash33.
  */
-export function hash33(input: string): number {
-  let hash = 0;
+export function hash33(input: string, seed = 0): number {
+  let hash = seed;
   for (let i = 0; i < input.length; i += 1) {
     hash += (hash << 5) + input.charCodeAt(i);
   }
@@ -69,13 +72,9 @@ export function hash33(input: string): number {
 }
 
 export function computeQqGtk(cookieMap: Record<string, string>): number {
-  const key = cookieMap.p_skey || cookieMap.skey || cookieMap.qm_keyst || "";
+  const key = cookieMap.qm_keyst || cookieMap.qqmusic_key || cookieMap.p_skey || cookieMap.skey || "";
   if (!key) return 5381;
-  let hash = 5381;
-  for (let i = 0; i < key.length; i += 1) {
-    hash += (hash << 5) + key.charCodeAt(i);
-  }
-  return hash & 0x7fffffff;
+  return hash33(key, 5381);
 }
 
 export function parseQqAuthCookie(auth: ProviderAuthContext): Record<string, string> | undefined {

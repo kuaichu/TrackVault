@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { classifyAudioFormat, getQualityLabel, inferQualityLevelFromBitrate } from "./quality.js";
-import { PlatformBindingViewSchema } from "./schemas/auth.js";
+import {
+  PlatformBindingViewSchema,
+  QqQrLoginChannelSchema,
+  QrStartResultSchema,
+  StartQrLoginInputSchema,
+} from "./schemas/auth.js";
 import {
   JobDetailViewSchema,
   JobEventSchema,
@@ -9,6 +14,7 @@ import {
   JobViewSchema,
   JobsListResponseSchema,
 } from "./schemas/jobs.js";
+import { ProviderCapabilitiesSchema } from "./schemas/music.js";
 import { PlayHistoryResponseSchema, PlayerStateSchema } from "./schemas/settings.js";
 import {
   AuditIssueItemSchema,
@@ -349,4 +355,27 @@ test("PlayHistoryResponseSchema, preferredQuality, and credentialCorrupted parse
     credentialCorrupted: true,
   });
   assert.equal(binding.credentialCorrupted, true);
+
+  for (const ch of ["mobile", "qq", "wx"] as const) {
+    assert.equal(QqQrLoginChannelSchema.parse(ch), ch);
+  }
+  assert.deepEqual(StartQrLoginInputSchema.parse({}), {});
+  assert.deepEqual(StartQrLoginInputSchema.parse({ channel: "mobile" }), { channel: "mobile" });
+  assert.equal(
+    QrStartResultSchema.parse({ key: "k1", qrImage: "data:image/png;base64,AA==", channel: "wx" }).channel,
+    "wx",
+  );
+  const qqCaps = ProviderCapabilitiesSchema.parse({
+    platform: "qq",
+    canLikeSong: false,
+    canManagePlaylistTracks: false,
+    canCreatePlaylist: false,
+    canLoadCloudDisk: false,
+    canReadComments: true,
+    canLikeComments: true,
+    canQrLogin: true,
+    qrLoginChannels: ["mobile", "qq", "wx"],
+    shareUrlTemplate: "https://y.qq.com/n/ryqq/songDetail/{id}",
+  });
+  assert.deepEqual(qqCaps.qrLoginChannels, ["mobile", "qq", "wx"]);
 });

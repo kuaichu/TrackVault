@@ -23,6 +23,7 @@ export const DEFAULT_PROVIDER_CAPABILITIES: Record<MusicPlatform, ProviderCapabi
     canReadComments: true,
     canLikeComments: true,
     canQrLogin: true,
+    qrLoginChannels: ["mobile", "qq", "wx"],
     shareUrlTemplate: "https://y.qq.com/n/ryqq/songDetail/{id}",
   },
 };

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp, QrCode, Unlink } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import type { MusicPlatform, PlatformBindingView } from "#shared";
+import type { MusicPlatform, PlatformBindingView, QqQrLoginChannel } from "#shared";
 import { api } from "../../shared/api/endpoints.js";
 import { useCapabilities } from "../../shared/hooks/use-capabilities.js";
 import { toast } from "../../shared/store/toast-store.js";
@@ -55,9 +55,28 @@ export function shouldInvalidateQueryForPlatformChange(
 const QR_POLL_INTERVAL_MS = 2500;
 const QR_MAX_CONSECUTIVE_ERRORS = 3;
 
+const QQ_CHANNEL_META: Record<QqQrLoginChannel, { label: string; promptMessage: string; subHint: string }> = {
+  mobile: {
+    label: "QQ 音乐 App",
+    promptMessage: "请打开手机 QQ 音乐 App 扫一扫",
+    subHint: "推荐 · 兼容 App 内已登录的 QQ 或微信账号，扫码确认后自动保存。",
+  },
+  qq: {
+    label: "手机 QQ",
+    promptMessage: "请打开手机 QQ 扫一扫",
+    subHint: "通过 QQ 互联授权登录，扫码确认后自动保存。",
+  },
+  wx: {
+    label: "微信",
+    promptMessage: "请打开手机微信扫一扫",
+    subHint: "绑定微信体系下的 QQ 音乐账号（与 QQ 号会员资产相互独立）。",
+  },
+};
+
 interface QrState {
   key: string;
   qrImage: string;
+  channel?: QqQrLoginChannel;
   message: string;
   error?: string | null;
 }
@@ -72,6 +91,9 @@ function PlatformCard({
   const queryClient = useQueryClient();
   const capabilities = useCapabilities();
   const canQrLogin = capabilities[platform].canQrLogin;
+  const qrChannels = capabilities[platform].qrLoginChannels;
+  const hasChannelSelector = Boolean(qrChannels && qrChannels.length > 1);
+  const [selectedChannel, setSelectedChannel] = useState<QqQrLoginChannel>(qrChannels?.[0] ?? "mobile");
   const [cookieDraft, setCookieDraft] = useState("");
   const [showManualCookie, setShowManualCookie] = useState(false);
   const [qrState, setQrState] = useState<QrState | null>(null);
@@ -107,12 +129,33 @@ function PlatformCard({
   });
 
   const startQrMutation = useMutation({
-    mutationFn: () => api.startQrLogin(platform),
-    onSuccess: (res) => {
-      setQrState({ key: res.key, qrImage: res.qrImage, message: "请打开手机客户端扫描", error: null });
+    mutationFn: (channelOverride?: QqQrLoginChannel) => {
+      const targetChannel = hasChannelSelector ? (channelOverride ?? selectedChannel) : undefined;
+      return api.startQrLogin(platform, targetChannel);
+    },
+    onSuccess: (res, requestedChannel) => {
+      const effectiveChannel =
+        res.channel ?? (hasChannelSelector ? (requestedChannel ?? selectedChannel) : undefined);
+      const initialPrompt = effectiveChannel
+        ? QQ_CHANNEL_META[effectiveChannel].promptMessage
+        : "请打开手机客户端扫描";
+      setQrState({
+        key: res.key,
+        qrImage: res.qrImage,
+        channel: effectiveChannel,
+        message: initialPrompt,
+        error: null,
+      });
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "生成二维码失败"),
   });
+
+  const handleSelectChannel = (nextChannel: QqQrLoginChannel) => {
+    setSelectedChannel(nextChannel);
+    if (qrState && !startQrMutation.isPending && qrState.channel !== nextChannel) {
+      startQrMutation.mutate(nextChannel);
+    }
+  };
 
   const qrKey = qrState?.key ?? null;
   useEffect(() => {
@@ -184,6 +227,10 @@ function PlatformCard({
     };
   }, [platform, qrKey, invalidateAccountCaches]);
 
+  const activeQrHint = qrState?.channel
+    ? QQ_CHANNEL_META[qrState.channel].subHint
+    : "扫码确认后自动保存，无需手动复制。";
+
   return (
     <div className="rounded-2xl bg-[var(--tv-surface)] p-5 space-y-4">
       <div className="flex items-start justify-between gap-3">
@@ -219,12 +266,39 @@ function PlatformCard({
         )}
       </div>
 
+      {canQrLogin && hasChannelSelector && qrChannels && (
+        <fieldset
+          aria-label={`${label}扫码通道`}
+          className="m-0 inline-flex min-w-0 flex-wrap items-center gap-1 rounded-xl border-0 bg-[var(--tv-bg)] p-1"
+        >
+          {qrChannels.map((ch) => {
+            const active = selectedChannel === ch;
+            return (
+              <button
+                key={ch}
+                type="button"
+                aria-pressed={active}
+                disabled={startQrMutation.isPending}
+                onClick={() => handleSelectChannel(ch)}
+                className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                  active
+                    ? "bg-[var(--tv-surface-active)] text-[var(--tv-text)] shadow-xs"
+                    : "text-[var(--tv-text-muted)] hover:text-[var(--tv-text)]"
+                }`}
+              >
+                {QQ_CHANNEL_META[ch].label}
+              </button>
+            );
+          })}
+        </fieldset>
+      )}
+
       {/* Primary Action: QR Login + Secondary Collapsible Cookie Import */}
       <div className="flex flex-wrap items-center gap-2">
         {canQrLogin && (
           <button
             type="button"
-            onClick={() => startQrMutation.mutate()}
+            onClick={() => startQrMutation.mutate(hasChannelSelector ? selectedChannel : undefined)}
             disabled={startQrMutation.isPending}
             className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--tv-contrast-bg)] px-3.5 py-1.5 text-xs font-medium text-[var(--tv-contrast-fg)] transition-opacity hover:opacity-90 disabled:opacity-40"
           >
@@ -265,7 +339,7 @@ function PlatformCard({
             {qrState.error ? (
               <div className="text-[var(--tv-danger)]">{qrState.error}</div>
             ) : (
-              <div className="text-[var(--tv-text-muted)]">扫码确认后自动保存，无需手动复制。</div>
+              <div className="text-[var(--tv-text-muted)]">{activeQrHint}</div>
             )}
           </div>
         </div>

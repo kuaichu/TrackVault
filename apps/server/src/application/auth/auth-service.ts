@@ -4,6 +4,7 @@ import type {
   LoginInput,
   MusicPlatform,
   PlatformBindingView,
+  QqQrLoginChannel,
   QrCheckResult,
   QrStartResult,
   SetupAdminInput,
@@ -244,12 +245,16 @@ export class AuthService {
     return this.#authResolver.getBindingView(actor.userId, platform);
   }
 
-  async startPlatformQrLogin(actor: ActorContext, platform: MusicPlatform): Promise<QrStartResult> {
+  async startPlatformQrLogin(
+    actor: ActorContext,
+    platform: MusicPlatform,
+    channel?: QqQrLoginChannel,
+  ): Promise<QrStartResult> {
     const adapter = this.#providers.get(platform);
     if (!adapter.startQrLogin) {
       throw new AppError("FEATURE_UNSUPPORTED", `${platform} 暂不支持二维码登录。`);
     }
-    return adapter.startQrLogin(actor.userId);
+    return adapter.startQrLogin(actor.userId, channel ? { channel } : undefined);
   }
 
   async checkPlatformQrLogin(

@@ -192,4 +192,64 @@ describe("Platform-scoped cache invalidation in BindingsPanel", () => {
     expect(queryClient.getQueryState(["daily-recommend"])?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(["search", "晴天", "netease"])?.isInvalidated).toBe(false);
   });
+
+  it("supports switching QQ multi-channel QR login (mobile / qq / wx) and refreshes active QR code on tab switch", async () => {
+    vi.spyOn(api, "listBindings").mockResolvedValue({
+      bindings: {
+        netease: makeBinding("netease", false),
+        qq: makeBinding("qq", false),
+      },
+    });
+
+    const startQrSpy = vi.spyOn(api, "startQrLogin").mockImplementation(async (_platform, channel) => ({
+      key: `qr-key-${channel ?? "default"}`,
+      qrImage: "data:image/png;base64,AA==",
+      channel,
+    }));
+    vi.spyOn(api, "checkQrLogin").mockResolvedValue({
+      status: "waiting",
+      code: 66,
+      message: "等待扫码",
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 60_000 } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <BindingsPanel />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("group", { name: "QQ 音乐扫码通道" })).toBeInTheDocument();
+    });
+
+    const appTab = screen.getByRole("button", { name: "QQ 音乐 App" });
+    const qqTab = screen.getByRole("button", { name: "手机 QQ" });
+    const wxTab = screen.getByRole("button", { name: "微信" });
+
+    expect(appTab).toHaveAttribute("aria-pressed", "true");
+    expect(qqTab).toHaveAttribute("aria-pressed", "false");
+    expect(wxTab).toHaveAttribute("aria-pressed", "false");
+
+    const scanButtons = screen.getAllByRole("button", { name: "扫码登录" });
+    const qqScanBtn = scanButtons[1];
+    if (!qqScanBtn) throw new Error("Expected QQ QR login button");
+    fireEvent.click(qqScanBtn);
+
+    await waitFor(() => {
+      expect(startQrSpy).toHaveBeenCalledWith("qq", "mobile");
+      expect(screen.getByText("请打开手机 QQ 音乐 App 扫一扫")).toBeInTheDocument();
+    });
+
+    // Switching channel while QR panel is open automatically regenerates QR for the new channel
+    fireEvent.click(wxTab);
+
+    await waitFor(() => {
+      expect(startQrSpy).toHaveBeenCalledWith("qq", "wx");
+      expect(screen.getByText("请打开手机微信扫一扫")).toBeInTheDocument();
+    });
+  });
 });

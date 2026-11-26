@@ -6,6 +6,7 @@ import {
   LoginInputSchema,
   MusicPlatformSchema,
   SetupAdminInputSchema,
+  StartQrLoginInputSchema,
   UpdateMemberInputSchema,
   UpdateSystemFallbackInputSchema,
 } from "#shared";
@@ -101,7 +102,8 @@ export function registerAuthRoutes(
     async (request) => {
       const actor = requireActor(request);
       const { platform } = PlatformParamSchema.parse(request.params);
-      return authService.startPlatformQrLogin(actor, platform);
+      const { channel } = StartQrLoginInputSchema.parse(request.body ?? {});
+      return authService.startPlatformQrLogin(actor, platform, channel);
     },
   );
 

@@ -100,10 +100,19 @@ export const UpdateSystemFallbackInputSchema = z.object({
 });
 export type UpdateSystemFallbackInput = z.infer<typeof UpdateSystemFallbackInputSchema>;
 
+export const QqQrLoginChannelSchema = z.enum(["mobile", "qq", "wx"]);
+export type QqQrLoginChannel = z.infer<typeof QqQrLoginChannelSchema>;
+
+export const StartQrLoginInputSchema = z.object({
+  channel: QqQrLoginChannelSchema.optional(),
+});
+export type StartQrLoginInput = z.infer<typeof StartQrLoginInputSchema>;
+
 export const QrStartResultSchema = z.object({
   key: z.string(),
   qrImage: z.string(),
   qrUrl: z.string().optional(),
+  channel: QqQrLoginChannelSchema.optional(),
 });
 export type QrStartResult = z.infer<typeof QrStartResultSchema>;
 
